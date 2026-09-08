@@ -28,6 +28,48 @@ public static class FileDialogs
         return Remember(OpenLinux(start));
     }
 
+    public static string? OpenFolder()
+    {
+        string start = ExistingDir(_lastDir) ?? PicturesOrHome();
+        string[]? one;
+        if (OperatingSystem.IsWindows())
+            one = OpenFolderWindows(start);
+        else if (OperatingSystem.IsMacOS())
+            one = OpenFolderMac(start);
+        else
+            one = OpenFolderLinux(start);
+
+        if (one == null || one.Length == 0)
+            return null;
+
+        string? path = NormalizeDir(one[0]);
+        if (path == null)
+        {
+            Log.Warning("Folder dialog returned a path that is not a directory: '" + one[0] + "'");
+            return null;
+        }
+
+        _lastDir = path;
+        return path;
+    }
+
+    /// <summary>Turn a dialog/URI/file path into an existing directory, or null.</summary>
+    public static string? NormalizeDir(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        string p = path.Trim().Trim('"').Trim('\'');
+        if (p.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            && Uri.TryCreate(p, UriKind.Absolute, out Uri? uri)
+            && uri.IsFile)
+        {
+            p = uri.LocalPath;
+        }
+
+        return ExistingDir(p);
+    }
+
     public static string? SavePhoto(string defaultPath)
     {
         defaultPath ??= "";
@@ -139,6 +181,54 @@ public static class FileDialogs
             PsSingle(dir) + "; $d.FileName = " + PsSingle(name) + "; $d.Filter = " + PsSingle(WinFilter()) +
             "; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.FileName) }";
         var r = RunPowerShell(script);
+        if (r.Status != RunStatus.Ok)
+            return null;
+        return SplitPaths(r.Output, '|');
+    }
+
+    private static string[]? OpenFolderLinux(string start)
+    {
+        var zenity = Run("zenity",
+            "--file-selection",
+            "--directory",
+            "--title=Workspace folder",
+            "--filename=" + TrailingSep(start));
+        if (zenity.Status == RunStatus.Ok)
+            return SplitPaths(zenity.Output, '|');
+        if (zenity.Status == RunStatus.Cancel)
+            return null;
+
+        var kdialog = Run("kdialog",
+            "--title", "Workspace folder",
+            "--getexistingdirectory",
+            TrailingSep(start));
+        if (kdialog.Status == RunStatus.Ok)
+            return SplitPaths(kdialog.Output, '\n');
+        return null;
+    }
+
+    private static string[]? OpenFolderWindows(string start)
+    {
+        string script =
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Workspace folder'; $d.SelectedPath = " +
+            PsSingle(start) + "; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }";
+        var r = RunPowerShell(script);
+        if (r.Status != RunStatus.Ok)
+            return null;
+        return SplitPaths(r.Output, '|');
+    }
+
+    private static string[]? OpenFolderMac(string start)
+    {
+        string script =
+            "try\n" +
+            "set theFolder to choose folder with prompt \"Workspace folder\" default location POSIX file " +
+            AppleString(start) + "\n" +
+            "return POSIX path of theFolder\n" +
+            "on error\n" +
+            "return \"\"\n" +
+            "end try";
+        var r = Run("osascript", "-e", script);
         if (r.Status != RunStatus.Ok)
             return null;
         return SplitPaths(r.Output, '|');

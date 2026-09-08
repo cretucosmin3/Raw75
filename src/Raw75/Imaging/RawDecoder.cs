@@ -19,6 +19,22 @@ internal readonly struct RasterBuffer
     public bool HasPixels => Width > 0 && Height > 0 && (Linear != null || Rgba != null);
     public bool HasLinear => Linear != null && Width > 0 && Linear.Length >= Width * Height * 4;
 
+    public long ByteLength
+    {
+        get
+        {
+            long n = 0;
+            if (Linear != null)
+                n += (long)Linear.Length * sizeof(float);
+            if (Rgba != null)
+                n += Rgba.Length;
+            return n;
+        }
+    }
+
+    public string PixelKind =>
+        !HasPixels ? "empty" : HasLinear ? (Rgba != null ? "F32+RGBA8" : "F32") : "RGBA8";
+
     public RasterBuffer(byte[] rgba, int width, int height)
     {
         Rgba = rgba ?? throw new ArgumentNullException(nameof(rgba));
@@ -89,6 +105,25 @@ internal static class RawDecoder
         }
     }
 
+    public static RasterBuffer? DecodeRasterFull(string path)
+    {
+        if (IsRawPath(path))
+            return null;
+
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            using var bmp = SKBitmap.Decode(bytes);
+            if (bmp == null || bmp.Width <= 0)
+                return null;
+            return FromBitmap(bmp);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static RasterBuffer DecodeThumbnail(string path)
     {
         LibRawNative.EnsureLoaded();
@@ -104,6 +139,11 @@ internal static class RawDecoder
 
     public static RasterBuffer DecodePreview(string path)
     {
+        return DecodePreview(path, out _, out _);
+    }
+
+    public static RasterBuffer DecodePreview(string path, out int nativeW, out int nativeH)
+    {
         LibRawNative.EnsureLoaded();
         lock (LibRawGate)
         {
@@ -115,13 +155,13 @@ internal static class RawDecoder
             }
             catch { }
 
-            int srcW = raw.RawWidth > 0 ? raw.RawWidth : raw.Width;
-            int srcH = raw.RawHeight > 0 ? raw.RawHeight : raw.Height;
-            int edge = ProxyLongEdge(srcW, srcH);
-            bool half = Math.Max(srcW, srcH) > ProxyMaxEdge;
+            nativeW = raw.Width > 0 ? raw.Width : raw.RawWidth;
+            nativeH = raw.Height > 0 ? raw.Height : raw.RawHeight;
+            int edge = ProxyLongEdge(nativeW, nativeH);
+            bool half = Math.Max(nativeW, nativeH) > ProxyMaxEdge;
             using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half));
             var buf = ToBuffer(image, edge);
-            Log.Info($"Preview {srcW}x{srcH} → proxy {buf.Width}x{buf.Height} edge={edge} half={half} bits={image.Bits} ch={image.Channels} camWb={camWb} {Megabytes(buf):0.0}MB");
+            Log.Info($"Preview {nativeW}x{nativeH} → proxy {buf.Width}x{buf.Height} edge={edge} half={half} bits={image.Bits} ch={image.Channels} camWb={camWb} {Megabytes(buf):0.0}MB");
             return buf;
         }
     }
@@ -144,6 +184,118 @@ internal static class RawDecoder
             Log.Info($"Full {buf.Width}x{buf.Height} bits={image.Bits} ch={image.Channels} {Megabytes(buf):0.0}MB");
             return buf;
         }
+    }
+
+    /// <summary>
+    /// Copy a source rectangle into a new buffer no larger than <paramref name="maxEdge"/>.
+    /// One allocation (the output). Never copies the full native frame first.
+    /// </summary>
+    public static RasterBuffer SampleRegion(RasterBuffer src, int x, int y, int w, int h, int maxEdge)
+    {
+        if (!src.HasPixels)
+            return default;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        if (x >= src.Width || y >= src.Height)
+            return default;
+        w = Math.Clamp(w, 1, src.Width - x);
+        h = Math.Clamp(h, 1, src.Height - y);
+        if (maxEdge < 1)
+            maxEdge = 1;
+
+        int m = Math.Max(w, h);
+        int dw = w;
+        int dh = h;
+        if (m > maxEdge)
+        {
+            float scale = maxEdge / (float)m;
+            dw = Math.Max(1, (int)Math.Round(w * scale));
+            dh = Math.Max(1, (int)Math.Round(h * scale));
+        }
+
+        if (src.HasLinear)
+        {
+            float[] lin = src.Linear!;
+            float[] dst = new float[dw * dh * 4];
+            for (int row = 0; row < dh; row++)
+            {
+                int sy = y + Math.Min(h - 1, row * h / dh);
+                int srcRow = sy * src.Width * 4;
+                int dstRow = row * dw * 4;
+                for (int col = 0; col < dw; col++)
+                {
+                    int sx = x + Math.Min(w - 1, col * w / dw);
+                    int si = srcRow + sx * 4;
+                    int di = dstRow + col * 4;
+                    dst[di] = lin[si];
+                    dst[di + 1] = lin[si + 1];
+                    dst[di + 2] = lin[si + 2];
+                    dst[di + 3] = lin[si + 3];
+                }
+            }
+
+            return new RasterBuffer(dst, dw, dh);
+        }
+
+        byte[] rgba = src.Rgba!;
+        byte[] dst8 = new byte[dw * dh * 4];
+        for (int row = 0; row < dh; row++)
+        {
+            int sy = y + Math.Min(h - 1, row * h / dh);
+            int srcRow = sy * src.Width * 4;
+            int dstRow = row * dw * 4;
+            for (int col = 0; col < dw; col++)
+            {
+                int sx = x + Math.Min(w - 1, col * w / dw);
+                int si = srcRow + sx * 4;
+                int di = dstRow + col * 4;
+                dst8[di] = rgba[si];
+                dst8[di + 1] = rgba[si + 1];
+                dst8[di + 2] = rgba[si + 2];
+                dst8[di + 3] = rgba[si + 3];
+            }
+        }
+
+        return new RasterBuffer(dst8, dw, dh);
+    }
+
+    public static RasterBuffer Crop(RasterBuffer src, int x, int y, int w, int h)
+    {
+        if (!src.HasPixels)
+            return default;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        if (x >= src.Width || y >= src.Height)
+            return default;
+        w = Math.Clamp(w, 1, src.Width - x);
+        h = Math.Clamp(h, 1, src.Height - y);
+        if (x == 0 && y == 0 && w == src.Width && h == src.Height)
+            return src;
+
+        if (src.HasLinear)
+        {
+            float[] lin = src.Linear!;
+            float[] dst = new float[w * h * 4];
+            for (int row = 0; row < h; row++)
+            {
+                int si = ((y + row) * src.Width + x) * 4;
+                int di = row * w * 4;
+                Array.Copy(lin, si, dst, di, w * 4);
+            }
+
+            return new RasterBuffer(dst, w, h);
+        }
+
+        byte[] rgba = src.Rgba!;
+        byte[] dst8 = new byte[w * h * 4];
+        for (int row = 0; row < h; row++)
+        {
+            int si = ((y + row) * src.Width + x) * 4;
+            int di = row * w * 4;
+            Array.Copy(rgba, si, dst8, di, w * 4);
+        }
+
+        return new RasterBuffer(dst8, w, h);
     }
 
     public static RasterBuffer Limit(RasterBuffer src, int maxEdge)

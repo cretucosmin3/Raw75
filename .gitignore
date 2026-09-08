@@ -18,6 +18,9 @@ publish/
 !.vscode/settings.json
 *.code-workspace
 
+# Raw75 catalog cache (created next to photos)
+.raw75/
+
 # Logs / OS
 *.log
 *.DotSettings.user

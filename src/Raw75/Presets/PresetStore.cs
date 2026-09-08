@@ -55,6 +55,24 @@ public static class PresetStore
         return null;
     }
 
+    public static bool IsUser(string name)
+    {
+        if (!TryFileName(name, out var file))
+            return false;
+        return File.Exists(Path.Combine(UserDir, file));
+    }
+
+    public static bool Delete(string name)
+    {
+        if (!TryFileName(name, out var file))
+            return false;
+        var path = Path.Combine(UserDir, file);
+        if (!File.Exists(path))
+            return false;
+        File.Delete(path);
+        return true;
+    }
+
     public static void Save(string name, DevelopSettings s)
     {
         ArgumentNullException.ThrowIfNull(s);

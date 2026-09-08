@@ -1,3 +1,4 @@
+using System;
 using SkiaSharp;
 
 namespace Raw75;
@@ -16,8 +17,23 @@ public static class Theme
     public static readonly SKColor Accent = new(255, 153, 51);
     public static readonly SKColor AccentSoft = new(255, 153, 51, 36);
     public static readonly SKColor Track = new(18, 18, 20);
+    public static readonly SKColor TrackHover = new(38, 38, 44);
     public static readonly SKColor TrackFill = new(255, 153, 51);
     public static readonly SKColor Handle = new(255, 255, 255);
+    public static readonly SKColor HandleHover = new(255, 214, 170);
+    public static readonly SKColor ButtonTextOnAccent = new(20, 20, 22);
+
+    public static SKColor Lighten(SKColor c, int d) => new(
+        (byte)Math.Min(255, c.Red + d),
+        (byte)Math.Min(255, c.Green + d),
+        (byte)Math.Min(255, c.Blue + d),
+        c.Alpha);
+
+    public static SKColor Darken(SKColor c, int d) => new(
+        (byte)Math.Max(0, c.Red - d),
+        (byte)Math.Max(0, c.Green - d),
+        (byte)Math.Max(0, c.Blue - d),
+        c.Alpha);
     public static readonly SKColor PhotoWell = new(10, 10, 12);
     public static readonly SKColor Selected = new(255, 153, 51, 40);
     public static readonly SKColor Button = new(48, 48, 54);

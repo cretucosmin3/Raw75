@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using Blossom.Core;
 using Blossom.Core.Visual;
+using Blossom.Core.Visual.Enums;
+using Raw75.Controls;
 using Silk.NET.Input;
 using SkiaSharp;
 
@@ -24,13 +26,13 @@ public sealed class ExportDialog : VisualElement
     private readonly VisualElement _title;
     private readonly VisualElement _fileLabel;
     private readonly VisualElement _formatLabel;
-    private readonly VisualElement[] _formatBtns;
+    private readonly IconButton[] _formatBtns;
     private readonly VisualElement _qualityLabel;
     private readonly QualitySlider _slider;
     private readonly VisualElement _edgeLabel;
-    private readonly VisualElement[] _edgeBtns;
-    private readonly VisualElement _exportBtn;
-    private readonly VisualElement _cancelBtn;
+    private readonly IconButton[] _edgeBtns;
+    private readonly IconButton _exportBtn;
+    private readonly IconButton _cancelBtn;
 
     private string _format = "JPEG";
     private int _quality = 90;
@@ -62,16 +64,12 @@ public sealed class ExportDialog : VisualElement
         _qualityLabel = Label("QualityLbl", "Quality  90", Theme.TextDim, 11, 500, TextAlign.Left);
         _edgeLabel = Label("EdgeLbl", "Long edge  Full", Theme.TextDim, 11, 500, TextAlign.Left);
 
-        _formatBtns = new VisualElement[Formats.Length];
+        _formatBtns = new IconButton[Formats.Length];
         for (int i = 0; i < Formats.Length; i++)
         {
             string fmt = Formats[i];
-            var btn = Chip("Fmt_" + fmt, fmt);
-            btn.Events.OnClick += (_, args) =>
-            {
-                args.Handled = true;
-                SetFormat(fmt);
-            };
+            var btn = new IconButton(fmt);
+            btn.Clicked += () => SetFormat(fmt);
             _formatBtns[i] = btn;
         }
 
@@ -83,33 +81,20 @@ public sealed class ExportDialog : VisualElement
             _qualityLabel.Text = $"Quality  {q}";
         };
 
-        _edgeBtns = new VisualElement[LongEdges.Length];
+        _edgeBtns = new IconButton[LongEdges.Length];
         for (int i = 0; i < LongEdges.Length; i++)
         {
             int edge = LongEdges[i];
             string caption = EdgeCaption(edge);
-            var btn = Chip("Edge_" + caption, caption);
-            btn.Events.OnClick += (_, args) =>
-            {
-                args.Handled = true;
-                SetLongEdge(edge);
-            };
+            var btn = new IconButton(caption);
+            btn.Clicked += () => SetLongEdge(edge);
             _edgeBtns[i] = btn;
         }
 
-        _exportBtn = Chip("Export", "Export");
-        _exportBtn.Events.OnClick += (_, args) =>
-        {
-            args.Handled = true;
-            Confirm();
-        };
-
-        _cancelBtn = Chip("Cancel", "Cancel");
-        _cancelBtn.Events.OnClick += (_, args) =>
-        {
-            args.Handled = true;
-            Close();
-        };
+        _exportBtn = new IconButton("Export", primary: true);
+        _exportBtn.Clicked += Confirm;
+        _cancelBtn = new IconButton("Cancel");
+        _cancelBtn.Clicked += Close;
 
         AddChild(_card);
         _card.AddChild(_title);
@@ -146,7 +131,6 @@ public sealed class ExportDialog : VisualElement
 
         SetFormat("JPEG");
         SetLongEdge(0);
-        StyleExportButtons();
     }
 
     public void Open(string suggestedName)
@@ -155,11 +139,22 @@ public sealed class ExportDialog : VisualElement
         _fileLabel.Text = string.IsNullOrWhiteSpace(SuggestedName)
             ? "Export photo"
             : SuggestedName;
+        CoverView();
         Visible = true;
         ParentView?.SetActiveKeyboardElement(this);
         InvalidateLayout();
         ForceLayoutSubtree();
         InvalidatePaint();
+    }
+
+    private void CoverView()
+    {
+        float w = ParentView?.Width ?? Transform.Width;
+        float h = ParentView?.Height ?? Transform.Height;
+        if (w < 1f) w = 1f;
+        if (h < 1f) h = 1f;
+        Transform.SetAbsoluteFrame(0, 0, w, h);
+        Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
     }
 
     public void Close()
@@ -191,7 +186,7 @@ public sealed class ExportDialog : VisualElement
         _slider.Opacity = jpegLike ? 1f : 0.45f;
         _qualityLabel.Text = jpegLike ? $"Quality  {_quality}" : "Quality  n/a";
         for (int i = 0; i < _formatBtns.Length; i++)
-            ApplyChip(_formatBtns[i], Formats[i] == format);
+            _formatBtns[i].Toggled = Formats[i] == format;
         InvalidatePaint();
     }
 
@@ -200,18 +195,8 @@ public sealed class ExportDialog : VisualElement
         _longEdge = edge;
         _edgeLabel.Text = "Long edge  " + EdgeCaption(edge);
         for (int i = 0; i < _edgeBtns.Length; i++)
-            ApplyChip(_edgeBtns[i], LongEdges[i] == edge);
+            _edgeBtns[i].Toggled = LongEdges[i] == edge;
         InvalidatePaint();
-    }
-
-    private void StyleExportButtons()
-    {
-        _exportBtn.Style.BackColor = Theme.Accent;
-        _exportBtn.Style.Text.Color = SKColors.White;
-        _exportBtn.Style.Border.Color = Theme.Accent;
-        _cancelBtn.Style.BackColor = Theme.PanelAlt;
-        _cancelBtn.Style.Text.Color = Theme.Text;
-        _cancelBtn.Style.Border.Color = Theme.Hairline;
     }
 
     protected override void LayoutChildren()
@@ -223,7 +208,7 @@ public sealed class ExportDialog : VisualElement
 
         const float pad = 18f;
         const float cardW = 440f;
-        const float cardH = 332f;
+        const float cardH = 340f;
         float cardX = originX + Math.Max(0, (w - cardW) / 2f);
         float cardY = originY + Math.Max(0, (h - cardH) / 2f);
         _card.Transform.SetAbsoluteFrame(cardX, cardY, cardW, cardH);
@@ -244,8 +229,8 @@ public sealed class ExportDialog : VisualElement
 
         _qualityLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
         y += 20f;
-        _slider.Transform.SetAbsoluteFrame(x, y, inner, 22f);
-        y += 34f;
+        _slider.Transform.SetAbsoluteFrame(x, y, inner, 28f);
+        y += 38f;
 
         _edgeLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
         y += 20f;
@@ -258,7 +243,7 @@ public sealed class ExportDialog : VisualElement
         _cancelBtn.Transform.SetAbsoluteFrame(cardX + cardW - pad - btnW * 2 - 10f, y, btnW, btnH);
     }
 
-    private static void LayoutRow(VisualElement[] items, float x, float y, float width, float height, float gap)
+    private static void LayoutRow(IconButton[] items, float x, float y, float width, float height, float gap)
     {
         int n = items.Length;
         float cell = n > 0 ? (width - gap * (n - 1)) / n : width;
@@ -308,45 +293,11 @@ public sealed class ExportDialog : VisualElement
         };
     }
 
-    private static VisualElement Chip(string name, string text)
-    {
-        var el = new VisualElement
-        {
-            Name = name,
-            Text = text,
-            Cursor = StandardCursor.Hand,
-            Style = new ElementStyle
-            {
-                BackColor = Theme.PanelAlt,
-                Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.Hairline,
-                    Roundness = 4
-                },
-                Text = new TextStyle
-                {
-                    Color = Theme.Text,
-                    Size = 12,
-                    Weight = 500,
-                    Alignment = TextAlign.Center,
-                    Padding = 0
-                }
-            }
-        };
-        return el;
-    }
-
-    private static void ApplyChip(VisualElement el, bool selected)
-    {
-        el.Style.BackColor = selected ? Theme.Selected : Theme.PanelAlt;
-        el.Style.Border.Color = selected ? Theme.Accent : Theme.Hairline;
-        el.Style.Text.Color = selected ? Theme.Text : Theme.TextDim;
-    }
-
     private sealed class QualitySlider : VisualElement
     {
         private int _value = 90;
+        private bool _hovered;
+        private bool _dragging;
 
         public int Value
         {
@@ -368,21 +319,15 @@ public sealed class ExportDialog : VisualElement
         {
             Name = "QualitySlider";
             Cursor = StandardCursor.HResize;
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Track,
-                Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.Hairline,
-                    Roundness = 4
-                }
-            };
+            Style = new ElementStyle { BackColor = SKColors.Transparent };
 
+            Events.OnMouseEnter += _ => { _hovered = true; InvalidatePaint(); };
+            Events.OnMouseLeave += _ => { _hovered = false; InvalidatePaint(); };
             Events.OnMouseDown += (_, args) =>
             {
                 if (args.Button != 0)
                     return;
+                _dragging = true;
                 CapturePointer();
                 SetFromX(args.Global.X);
                 args.Handled = true;
@@ -396,10 +341,11 @@ public sealed class ExportDialog : VisualElement
             };
             Events.OnMouseUp += (_, args) =>
             {
-                if (!HasPointerCapture)
-                    return;
-                ReleasePointer();
+                _dragging = false;
+                if (HasPointerCapture)
+                    ReleasePointer();
                 args.Handled = true;
+                InvalidatePaint();
             };
         }
 
@@ -414,15 +360,9 @@ public sealed class ExportDialog : VisualElement
         {
             cmds.Add(new DrawCallbackCommand(canvas =>
             {
-                float w = Transform.Computed.Width;
-                float h = Transform.Computed.Height;
                 float t = (_value - 1) / 99f;
-                float fillW = Math.Max(2f, w * t);
-                using var fill = new SKPaint { Color = Theme.TrackFill, IsAntialias = true };
-                canvas.DrawRect(new SKRect(0, 0, fillW, h), fill);
-                using var handle = new SKPaint { Color = Theme.Handle, IsAntialias = true };
-                float hx = Math.Clamp(fillW, 4f, w - 4f);
-                canvas.DrawRect(new SKRect(hx - 3f, 2f, hx + 3f, h - 2f), handle);
+                SliderChrome.Draw(canvas, Transform.Computed.Width, Transform.Computed.Height,
+                    t, 0f, bipolar: false, _hovered, _dragging);
             }));
         }
     }

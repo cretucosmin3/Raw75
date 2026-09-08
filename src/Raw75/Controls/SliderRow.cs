@@ -16,7 +16,7 @@ public class SliderRow : VisualElement
 {
     private const float LabelH = 16f;
     private const float ValueW = 44f;
-    private const float TrackH = 22f;
+    private const float TrackAreaH = 22f;
     private const float LabelTrackGap = 6f;
     private static readonly TimeSpan DoubleClickWindow = TimeSpan.FromMilliseconds(280);
 
@@ -29,6 +29,7 @@ public class SliderRow : VisualElement
     private string _label;
     private readonly string _valueFormat;
     private bool _dragging;
+    private bool _hovered;
     private DateTime _lastDownUtc = DateTime.MinValue;
 
     public float DefaultValue { get; set; }
@@ -93,6 +94,8 @@ public class SliderRow : VisualElement
         Events.OnMouseMove += OnTrackMove;
         Events.OnMouseUp += OnTrackUp;
         Events.OnMouseDoubleClick += OnResetClick;
+        Events.OnMouseEnter += _ => { _hovered = true; InvalidatePaint(); };
+        Events.OnMouseLeave += _ => { _hovered = false; InvalidatePaint(); };
     }
 
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
@@ -120,51 +123,17 @@ public class SliderRow : VisualElement
     {
         float w = Transform.Computed.Width;
         float y = LabelH + LabelTrackGap;
-        float h = TrackH;
-        if (w < 2 || h < 2)
+        if (w < 2 || TrackAreaH < 2)
             return;
 
+        canvas.Save();
+        canvas.Translate(0, y);
         float range = Math.Max(0.0001f, _max - _min);
         float t = Math.Clamp((_value - _min) / range, 0f, 1f);
-
-        var track = new SKRect(0, y, w, y + h);
-        using (var bg = new SKPaint { Color = Theme.Track, IsAntialias = true })
-            canvas.DrawRoundRect(track, 4, 4, bg);
-        using (var stroke = new SKPaint
-        {
-            Color = Theme.Hairline,
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1
-        })
-            canvas.DrawRoundRect(track, 4, 4, stroke);
-
-        float fillLeft;
-        float fillRight;
-        if (_min < 0f)
-        {
-            float t0 = Math.Clamp((0f - _min) / range, 0f, 1f);
-            fillLeft = w * Math.Min(t, t0);
-            fillRight = w * Math.Max(t, t0);
-        }
-        else
-        {
-            fillLeft = 0;
-            fillRight = w * t;
-        }
-
-        if (fillRight - fillLeft > 1f)
-        {
-            canvas.Save();
-            canvas.ClipRect(track, SKClipOperation.Intersect, true);
-            using var fill = new SKPaint { Color = Theme.TrackFill, IsAntialias = true };
-            canvas.DrawRect(new SKRect(fillLeft, y, fillRight, y + h), fill);
-            canvas.Restore();
-        }
-
-        float hx = Math.Clamp(w * t, 4f, w - 4f);
-        using var handle = new SKPaint { Color = Theme.Handle, IsAntialias = true };
-        canvas.DrawRect(new SKRect(hx - 3f, y + 2f, hx + 3f, y + h - 2f), handle);
+        bool bipolar = _min < 0f && _max > 0f;
+        float zeroT = Math.Clamp((0f - _min) / range, 0f, 1f);
+        SliderChrome.Draw(canvas, w, TrackAreaH, t, zeroT, bipolar, _hovered, _dragging);
+        canvas.Restore();
     }
 
     private void OnTrackDown(object sender, MouseEventArgs args)

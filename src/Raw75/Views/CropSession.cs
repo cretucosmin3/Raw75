@@ -7,6 +7,7 @@ internal enum CropHandle
 {
     None,
     Move,
+    Rotate,
     N,
     S,
     E,
@@ -27,6 +28,9 @@ internal sealed class CropSession
     public float Y;
     public float W = 1f;
     public float H = 1f;
+
+    /// <summary>Locked pixel aspect (width/height). 0 = free.</summary>
+    public float Aspect { get; set; }
 
     public CropHandle Active { get; private set; }
 
@@ -66,6 +70,7 @@ internal sealed class CropSession
         var r = DestOnImage(imageDest);
         float s = HandlePx + 2f;
 
+        if (InHandle(lx, ly, r.MidX, r.Top - 18f, s + 6f)) return CropHandle.Rotate;
         if (InHandle(lx, ly, r.Left, r.Top, s)) return CropHandle.NW;
         if (InHandle(lx, ly, r.Right, r.Top, s)) return CropHandle.NE;
         if (InHandle(lx, ly, r.Left, r.Bottom, s)) return CropHandle.SW;
@@ -74,7 +79,8 @@ internal sealed class CropSession
         if (InHandle(lx, ly, r.MidX, r.Bottom, s)) return CropHandle.S;
         if (InHandle(lx, ly, r.Left, r.MidY, s)) return CropHandle.W;
         if (InHandle(lx, ly, r.Right, r.MidY, s)) return CropHandle.E;
-        if (r.Contains(lx, ly)) return CropHandle.Move;
+        if (r.Contains(lx, ly) && !NearEdge(lx, ly, r, s + 2f))
+            return CropHandle.Move;
         return CropHandle.None;
     }
 
@@ -89,7 +95,35 @@ internal sealed class CropSession
         _origH = H;
     }
 
-    public bool UpdateDrag(float lx, float ly, SKRect imageDest)
+    public void ApplyAspect(float pixelAspect, int imgW, int imgH)
+    {
+        Aspect = pixelAspect;
+        if (pixelAspect < 1e-4f || imgW < 1 || imgH < 1)
+            return;
+
+        float cx = X + W * 0.5f;
+        float cy = Y + H * 0.5f;
+        float normWH = pixelAspect * imgH / imgW;
+        float w, h;
+        if (normWH >= 1f)
+        {
+            w = 1f;
+            h = 1f / normWH;
+        }
+        else
+        {
+            h = 1f;
+            w = normWH;
+        }
+
+        X = Math.Clamp(cx - w * 0.5f, 0f, 1f - w);
+        Y = Math.Clamp(cy - h * 0.5f, 0f, 1f - h);
+        W = w;
+        H = h;
+        Clamp();
+    }
+
+    public bool UpdateDrag(float lx, float ly, SKRect imageDest, int imgW, int imgH)
     {
         if (Active == CropHandle.None || imageDest.Width < 1f || imageDest.Height < 1f)
             return false;
@@ -142,6 +176,8 @@ internal sealed class CropSession
             if (y > y2 - MinNorm) y = y2 - MinNorm;
             w = x2 - x;
             h = y2 - y;
+            if (Aspect > 1e-4f && imgW > 0 && imgH > 0)
+                ConstrainAspect(ref x, ref y, ref w, ref h, imgW, imgH);
         }
 
         x = Math.Clamp(x, 0f, 1f);
@@ -159,6 +195,39 @@ internal sealed class CropSession
         W = w;
         H = h;
         return true;
+    }
+
+    private void ConstrainAspect(ref float x, ref float y, ref float w, ref float h, int imgW, int imgH)
+    {
+        float normWH = Aspect * imgH / (float)imgW;
+        if (normWH < 1e-4f)
+            return;
+
+        float x2 = x + w;
+        float y2 = y + h;
+        switch (Active)
+        {
+            case CropHandle.N:
+            case CropHandle.S:
+                w = h * normWH;
+                x = _origX + _origW * 0.5f - w * 0.5f;
+                break;
+            case CropHandle.E:
+            case CropHandle.W:
+                h = w / normWH;
+                y = _origY + _origH * 0.5f - h * 0.5f;
+                break;
+            default:
+                if (w / Math.Max(h, 1e-6f) > normWH)
+                    w = h * normWH;
+                else
+                    h = w / normWH;
+                if (Active == CropHandle.NE || Active == CropHandle.SE)
+                    x = x2 - w;
+                if (Active == CropHandle.NW || Active == CropHandle.NE)
+                    y = y2 - h;
+                break;
+        }
     }
 
     public void EndDrag() => Active = CropHandle.None;
@@ -192,6 +261,19 @@ internal sealed class CropSession
         DrawHandle(canvas, crop.MidX, crop.Bottom, handle);
         DrawHandle(canvas, crop.Left, crop.MidY, handle);
         DrawHandle(canvas, crop.Right, crop.MidY, handle);
+
+        float hx = crop.MidX;
+        float hy = crop.Top - 18f;
+        using var rotLine = new SKPaint
+        {
+            Color = new SKColor(255, 153, 51, 230),
+            IsAntialias = true,
+            StrokeWidth = 1.5f,
+            Style = SKPaintStyle.Stroke
+        };
+        canvas.DrawLine(crop.MidX, crop.Top, hx, hy, rotLine);
+        using var rotDot = new SKPaint { Color = Theme.Accent, IsAntialias = true };
+        canvas.DrawCircle(hx, hy, 6f, rotDot);
     }
 
     private static void DrawGrid(SKCanvas canvas, SKRect crop, float straightenDeg)
@@ -237,6 +319,67 @@ internal sealed class CropSession
         float h = HandlePx * 0.5f;
         canvas.DrawRect(new SKRect(cx - h, cy - h, cx + h, cy + h), paint);
     }
+
+    public bool ClampInside(int rot, float straightenDeg, bool flipH, bool flipV)
+    {
+        if (Fits(rot, straightenDeg, flipH, flipV))
+            return true;
+        for (int i = 0; i < 24; i++)
+        {
+            float cx = X + W * 0.5f;
+            float cy = Y + H * 0.5f;
+            W = Math.Max(MinNorm, W * 0.92f);
+            H = Math.Max(MinNorm, H * 0.92f);
+            X = cx - W * 0.5f;
+            Y = cy - H * 0.5f;
+            Clamp();
+            if (Fits(rot, straightenDeg, flipH, flipV))
+                return true;
+        }
+        return Fits(rot, straightenDeg, flipH, flipV);
+    }
+
+    public bool Fits(int rot, float straightenDeg, bool flipH, bool flipV)
+    {
+        float[] xs = { X, X + W, X, X + W };
+        float[] ys = { Y, Y, Y + H, Y + H };
+        for (int i = 0; i < 4; i++)
+        {
+            MapDisplayToSource(xs[i], ys[i], rot, straightenDeg, flipH, flipV, out float sx, out float sy);
+            if (sx < -0.001f || sx > 1.001f || sy < -0.001f || sy > 1.001f)
+                return false;
+        }
+        return true;
+    }
+
+    public static void MapDisplayToSource(
+        float u, float v, int rot, float deg, bool flipH, bool flipV,
+        out float sx, out float sy)
+    {
+        float p = u, q = v;
+        rot &= 3;
+        if (rot == 1) { p = v; q = 1f - u; }
+        else if (rot == 2) { p = 1f - u; q = 1f - v; }
+        else if (rot == 3) { p = 1f - v; q = u; }
+        if (flipH) p = 1f - p;
+        if (flipV) q = 1f - q;
+        if (Math.Abs(deg) > 0.05f)
+        {
+            float a = deg * (MathF.PI / 180f);
+            float c = MathF.Cos(a);
+            float s = MathF.Sin(a);
+            float dx = p - 0.5f;
+            float dy = q - 0.5f;
+            p = dx * c - dy * s + 0.5f;
+            q = dx * s + dy * c + 0.5f;
+        }
+        sx = p;
+        sy = q;
+    }
+
+    private static bool NearEdge(float lx, float ly, SKRect r, float s) =>
+        Math.Abs(lx - r.Left) <= s || Math.Abs(lx - r.Right) <= s
+        || Math.Abs(ly - r.Top) <= s || Math.Abs(ly - r.Bottom) <= s;
 
     private static bool InHandle(float lx, float ly, float cx, float cy, float s) =>
         Math.Abs(lx - cx) <= s && Math.Abs(ly - cy) <= s;

@@ -17,6 +17,38 @@ internal static class GpuRetain
     private static readonly List<Item> Grave = new();
     private static bool _pumping;
 
+    internal static void Describe(System.Text.StringBuilder sb)
+    {
+        sb.AppendLine($"GpuRetain live bitmaps  {Bitmaps.Count}");
+        long live = 0;
+        int i = 0;
+        foreach (var kv in Bitmaps)
+        {
+            long img = MemSize.Image(kv.Key);
+            long bmp = MemSize.Bitmap(kv.Value);
+            live += img + bmp;
+            if (i < 12)
+            {
+                sb.AppendLine($"  live[{i}] image {MemSize.ImageLabel(kv.Key)}  bitmap {MemSize.Bytes(bmp)}");
+                i++;
+            }
+        }
+        if (Bitmaps.Count > 12)
+            sb.AppendLine($"  … {Bitmaps.Count - 12} more live bitmaps");
+        sb.AppendLine($"  live bytes (image+bitmap, may alias documents)  {MemSize.Bytes(live)}");
+
+        sb.AppendLine($"GpuRetain grave  {Grave.Count}  (deferred dispose)");
+        long grave = 0;
+        for (int g = 0; g < Grave.Count; g++)
+        {
+            Item it = Grave[g];
+            long n = MemSize.Image(it.Image) + MemSize.Bitmap(it.Bitmap);
+            grave += n;
+            sb.AppendLine($"  grave[{g}] lives={it.Lives}  {MemSize.ImageLabel(it.Image)}  bmp {MemSize.Bytes(MemSize.Bitmap(it.Bitmap))}  shader={(it.Shader != null)}");
+        }
+        sb.AppendLine($"  grave bytes  {MemSize.Bytes(grave)}");
+    }
+
     public static void Attach(SKImage image, SKBitmap bitmap)
     {
         if (image == null || bitmap == null)
