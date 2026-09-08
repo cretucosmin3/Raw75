@@ -6,6 +6,7 @@
     <Description>Desktop application for editing raw photos.</Description>
     <Authors>Cosmin Crețu</Authors>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>..\..\assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,6 +29,11 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Presets\builtin\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\icon.png">
+      <Link>assets\icon.png</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- Sdcb P/Invokes libraw.dll / libraw.so; the runtime pack ships libraw_r.so.23 and raw_r.dll. -->

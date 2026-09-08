@@ -52,13 +52,21 @@ public sealed class PhotoDocument : IDisposable
 
     public void Dispose()
     {
-        Display?.Dispose();
-        Thumb?.Dispose();
-        Proxy?.Dispose();
-        RasterKeep?.Dispose();
+        SKImage? a = Display;
+        SKImage? b = Thumb;
+        SKImage? c = Proxy;
         Display = null;
         Thumb = null;
         Proxy = null;
         RasterKeep = null;
+        if (a != null)
+            GpuRetain.Retire(a);
+        if (b != null && !ReferenceEquals(b, a))
+            GpuRetain.Retire(b);
+        if (c != null && !ReferenceEquals(c, a) && !ReferenceEquals(c, b))
+            GpuRetain.Retire(c);
+        SourceRgba = default;
+        HiResRgba = default;
+        LiveRgba = default;
     }
 }

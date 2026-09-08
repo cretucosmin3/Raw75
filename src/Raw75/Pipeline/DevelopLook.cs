@@ -2,6 +2,7 @@ using System;
 using Blossom;
 using Blossom.Core;
 using Raw75.Develop;
+using Raw75.Imaging;
 using SkiaSharp;
 
 namespace Raw75.Pipeline;
@@ -19,8 +20,14 @@ internal sealed class DevelopLook : IDisposable
     private SKShader? _fx;
     private readonly SKPaint _paint = new() { IsAntialias = false, FilterQuality = SKFilterQuality.Medium };
     private bool _loggedOk;
+    private bool _dirty = true;
+    private bool _cachedFast;
+    private int _cachedDw;
+    private int _cachedDh;
 
     public bool Failed { get; private set; }
+
+    public void Invalidate() => _dirty = true;
 
     public bool Draw(
         SKCanvas canvas,
@@ -44,37 +51,53 @@ internal sealed class DevelopLook : IDisposable
 
         try
         {
-            BindSource(source);
-            SKImage lut = DevelopRenderer.GetLut(settings, out float lutSize, out float lutAmount);
-            BindLut(lut);
-            _mask ??= DevelopRenderer.WhitePixel().ToShader();
-            if (_img == null)
-                return false;
+            int dw = Math.Max(1, (int)MathF.Round(dest.Width));
+            int dh = Math.Max(1, (int)MathF.Round(dest.Height));
+            bool needShader = _dirty || _fx == null || _paint.Shader == null
+                || _cachedFast != fast || _cachedDw != dw || _cachedDh != dh
+                || !ReferenceEquals(_source, source);
 
-            var uniforms = new SKRuntimeEffectUniforms(effect);
-            bool srcLinear = source.ColorType == SKColorType.RgbaF16
-                || source.ColorType == SKColorType.RgbaF32;
-            DevelopRenderer.BindUniforms(
-                uniforms, settings, source.Width, source.Height,
-                (int)MathF.Round(dest.Width), (int)MathF.Round(dest.Height),
-                split: 0f, before: false, lutSize, lutAmount,
-                fast: fast, applyCrop: false, srcLinear: srcLinear);
-
-            var children = new SKRuntimeEffectChildren(effect);
-            children.Add("u_image", _img);
-            children.Add("u_lut", _lut);
-            children.Add("u_mask", _mask);
-
-            SKShader? fx = effect.ToShader(true, uniforms, children);
-            if (fx == null)
+            if (needShader)
             {
-                Failed = true;
-                return false;
-            }
+                BindSource(source);
+                SKImage lut = DevelopRenderer.GetLut(settings, out float lutSize, out float lutAmount);
+                BindLut(lut);
+                _mask ??= DevelopRenderer.WhitePixel().ToShader();
+                if (_img == null)
+                    return false;
 
-            _fx?.Dispose();
-            _fx = fx;
-            _paint.Shader = _fx;
+                var uniforms = new SKRuntimeEffectUniforms(effect);
+                bool srcLinear = source.ColorType == SKColorType.RgbaF16
+                    || source.ColorType == SKColorType.RgbaF32;
+                DevelopRenderer.BindUniforms(
+                    uniforms, settings, source.Width, source.Height,
+                    dw, dh,
+                    split: 0f, before: false, lutSize, lutAmount,
+                    fast: fast, applyCrop: false, srcLinear: srcLinear);
+
+                var children = new SKRuntimeEffectChildren(effect);
+                children.Add("u_image", _img);
+                children.Add("u_lut", _lut);
+                children.Add("u_mask", _mask);
+
+                SKShader? fx = effect.ToShader(true, uniforms, children);
+                if (fx == null)
+                {
+                    Failed = true;
+                    return false;
+                }
+
+                SKShader? prev = _fx;
+                _fx = fx;
+                _paint.Shader = _fx;
+                if (prev != null)
+                    GpuRetain.RetireShader(prev);
+
+                _dirty = false;
+                _cachedFast = fast;
+                _cachedDw = dw;
+                _cachedDh = dh;
+            }
 
             canvas.Save();
             canvas.ClipRect(clip, SKClipOperation.Intersect, false);

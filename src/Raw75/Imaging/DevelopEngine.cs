@@ -280,33 +280,14 @@ public sealed class DevelopEngine
                     return;
 
                 Log.Info($"Upload {kind} {raster.Width}x{raster.Height} (UI SKImage)");
-                SKImage image = RawDecoder.Upload(raster, out SKBitmap keep);
+                SKImage image = RawDecoder.Upload(raster, out _);
                 Log.Info($"Upload {kind} SKImage ok {image.Width}x{image.Height}");
-                if (asProxy)
-                {
-                    SKImage gpu = DevelopRenderer.PromoteGpu(image);
-                    if (!ReferenceEquals(gpu, image))
-                    {
-                        Log.Info($"GPU proxy {gpu.Width}x{gpu.Height}");
-                        image = gpu;
-                    }
-                }
 
                 if (asProxy)
                 {
                     doc.SourceRgba = raster;
                     doc.SourceLinear = raster.HasLinear;
                     doc.LiveRgba = RawDecoder.Limit(raster, 256);
-                    doc.RasterKeep?.Dispose();
-                    doc.RasterKeep = keep;
-                }
-                else if (doc.RasterKeep == null)
-                {
-                    doc.RasterKeep = keep;
-                }
-                else
-                {
-                    keep.Dispose();
                 }
 
                 Log.Info($"Assign {kind}");
@@ -411,29 +392,30 @@ public sealed class DevelopEngine
         {
             SKImage? old = doc.Thumb;
             doc.Thumb = thumb;
-            DisposeUnowned(doc, old);
+            RetireIfUnused(doc, old);
         }
 
         if (proxy != null)
         {
             SKImage? old = doc.Proxy;
             doc.Proxy = proxy;
-            DisposeUnowned(doc, old);
+            RetireIfUnused(doc, old);
         }
 
         if (display != null)
         {
             SKImage? old = doc.Display;
             doc.Display = display;
-            DisposeUnowned(doc, old);
+            RetireIfUnused(doc, old);
         }
     }
 
-    private static void DisposeUnowned(PhotoDocument doc, SKImage? image)
+    private static void RetireIfUnused(PhotoDocument doc, SKImage? image)
     {
-        // Do not SKImage.Dispose here. The command ledger and GPU still
-        // hold the previous frame's image; freeing it SIGSEGVs on the next slider tick.
-        _ = doc;
-        _ = image;
+        if (image == null)
+            return;
+        if (ReferenceEquals(image, doc.Thumb) || ReferenceEquals(image, doc.Proxy) || ReferenceEquals(image, doc.Display))
+            return;
+        GpuRetain.Retire(image);
     }
 }

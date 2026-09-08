@@ -216,6 +216,7 @@ public sealed class PhotoPane : VisualElement
         _source = source;
         _settings = settings;
         _lookFast = fast;
+        _look.Invalidate();
         if (source != null && source.Handle != IntPtr.Zero)
             SyncViewToSource();
         _showingPhoto = source != null || _developed != null;

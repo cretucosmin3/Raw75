@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using Blossom;
+using Blossom.Core;
 using Sdcb.LibRaw;
 using SkiaSharp;
 
@@ -38,8 +39,24 @@ internal readonly struct RasterBuffer
 internal static class RawDecoder
 {
     private static readonly object LibRawGate = new();
-    private static readonly System.Collections.Concurrent.ConcurrentBag<SKBitmap> LiveBitmaps = new();
     internal const int DisplayMaxEdge = 1600;
+    internal const float ProxyScale = 0.35f;
+    internal const int ProxyMinEdge = 1600;
+    internal const int ProxyMaxEdge = 4096;
+
+    /// <summary>
+    /// Working-copy long edge: ~35% of the source, never larger than the source,
+    /// clamped so small files stay whole and huge files stay bounded.
+    /// </summary>
+    internal static int ProxyLongEdge(int width, int height)
+    {
+        int src = Math.Max(width, height);
+        if (src <= 1)
+            return 1;
+        int want = (int)Math.Round(src * ProxyScale);
+        int target = Math.Clamp(want, ProxyMinEdge, ProxyMaxEdge);
+        return Math.Min(src, target);
+    }
 
     private static readonly HashSet<string> RasterExt = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -63,7 +80,8 @@ internal static class RawDecoder
             using var bmp = SKBitmap.Decode(bytes);
             if (bmp == null || bmp.Width <= 0)
                 return null;
-            return FromBitmap(bmp);
+            RasterBuffer full = FromBitmap(bmp);
+            return Limit(full, ProxyLongEdge(full.Width, full.Height));
         }
         catch
         {
@@ -78,7 +96,7 @@ internal static class RawDecoder
         {
             using var raw = RawContext.OpenFile(path);
             using ProcessedImage image = raw.ExportThumbnail(0);
-            var buf = ToBuffer(image);
+            var buf = ToBuffer(image, maxEdge: 0);
             Log.Info($"Thumb {buf.Width}x{buf.Height} type={image.ImageType} bits={image.Bits} ch={image.Channels}");
             return buf;
         }
@@ -97,9 +115,13 @@ internal static class RawDecoder
             }
             catch { }
 
-            using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half: true));
-            var buf = ToBuffer(image);
-            Log.Info($"Preview {buf.Width}x{buf.Height} bits={image.Bits} ch={image.Channels} camWb={camWb}");
+            int srcW = raw.RawWidth > 0 ? raw.RawWidth : raw.Width;
+            int srcH = raw.RawHeight > 0 ? raw.RawHeight : raw.Height;
+            int edge = ProxyLongEdge(srcW, srcH);
+            bool half = Math.Max(srcW, srcH) > ProxyMaxEdge;
+            using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half));
+            var buf = ToBuffer(image, edge);
+            Log.Info($"Preview {srcW}x{srcH} → proxy {buf.Width}x{buf.Height} edge={edge} half={half} bits={image.Bits} ch={image.Channels} camWb={camWb} {Megabytes(buf):0.0}MB");
             return buf;
         }
     }
@@ -118,8 +140,8 @@ internal static class RawDecoder
             catch { }
 
             using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half: false));
-            var buf = ToBuffer(image);
-            Log.Info($"Full {buf.Width}x{buf.Height} bits={image.Bits} ch={image.Channels}");
+            var buf = ToBuffer(image, maxEdge: 0);
+            Log.Info($"Full {buf.Width}x{buf.Height} bits={image.Bits} ch={image.Channels} {Megabytes(buf):0.0}MB");
             return buf;
         }
     }
@@ -182,8 +204,7 @@ internal static class RawDecoder
         return new RasterBuffer(dst8, nw, nh);
     }
 
-    /// <summary>UI thread only. Caller must keep <paramref name="keep"/> alive with the image.</summary>
-    public static SKImage Upload(RasterBuffer buf, out SKBitmap keep)
+    public static SKImage Upload(RasterBuffer buf, out SKBitmap? keep)
     {
         if (buf.Width < 1 || buf.Height < 1)
             throw new InvalidDataException("Empty raster.");
@@ -216,21 +237,21 @@ internal static class RawDecoder
         return Freeze(keep, out keep);
     }
 
-    private static SKImage UploadLinear(RasterBuffer buf, out SKBitmap keep)
+    private static SKImage UploadLinear(RasterBuffer buf, out SKBitmap? keep)
     {
         float[] lin = buf.Linear!;
         int w = buf.Width;
         int h = buf.Height;
         var info = new SKImageInfo(w, h, SKColorType.RgbaF16, SKAlphaType.Unpremul);
-        keep = new SKBitmap(info);
-        IntPtr pixels = keep.GetPixels();
+        var cpu = new SKBitmap(info);
+        IntPtr pixels = cpu.GetPixels();
         if (pixels == IntPtr.Zero)
         {
-            keep.Dispose();
+            cpu.Dispose();
             throw new InvalidOperationException("F16 pixel alloc failed.");
         }
 
-        int stride = keep.RowBytes;
+        int stride = cpu.RowBytes;
         for (int y = 0; y < h; y++)
         {
             int srcRow = y * w * 4;
@@ -246,7 +267,24 @@ internal static class RawDecoder
             }
         }
 
-        return Freeze(keep, out keep);
+        if (Gpu.IsReady)
+        {
+            using SKSurface? surface = Gpu.CreateSurface(w, h, SKColorType.RgbaF16, SKAlphaType.Unpremul);
+            if (surface != null)
+            {
+                surface.Canvas.Clear(SKColors.Transparent);
+                surface.Canvas.DrawBitmap(cpu, 0, 0);
+                SKImage? snap = Gpu.Snapshot(surface);
+                cpu.Dispose();
+                if (snap != null)
+                {
+                    keep = null;
+                    return snap;
+                }
+            }
+        }
+
+        return Freeze(cpu, out keep);
     }
 
     private static void WriteHalf(IntPtr row, int offset, float v)
@@ -257,7 +295,7 @@ internal static class RawDecoder
         Marshal.WriteInt16(row, offset, (short)bits);
     }
 
-    private static SKImage Freeze(SKBitmap keep, out SKBitmap live)
+    private static SKImage Freeze(SKBitmap keep, out SKBitmap? live)
     {
         live = keep;
         keep.SetImmutable();
@@ -268,8 +306,16 @@ internal static class RawDecoder
             throw new InvalidOperationException("SKImage.FromBitmap returned null.");
         }
 
-        LiveBitmaps.Add(keep);
+        GpuRetain.Attach(image, keep);
         return image;
+    }
+
+    private static float Megabytes(RasterBuffer buf)
+    {
+        long bytes = buf.HasLinear
+            ? (long)buf.Width * buf.Height * 16
+            : (long)buf.Width * buf.Height * 4;
+        return bytes / (1024f * 1024f);
     }
 
     private static void ConfigureLinear(OutputParams c, bool camWb, bool half)
@@ -343,7 +389,7 @@ internal static class RawDecoder
         return new RasterBuffer(rgba, w, h);
     }
 
-    private static RasterBuffer ToBuffer(ProcessedImage image)
+    private static RasterBuffer ToBuffer(ProcessedImage image, int maxEdge)
     {
         int dataLen = image.DataSize;
         if (dataLen >= 3)
@@ -379,7 +425,7 @@ internal static class RawDecoder
             return new RasterBuffer(rgba, w, h);
         }
 
-        return Copy16Linear(image.AsSpan<ushort>(), w, h, channels);
+        return Copy16Linear(image.AsSpan<ushort>(), w, h, channels, maxEdge);
     }
 
     private static void Copy8(ReadOnlySpan<byte> src, byte[] dst, int w, int h, int channels)
@@ -408,34 +454,52 @@ internal static class RawDecoder
         }
     }
 
-    private static RasterBuffer Copy16Linear(ReadOnlySpan<ushort> src, int w, int h, int channels)
+    private static RasterBuffer Copy16Linear(ReadOnlySpan<ushort> src, int w, int h, int channels, int maxEdge)
     {
         int need = w * h * channels;
         if (src.Length < need)
             throw new InvalidDataException($"LibRaw 16-bit buffer short: {src.Length} < {need}");
 
-        float[] lin = new float[w * h * 4];
-        const float scale = 1f / 65535f;
-        int si = 0;
-        int di = 0;
-        for (int i = 0; i < w * h; i++)
+        int nw = w;
+        int nh = h;
+        if (maxEdge > 0)
         {
-            if (channels >= 3)
+            int m = Math.Max(w, h);
+            if (m > maxEdge)
             {
-                lin[di] = src[si] * scale;
-                lin[di + 1] = src[si + 1] * scale;
-                lin[di + 2] = src[si + 2] * scale;
+                float s = maxEdge / (float)m;
+                nw = Math.Max(1, (int)Math.Round(w * s));
+                nh = Math.Max(1, (int)Math.Round(h * s));
             }
-            else
-            {
-                float y = src[si] * scale;
-                lin[di] = lin[di + 1] = lin[di + 2] = y;
-            }
-            lin[di + 3] = 1f;
-            di += 4;
-            si += channels;
         }
 
-        return new RasterBuffer(lin, w, h);
+        float[] lin = new float[nw * nh * 4];
+        const float scale = 1f / 65535f;
+        for (int y = 0; y < nh; y++)
+        {
+            int sy = nh == h ? y : Math.Min(h - 1, y * h / nh);
+            int srcRow = sy * w * channels;
+            int dstRow = y * nw * 4;
+            for (int x = 0; x < nw; x++)
+            {
+                int sx = nw == w ? x : Math.Min(w - 1, x * w / nw);
+                int si = srcRow + sx * channels;
+                int di = dstRow + x * 4;
+                if (channels >= 3)
+                {
+                    lin[di] = src[si] * scale;
+                    lin[di + 1] = src[si + 1] * scale;
+                    lin[di + 2] = src[si + 2] * scale;
+                }
+                else
+                {
+                    float v = src[si] * scale;
+                    lin[di] = lin[di + 1] = lin[di + 2] = v;
+                }
+                lin[di + 3] = 1f;
+            }
+        }
+
+        return new RasterBuffer(lin, nw, nh);
     }
 }
