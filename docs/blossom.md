@@ -27,7 +27,9 @@ Work that must touch GPU or UI goes through `Browser.Post(...)`. LibRaw decode a
 | File drop | `Browser.FilesDropped` | we open the RAW |
 | JPEG/PNG/WebP/TIFF | — | ImageSharp after GPU readback |
 
-The view (`WorkspaceView`) is a Blossom `View`. Chrome is elements with anchors. The photo is one (or a few) `VisualElement` subclasses that draw GPU images, not a stack of styled rectangles per pixel.
+The view (`WorkspaceView`) is a Blossom `View`. Chrome is elements with anchors. The photo is `PhotoPane`: a `VisualElement` that blits an `SKImage` from `Gpu`.
+
+Drop a file on the window: JPEG/PNG open immediately; a RAW shows its embedded thumbnail first, then a half-size LibRaw demosaic replaces it. That’s a preview, not the develop pipeline.
 
 ## GPU
 

@@ -5,6 +5,7 @@
     <AssemblyName>Raw75</AssemblyName>
     <Description>Desktop application for editing raw photos.</Description>
     <Authors>Cosmin Crețu</Authors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,4 +21,26 @@
       <Visible>false</Visible>
     </None>
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Sdcb.LibRaw" Version="0.21.1.7" />
+    <PackageReference Include="Sdcb.LibRaw.runtime.linux64" Version="0.21.1" />
+    <PackageReference Include="Sdcb.LibRaw.runtime.win64" Version="0.21.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Presets\builtin\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Sdcb P/Invokes libraw.dll / libraw.so; the runtime pack ships libraw_r.so.23 and raw_r.dll. -->
+  <Target Name="AliasLibRawNative" AfterTargets="CopyFilesToOutputDirectory">
+    <PropertyGroup>
+      <_LibRawLinux>$(OutputPath)runtimes\linux-x64\native\libraw_r.so.23</_LibRawLinux>
+      <_LibRawWin>$(OutputPath)runtimes\win-x64\native\raw_r.dll</_LibRawWin>
+    </PropertyGroup>
+    <Copy Condition="Exists('$(_LibRawLinux)')" SourceFiles="$(_LibRawLinux)" DestinationFiles="$(OutputPath)libraw_r.so.23" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(_LibRawLinux)')" SourceFiles="$(_LibRawLinux)" DestinationFiles="$(OutputPath)libraw.so" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(OutputPath)runtimes\linux-x64\native\libjpeg.so.8')" SourceFiles="$(OutputPath)runtimes\linux-x64\native\libjpeg.so.8;$(OutputPath)runtimes\linux-x64\native\libgomp.so.1;$(OutputPath)runtimes\linux-x64\native\liblcms2.so" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(_LibRawWin)')" SourceFiles="$(_LibRawWin)" DestinationFiles="$(OutputPath)raw_r.dll" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(_LibRawWin)')" SourceFiles="$(_LibRawWin)" DestinationFiles="$(OutputPath)libraw.dll" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
+
