@@ -22,8 +22,11 @@ internal sealed class DevelopLook : IDisposable
     private bool _loggedOk;
     private bool _dirty = true;
     private bool _cachedFast;
+    private bool _cachedCrop;
     private int _cachedDw;
     private int _cachedDh;
+    private float _cachedTx, _cachedTy, _cachedTw = 1f, _cachedTh = 1f;
+    private float _cachedCx, _cachedCy, _cachedCw = 1f, _cachedCh = 1f;
 
     public bool Failed { get; private set; }
 
@@ -35,7 +38,16 @@ internal sealed class DevelopLook : IDisposable
         SKRect clip,
         SKImage source,
         DevelopSettings settings,
-        bool fast)
+        bool fast,
+        bool applyCrop = false,
+        float tileX = 0f,
+        float tileY = 0f,
+        float tileW = 1f,
+        float tileH = 1f,
+        float viewCropX = float.NaN,
+        float viewCropY = float.NaN,
+        float viewCropW = float.NaN,
+        float viewCropH = float.NaN)
     {
         if (Failed || canvas == null || source == null || source.Handle == IntPtr.Zero)
             return false;
@@ -54,7 +66,12 @@ internal sealed class DevelopLook : IDisposable
             int dw = Math.Max(1, (int)MathF.Round(dest.Width));
             int dh = Math.Max(1, (int)MathF.Round(dest.Height));
             bool needShader = _dirty || _fx == null || _paint.Shader == null
-                || _cachedFast != fast || _cachedDw != dw || _cachedDh != dh
+                || _cachedFast != fast || _cachedCrop != applyCrop
+                || _cachedDw != dw || _cachedDh != dh
+                || _cachedTx != tileX || _cachedTy != tileY
+                || _cachedTw != tileW || _cachedTh != tileH
+                || _cachedCx != viewCropX || _cachedCy != viewCropY
+                || _cachedCw != viewCropW || _cachedCh != viewCropH
                 || !ReferenceEquals(_source, source);
 
             if (needShader)
@@ -73,7 +90,10 @@ internal sealed class DevelopLook : IDisposable
                     uniforms, settings, source.Width, source.Height,
                     dw, dh,
                     split: 0f, before: false, lutSize, lutAmount,
-                    fast: fast, applyCrop: false, srcLinear: srcLinear);
+                    fast: fast, applyCrop: applyCrop, srcLinear: srcLinear,
+                    tileX: tileX, tileY: tileY, tileW: tileW, tileH: tileH,
+                    viewCropX: viewCropX, viewCropY: viewCropY,
+                    viewCropW: viewCropW, viewCropH: viewCropH);
 
                 var children = new SKRuntimeEffectChildren(effect);
                 children.Add("u_image", _img);
@@ -95,8 +115,17 @@ internal sealed class DevelopLook : IDisposable
 
                 _dirty = false;
                 _cachedFast = fast;
+                _cachedCrop = applyCrop;
                 _cachedDw = dw;
                 _cachedDh = dh;
+                _cachedTx = tileX;
+                _cachedTy = tileY;
+                _cachedTw = tileW;
+                _cachedTh = tileH;
+                _cachedCx = viewCropX;
+                _cachedCy = viewCropY;
+                _cachedCw = viewCropW;
+                _cachedCh = viewCropH;
             }
 
             canvas.Save();

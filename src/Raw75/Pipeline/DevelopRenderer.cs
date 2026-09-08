@@ -192,10 +192,22 @@ public static class DevelopRenderer
         float lutAmount,
         bool fast = false,
         bool applyCrop = true,
-        bool srcLinear = true)
+        bool srcLinear = true,
+        float tileX = 0f,
+        float tileY = 0f,
+        float tileW = 1f,
+        float tileH = 1f,
+        float viewCropX = float.NaN,
+        float viewCropY = float.NaN,
+        float viewCropW = float.NaN,
+        float viewCropH = float.NaN)
     {
         Set(u, "u_resolution", new[] { (float)dstW, (float)dstH });
         Set(u, "u_srcSize", new[] { (float)srcW, (float)srcH });
+        if (tileW < 1e-5f) tileW = 1f;
+        if (tileH < 1e-5f) tileH = 1f;
+        Set(u, "u_tileOrigin", new[] { tileX, tileY });
+        Set(u, "u_tileSize", new[] { tileW, tileH });
         Set(u, "u_temp", s.Temperature / 100f);
         Set(u, "u_tint", s.Tint / 100f);
         Set(u, "u_ev", s.Exposure);
@@ -213,19 +225,32 @@ public static class DevelopRenderer
             HslBand band = (hsl != null && hsl.Length == 6) ? hsl[i] : default;
             Set(u, "u_hsl" + i, new[] { band.Hue / 100f, band.Sat / 100f, band.Luma / 100f, 0f });
         }
-        Set(u, "u_sharpen", fast ? 0f : s.Sharpen / 150f);
+        Set(u, "u_sharpen", s.Sharpen / 150f);
         Set(u, "u_denoiseLuma", fast ? 0f : s.DenoiseLuma / 100f);
         Set(u, "u_denoiseChroma", fast ? 0f : s.DenoiseChroma / 100f);
-        float cw = applyCrop ? s.CropW : 0f;
-        float ch = applyCrop ? s.CropH : 0f;
-        if (cw < 0.001f || ch < 0.001f)
+        float cx, cy, cw, ch;
+        if (!float.IsNaN(viewCropW) && viewCropW > 0.0001f && viewCropH > 0.0001f)
         {
-            Set(u, "u_crop", new[] { 0f, 0f, 1f, 1f });
+            cx = viewCropX;
+            cy = viewCropY;
+            cw = viewCropW;
+            ch = viewCropH;
         }
         else
         {
-            Set(u, "u_crop", new[] { s.CropX, s.CropY, cw, ch });
+            cw = applyCrop ? s.CropW : 0f;
+            ch = applyCrop ? s.CropH : 0f;
+            cx = s.CropX;
+            cy = s.CropY;
+            if (cw < 0.001f || ch < 0.001f)
+            {
+                cx = 0f;
+                cy = 0f;
+                cw = 1f;
+                ch = 1f;
+            }
         }
+        Set(u, "u_crop", new[] { cx, cy, cw, ch });
         Set(u, "u_straighten", s.Straighten);
         Set(u, "u_rot", (float)(s.Rotate90 & 3));
         Set(u, "u_flipH", s.FlipH ? 1f : 0f);
@@ -350,6 +375,8 @@ public static class DevelopRenderer
             uniform shader u_mask;
             uniform float2 u_resolution;
             uniform float2 u_srcSize;
+            uniform float2 u_tileOrigin;
+            uniform float2 u_tileSize;
             uniform float u_temp;
             uniform float u_tint;
             uniform float u_ev;
@@ -494,11 +521,7 @@ public static class DevelopRenderer
                     float sn = sin(a);
                     p = float2(q.x * c - q.y * sn, q.x * sn + q.y * c) + float2(0.5);
                 }
-                float4 crop = u_crop;
-                if (crop.z < 0.001 || crop.w < 0.001) {
-                    crop = float4(0.0, 0.0, 1.0, 1.0);
-                }
-                return crop.xy + p * crop.zw;
+                return p;
             }
 
             float3 sample_lut(float3 rgb) {
@@ -556,16 +579,19 @@ public static class DevelopRenderer
                 col = max(exp2(enc) - 1.0, 0.0);
 
                 float lum2 = luma2020(col);
-                float shw = 1.0 - smoother(lum2, 0.02, 0.22);
-                float hiw = smoother(lum2, 0.35, 2.5);
-                col *= mix(1.0, pow(2.0, u_shadows * 1.15), shw);
-                col *= mix(1.0, pow(2.0, u_highlights * 1.0), hiw);
+                float shw = 1.0 - smoother(lum2, 0.02, 0.28);
+                float hiw = smoother(lum2, 0.10, 0.70);
+                col *= mix(1.0, pow(2.0, u_shadows * 1.45), shw);
+                col *= mix(1.0, pow(2.0, u_highlights * 1.75), hiw);
 
                 lum2 = luma2020(col);
-                float ww = smoother(lum2, 0.8, 4.0);
-                float bw = 1.0 - smoother(lum2, 0.0, 0.12);
-                col *= mix(1.0, pow(2.0, u_whites * 0.85), ww);
-                col *= mix(1.0, pow(2.0, u_blacks * 0.85), bw);
+                float ww = smoother(lum2, 0.20, 1.05);
+                float bw = 1.0 - smoother(lum2, 0.0, 0.18);
+                col *= mix(1.0, pow(2.0, u_whites * 1.55), ww);
+                col *= mix(1.0, pow(2.0, u_blacks * 1.25), bw);
+                if (u_whites > 0.0) {
+                    col *= 1.0 + u_whites * smoother(lum2, 0.35, 1.2) * 0.9;
+                }
                 col = max(col, 0.0);
 
                 float lum3 = luma2020(col);
@@ -607,7 +633,17 @@ public static class DevelopRenderer
                     }
                 }
 
+                float4 crop = u_crop;
+                if (crop.z < 0.001 || crop.w < 0.001) {
+                    crop = float4(0.0, 0.0, 1.0, 1.0);
+                }
+                uv = crop.xy + uv * crop.zw;
                 float2 srcUv = apply_geom(uv);
+                float2 t0 = u_tileOrigin;
+                float2 ts = u_tileSize;
+                if (ts.x < 0.00001) ts.x = 1.0;
+                if (ts.y < 0.00001) ts.y = 1.0;
+                srcUv = (srcUv - t0) / ts;
                 srcUv = clamp(srcUv, 0.0, 1.0);
                 // Image child shaders are sampled in pixel space of the source.
                 float2 srcCoord = srcUv * u_srcSize;
@@ -640,17 +676,18 @@ public static class DevelopRenderer
                     processed = apply_look(lin);
                 }
 
-                if (u_sharpen > 0.001) {
-                    float lC = luma2020(to_lin(orig.rgb));
-                    float lN = luma2020(to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb));
-                    lN += luma2020(to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb));
-                    lN += luma2020(to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb));
-                    lN += luma2020(to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb));
-                    lN *= 0.25;
-                    processed += (lC - lN) * u_sharpen * 1.35;
-                }
-
                 float3 disp = to_srgb(filmic(processed));
+                if (u_sharpen > 0.001) {
+                    float3 o0 = u_srcLinear > 0.5 ? orig.rgb : to_lin(orig.rgb);
+                    float3 d0 = to_srgb(filmic(o0));
+                    float3 acc = float3(0.0);
+                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, -1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb)));
+                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, 1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb)));
+                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb)));
+                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb)));
+                    acc *= 0.25;
+                    disp += (d0 - acc) * u_sharpen * 2.4;
+                }
                 if (u_hasLut > 0.5 && u_lutAmount > 0.001) {
                     disp = mix(disp, sample_lut(disp), u_lutAmount);
                 }

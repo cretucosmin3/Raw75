@@ -116,7 +116,7 @@ public class Filmstrip : VisualElement
                 }
             };
 
-            _thumb = new ThumbWell(doc.Thumb)
+            _thumb = new ThumbWell(doc.Preview ?? doc.Thumb)
             {
                 Name = $"{Name}_Thumb",
                 IsClickthrough = true

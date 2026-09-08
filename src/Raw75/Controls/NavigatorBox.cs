@@ -30,6 +30,13 @@ public class NavigatorBox : VisualElement
     }
 
     public event Action<string>? ModePicked;
+
+    public void SetMode(string mode)
+    {
+        _fit.Toggled = mode == "Fit";
+        _fill.Toggled = mode == "Fill";
+        _oneToOne.Toggled = mode == "1:1";
+    }
     public event Action<float, float>? PreviewClicked;
 
     public NavigatorBox()
@@ -53,6 +60,7 @@ public class NavigatorBox : VisualElement
         _fit = MakeMode("Fit");
         _fill = MakeMode("Fill");
         _oneToOne = MakeMode("1:1");
+        SetMode("Fit");
 
         AddChild(_preview);
         AddChild(_fit);

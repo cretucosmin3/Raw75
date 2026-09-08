@@ -5,11 +5,12 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>Dark tool-strip button; Accent fill when <see cref="Toggled"/>.</summary>
+/// <summary>Shared chrome: hover, press, optional checked (toggle) and primary (accent) fill.</summary>
 public class IconButton : VisualElement
 {
     private readonly string _caption;
     private bool _toggled;
+    private bool _primary;
     private bool _pressed;
     private bool _hovered;
 
@@ -24,11 +25,23 @@ public class IconButton : VisualElement
         }
     }
 
+    public bool Primary
+    {
+        get => _primary;
+        set
+        {
+            if (_primary == value) return;
+            _primary = value;
+            ApplyChrome();
+        }
+    }
+
     public event Action? Clicked;
 
-    public IconButton(string caption)
+    public IconButton(string caption, bool primary = false)
     {
         _caption = caption ?? "";
+        _primary = primary;
         Name = $"IconButton_{_caption}";
         Text = _caption;
         Cursor = StandardCursor.Hand;
@@ -45,7 +58,7 @@ public class IconButton : VisualElement
             {
                 Color = Theme.Text,
                 Size = 12,
-                Weight = 500,
+                Weight = 600,
                 Alignment = TextAlign.Center,
                 Padding = 0
             }
@@ -96,26 +109,25 @@ public class IconButton : VisualElement
 
     private void ApplyChrome()
     {
-        SKColor fill = _toggled ? Theme.Accent : Theme.Button;
+        bool accent = _primary || _toggled;
+        SKColor fill = accent ? Theme.Accent : Theme.Button;
+        SKColor border = accent ? Theme.Accent : Theme.Hairline;
+        SKColor text = accent ? Theme.ButtonTextOnAccent : Theme.Text;
+
         if (_pressed)
-            fill = Darken(fill, 20);
-        else if (_hovered && !_toggled)
-            fill = Lighten(fill, 16);
+        {
+            fill = Theme.Darken(fill, 28);
+            border = Theme.Darken(border, 20);
+        }
+        else if (_hovered)
+        {
+            fill = Theme.Lighten(fill, accent ? 18 : 22);
+            border = accent ? Theme.Lighten(Theme.Accent, 24) : Theme.Lighten(Theme.Hairline, 40);
+        }
 
         Style.BackColor = fill;
-        Style.Text.Color = _toggled ? new SKColor(250, 245, 238) : Theme.Text;
+        Style.Border.Color = border;
+        Style.Text.Color = text;
         InvalidatePaint();
     }
-
-    private static SKColor Lighten(SKColor c, int d) => new(
-        (byte)Math.Min(255, c.Red + d),
-        (byte)Math.Min(255, c.Green + d),
-        (byte)Math.Min(255, c.Blue + d),
-        c.Alpha);
-
-    private static SKColor Darken(SKColor c, int d) => new(
-        (byte)Math.Max(0, c.Red - d),
-        (byte)Math.Max(0, c.Green - d),
-        (byte)Math.Max(0, c.Blue - d),
-        c.Alpha);
 }

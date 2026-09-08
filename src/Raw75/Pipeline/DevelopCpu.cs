@@ -16,8 +16,12 @@ internal static class DevelopCpu
         int sw = src.Width;
         int sh = src.Height;
         int rot = s.Rotate90 & 3;
-        int dw = (rot & 1) != 0 ? sh : sw;
-        int dh = (rot & 1) != 0 ? sw : sh;
+        int fw = (rot & 1) != 0 ? sh : sw;
+        int fh = (rot & 1) != 0 ? sw : sh;
+        bool hasCrop = s.HasCrop;
+        float cx = s.CropX, cy = s.CropY, cw = s.CropW, ch = s.CropH;
+        int dw = hasCrop ? Math.Max(1, (int)Math.Round(fw * cw)) : fw;
+        int dh = hasCrop ? Math.Max(1, (int)Math.Round(fh * ch)) : fh;
         byte[] dst = new byte[dw * dh * 4];
 
         float temp = s.Temperature / 100f;
@@ -42,21 +46,30 @@ internal static class DevelopCpu
         if (!linearSrc && rgba == null)
             return new RasterBuffer(new byte[dw * dh * 4], dw, dh);
 
-        bool neighbor = !fast && (sharp > 0.001f || denoise > 0.001f);
-        bool remap = rot != 0 || flipH || flipV || Math.Abs(straight) > 0.05f;
+        bool neighbor = !fast && denoise > 0.001f;
+        bool remap = hasCrop || rot != 0 || flipH || flipV || Math.Abs(straight) > 0.05f;
         float[]? look = neighbor ? new float[dw * dh * 3] : null;
         for (int y = 0; y < dh; y++)
         {
             for (int x = 0; x < dw; x++)
             {
                 int sx, sy;
+                int fx = x;
+                int fy = y;
+                if (hasCrop)
+                {
+                    fx = (int)((cx + (x + 0.5f) / dw * cw) * fw);
+                    fy = (int)((cy + (y + 0.5f) / dh * ch) * fh);
+                    if (fx < 0) fx = 0; else if (fx >= fw) fx = fw - 1;
+                    if (fy < 0) fy = 0; else if (fy >= fh) fy = fh - 1;
+                }
                 if (!remap)
                 {
                     sx = x;
                     sy = y;
                 }
                 else
-                    MapSrc(x, y, dw, dh, rot, flipH, flipV, straight, sw, sh, out sx, out sy);
+                    MapSrc(fx, fy, fw, fh, rot, flipH, flipV, straight, sw, sh, out sx, out sy);
                 int si = (sy * sw + sx) * 4;
                 float r, g, b;
                 if (linearSrc)
@@ -119,12 +132,6 @@ internal static class DevelopCpu
                         g = g + (ag - g) * denoise;
                         b = b + (ab - b) * denoise;
                     }
-                    if (sharp > 0.001f)
-                    {
-                        r += (r - ar) * sharp * 1.35f;
-                        g += (g - ag) * sharp * 1.35f;
-                        b += (b - ab) * sharp * 1.35f;
-                    }
                 }
 
                 int di = (y * dw + x) * 4;
@@ -136,7 +143,41 @@ internal static class DevelopCpu
             }
         }
 
+        if (!fast && sharp > 0.001f)
+            UnsharpBytes(dst, dw, dh, sharp);
         return new RasterBuffer(dst, dw, dh);
+    }
+
+    private static void UnsharpBytes(byte[] dst, int dw, int dh, float sharp)
+    {
+        byte[] copy = (byte[])dst.Clone();
+        float amt = sharp * 2.4f;
+        for (int y = 0; y < dh; y++)
+        {
+            for (int x = 0; x < dw; x++)
+            {
+                int di = (y * dw + x) * 4;
+                int accR = 0, accG = 0, accB = 0;
+                AccByte(copy, dw, dh, x - 1, y, ref accR, ref accG, ref accB);
+                AccByte(copy, dw, dh, x + 1, y, ref accR, ref accG, ref accB);
+                AccByte(copy, dw, dh, x, y - 1, ref accR, ref accG, ref accB);
+                AccByte(copy, dw, dh, x, y + 1, ref accR, ref accG, ref accB);
+                float nr = accR * 0.25f, ng = accG * 0.25f, nb = accB * 0.25f;
+                dst[di] = ToByte((copy[di] + (copy[di] - nr) * amt) / 255f);
+                dst[di + 1] = ToByte((copy[di + 1] + (copy[di + 1] - ng) * amt) / 255f);
+                dst[di + 2] = ToByte((copy[di + 2] + (copy[di + 2] - nb) * amt) / 255f);
+            }
+        }
+    }
+
+    private static void AccByte(byte[] p, int dw, int dh, int x, int y, ref int r, ref int g, ref int b)
+    {
+        if (x < 0) x = 0; else if (x >= dw) x = dw - 1;
+        if (y < 0) y = 0; else if (y >= dh) y = dh - 1;
+        int i = (y * dw + x) * 4;
+        r += p[i];
+        g += p[i + 1];
+        b += p[i + 2];
     }
 
     private static void ApplyLook(
@@ -178,24 +219,29 @@ internal static class DevelopCpu
         b = MathF.Max(MathF.Pow(2f, eb) - 1f, 0f);
 
         float lum = Luma(r, g, b);
-        float shw = 1f - Smooth(lum, 0.02f, 0.22f);
-        float hiw = Smooth(lum, 0.35f, 2.5f);
-        float shGain = MathF.Pow(2f, shd * 1.15f);
-        float hiGain = MathF.Pow(2f, hi * 1.0f);
-        float mixS = shw;
-        float mixH = hiw;
-        r = r * (1f + (shGain - 1f) * mixS) * (1f + (hiGain - 1f) * mixH);
-        g = g * (1f + (shGain - 1f) * mixS) * (1f + (hiGain - 1f) * mixH);
-        b = b * (1f + (shGain - 1f) * mixS) * (1f + (hiGain - 1f) * mixH);
+        float shw = 1f - Smooth(lum, 0.02f, 0.28f);
+        float hiw = Smooth(lum, 0.10f, 0.70f);
+        float shGain = MathF.Pow(2f, shd * 1.45f);
+        float hiGain = MathF.Pow(2f, hi * 1.75f);
+        r = r * (1f + (shGain - 1f) * shw) * (1f + (hiGain - 1f) * hiw);
+        g = g * (1f + (shGain - 1f) * shw) * (1f + (hiGain - 1f) * hiw);
+        b = b * (1f + (shGain - 1f) * shw) * (1f + (hiGain - 1f) * hiw);
 
         lum = Luma(r, g, b);
-        float ww = Smooth(lum, 0.8f, 4f);
-        float bw = 1f - Smooth(lum, 0.0f, 0.12f);
-        float wGain = MathF.Pow(2f, whites * 0.85f);
-        float bGain = MathF.Pow(2f, blacks * 0.85f);
+        float ww = Smooth(lum, 0.20f, 1.05f);
+        float bw = 1f - Smooth(lum, 0.0f, 0.18f);
+        float wGain = MathF.Pow(2f, whites * 1.55f);
+        float bGain = MathF.Pow(2f, blacks * 1.25f);
         r = r * (1f + (wGain - 1f) * ww) * (1f + (bGain - 1f) * bw);
         g = g * (1f + (wGain - 1f) * ww) * (1f + (bGain - 1f) * bw);
         b = b * (1f + (wGain - 1f) * ww) * (1f + (bGain - 1f) * bw);
+        if (whites > 0f)
+        {
+            float extra = 1f + whites * Smooth(lum, 0.35f, 1.2f) * 0.9f;
+            r *= extra;
+            g *= extra;
+            b *= extra;
+        }
         if (r < 0) r = 0;
         if (g < 0) g = 0;
         if (b < 0) b = 0;

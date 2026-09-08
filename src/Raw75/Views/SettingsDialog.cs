@@ -1,0 +1,268 @@
+using System;
+using Blossom;
+using Blossom.Core;
+using Blossom.Core.Visual;
+using Blossom.Core.Visual.Enums;
+using Raw75.Controls;
+using Raw75.Develop;
+using Raw75.Imaging;
+using Raw75.Io;
+using Silk.NET.Input;
+using SkiaSharp;
+
+namespace Raw75.Views;
+
+/// <summary>Modal settings: vertical tabs. Dev tab dumps a memory inventory to disk.</summary>
+public sealed class SettingsDialog : VisualElement
+{
+    private const float CardW = 760f;
+    private const float CardH = 500f;
+    private const float TabW = 128f;
+
+    private readonly VisualElement _card;
+    private readonly VisualElement _title;
+    private readonly IconButton _close;
+    private readonly IconButton _tabGeneral;
+    private readonly IconButton _tabDev;
+    private readonly VisualElement _panelGeneral;
+    private readonly VisualElement _panelDev;
+    private readonly VisualElement _genWorkspace;
+    private readonly VisualElement _genPhotos;
+    private readonly VisualElement _genCache;
+    private readonly VisualElement _genLog;
+    private readonly IconButton _dumpBtn;
+    private readonly VisualElement _dumpHint;
+    private readonly VisualElement _dumpSummary;
+    private readonly VisualElement _dumpPath;
+
+    private string _tab = "Dev";
+    private Session? _session;
+    private PhotoPane? _pane;
+
+    public SettingsDialog()
+    {
+        Name = "SettingsDialog";
+        Visible = false;
+        ZIndex = 1000;
+        ReceivesKeyboard = true;
+        Transform = new Transform(0, 0, 800, 600)
+        {
+            Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
+        };
+        Style = new ElementStyle { BackColor = new SKColor(0, 0, 0, 160) };
+
+        _card = Box("Card", Theme.Panel, Theme.Radius);
+        _title = Label("Title", "Settings", Theme.Text, 16, 700, TextAlign.Left);
+        _close = new IconButton("Close");
+        _close.Clicked += Close;
+
+        _tabGeneral = new IconButton("General");
+        _tabDev = new IconButton("Dev");
+        _tabGeneral.Clicked += () => SetTab("General");
+        _tabDev.Clicked += () => SetTab("Dev");
+
+        _panelGeneral = Box("PanelGeneral", Theme.PanelAlt, 6f);
+        _genWorkspace = Label("GenWs", "", Theme.Text, 13, 500, TextAlign.Left);
+        _genPhotos = Label("GenPhotos", "", Theme.Text, 13, 500, TextAlign.Left);
+        _genCache = Label("GenCache", "", Theme.TextDim, 12, 400, TextAlign.Left);
+        _genLog = Label("GenLog", "", Theme.TextDim, 11, 400, TextAlign.Left);
+        _panelGeneral.AddChild(_genWorkspace);
+        _panelGeneral.AddChild(_genPhotos);
+        _panelGeneral.AddChild(_genCache);
+        _panelGeneral.AddChild(_genLog);
+
+        _panelDev = Box("PanelDev", Theme.PanelAlt, 6f);
+        _dumpHint = Label("DumpHint",
+            "Lists every photo buffer the session is holding (proxy, look, linear RAW, GPU retain) plus process RSS. Written to memory-dump.log next to blossom.log.",
+            Theme.TextDim, 12, 400, TextAlign.Left);
+        _dumpBtn = new IconButton("Write memory log", primary: true);
+        _dumpBtn.Clicked += Dump;
+        _dumpSummary = Label("DumpSummary", "No dump yet.", Theme.Text, 12, 500, TextAlign.Left);
+        _dumpPath = Label("DumpPath", "", Theme.TextDim, 11, 400, TextAlign.Left);
+        _panelDev.AddChild(_dumpHint);
+        _panelDev.AddChild(_dumpBtn);
+        _panelDev.AddChild(_dumpSummary);
+        _panelDev.AddChild(_dumpPath);
+
+        AddChild(_card);
+        _card.AddChild(_title);
+        _card.AddChild(_close);
+        _card.AddChild(_tabGeneral);
+        _card.AddChild(_tabDev);
+        _card.AddChild(_panelGeneral);
+        _card.AddChild(_panelDev);
+
+        Events.OnClick += (_, args) =>
+        {
+            if (!_card.Transform.Computed.RectF.Contains(args.Global.X, args.Global.Y))
+            {
+                args.Handled = true;
+                Close();
+            }
+        };
+        Events.OnKeyDown += k =>
+        {
+            if (!Visible)
+                return;
+            if ((Key)k == Key.Escape)
+                Close();
+        };
+
+        SetTab("Dev");
+    }
+
+    public void Open(Session session, PhotoPane pane)
+    {
+        _session = session;
+        _pane = pane;
+        RefreshGeneral();
+        CoverView();
+        Visible = true;
+        ParentView?.SetActiveKeyboardElement(this);
+        InvalidateLayout();
+        ForceLayoutSubtree();
+        InvalidatePaint();
+    }
+
+    public void Close()
+    {
+        if (!Visible)
+            return;
+        if (ParentView?.ActiveKeyboardElement == this)
+            ParentView.SetActiveKeyboardElement(null);
+        Visible = false;
+        InvalidatePaint();
+    }
+
+    private void Dump()
+    {
+        try
+        {
+            var result = MemoryInventory.Write(_session, _pane);
+            _dumpSummary.Text = result.Summary.Replace("\n", "  ·  ", StringComparison.Ordinal);
+            _dumpPath.Text = result.FilePath;
+            Log.Info("Memory dump " + result.FilePath + "  process=" + MemSize.Bytes(result.ProcessBytes)
+                     + "  named=" + MemSize.Bytes(result.NamedBytes));
+        }
+        catch (Exception ex)
+        {
+            _dumpSummary.Text = "Dump failed: " + ex.Message;
+            _dumpPath.Text = "";
+            Log.Error("Memory dump failed: " + ex);
+        }
+
+        InvalidatePaint();
+    }
+
+    private void RefreshGeneral()
+    {
+        string? root = WorkspaceStore.Root;
+        _genWorkspace.Text = string.IsNullOrEmpty(root)
+            ? "Workspace  none  (caches in app data)"
+            : "Workspace  " + root;
+        int n = _session?.Documents.Count ?? 0;
+        int i = _session?.ActiveIndex ?? -1;
+        _genPhotos.Text = n == 0 ? "Photos  none" : $"Photos  {n}   active  {i + 1}/{n}";
+        _genCache.Text = "Working copies kept in RAM  " + (_session?.CacheLimit ?? 1)
+                         + "  (inactive photos drop proxy/linear, keep preview)";
+        _genLog.Text = "Log  " + Log.LogFilePath;
+    }
+
+    private void SetTab(string tab)
+    {
+        _tab = tab;
+        _panelGeneral.Visible = tab == "General";
+        _panelDev.Visible = tab == "Dev";
+        _tabGeneral.Toggled = tab == "General";
+        _tabDev.Toggled = tab == "Dev";
+        InvalidateLayout();
+        InvalidatePaint();
+    }
+
+    private void CoverView()
+    {
+        float w = ParentView?.Width ?? Transform.Width;
+        float h = ParentView?.Height ?? Transform.Height;
+        if (w < 1f) w = 1f;
+        if (h < 1f) h = 1f;
+        Transform.SetAbsoluteFrame(0, 0, w, h);
+        Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
+    }
+
+    protected override void LayoutChildren()
+    {
+        float ox = Transform.Computed.X;
+        float oy = Transform.Computed.Y;
+        float w = Math.Max(1f, Transform.Computed.Width);
+        float h = Math.Max(1f, Transform.Computed.Height);
+        float cardX = ox + Math.Max(0, (w - CardW) / 2f);
+        float cardY = oy + Math.Max(0, (h - CardH) / 2f);
+        _card.Transform.SetAbsoluteFrame(cardX, cardY, CardW, CardH);
+
+        const float pad = 18f;
+        _title.Transform.SetAbsoluteFrame(cardX + pad, cardY + 14, 240, 24);
+        _close.Transform.SetAbsoluteFrame(cardX + CardW - pad - 88, cardY + 12, 88, 28);
+
+        float tabX = cardX + 10;
+        float tabY = cardY + 52;
+        float tabH = 32f;
+        _tabGeneral.Transform.SetAbsoluteFrame(tabX, tabY, TabW, tabH);
+        _tabDev.Transform.SetAbsoluteFrame(tabX, tabY + tabH + 6, TabW, tabH);
+
+        float px = cardX + 10 + TabW + 12;
+        float py = cardY + 52;
+        float pw = cardX + CardW - pad - px;
+        float ph = cardY + CardH - pad - py;
+        _panelGeneral.Transform.SetAbsoluteFrame(px, py, pw, ph);
+        _panelDev.Transform.SetAbsoluteFrame(px, py, pw, ph);
+
+        float ix = px + 16;
+        float iy = py + 16;
+        float iw = pw - 32;
+        _genWorkspace.Transform.SetAbsoluteFrame(ix, iy, iw, 36);
+        _genPhotos.Transform.SetAbsoluteFrame(ix, iy + 44, iw, 24);
+        _genCache.Transform.SetAbsoluteFrame(ix, iy + 76, iw, 40);
+        _genLog.Transform.SetAbsoluteFrame(ix, iy + 124, iw, 40);
+
+        _dumpHint.Transform.SetAbsoluteFrame(ix, iy, iw, 56);
+        _dumpBtn.Transform.SetAbsoluteFrame(ix, iy + 68, 200, 32);
+        _dumpSummary.Transform.SetAbsoluteFrame(ix, iy + 112, iw, 48);
+        _dumpPath.Transform.SetAbsoluteFrame(ix, iy + 164, iw, 36);
+    }
+
+    private static VisualElement Box(string name, SKColor fill, float round)
+    {
+        return new VisualElement
+        {
+            Name = name,
+            Style = new ElementStyle
+            {
+                BackColor = fill,
+                Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = round }
+            }
+        };
+    }
+
+    private static VisualElement Label(string name, string text, SKColor color, float size, int weight, TextAlign align)
+    {
+        return new VisualElement
+        {
+            Name = name,
+            Text = text,
+            IsClickthrough = true,
+            Style = new ElementStyle
+            {
+                BackColor = SKColors.Transparent,
+                Text = new TextStyle
+                {
+                    Color = color,
+                    Size = size,
+                    Weight = weight,
+                    Alignment = align,
+                    Padding = 2
+                }
+            }
+        };
+    }
+
+}

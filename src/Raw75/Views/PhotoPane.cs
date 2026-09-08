@@ -7,6 +7,7 @@ using Blossom.Core.Input;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
 using Raw75.Develop;
+using Raw75.Imaging;
 using Raw75.Pipeline;
 using SkiaSharp;
 
@@ -32,8 +33,12 @@ public sealed class PhotoPane : VisualElement
     private SKImage? _developed;
     private SKImage? _before;
     private SKImage? _source;
+    private SKImage? _tile;
+    private float _tileX, _tileY, _tileW, _tileH;
+    private int _nativeW, _nativeH;
     private DevelopSettings? _settings;
     private readonly DevelopLook _look = new();
+    private readonly DevelopLook _tileLook = new();
     private bool _lookFast;
     private bool _showBefore;
     private SKRect _drawDest;
@@ -76,6 +81,16 @@ public sealed class PhotoPane : VisualElement
 
     public bool LookFailed => _look.Failed;
 
+    internal void DescribeMemory(System.Text.StringBuilder sb)
+    {
+        sb.AppendLine("PhotoPane");
+        sb.AppendLine($"  _source     {MemSize.ImageLabel(_source)}");
+        sb.AppendLine($"  _developed  {MemSize.ImageLabel(_developed)}  owns={_ownsDisplay}");
+        sb.AppendLine($"  _before     {MemSize.ImageLabel(_before)}");
+        sb.AppendLine($"  view { _viewW}x{_viewH}  zoom={Zoom:0.###}  mode={ZoomMode}  probe={_probeNote}");
+        sb.AppendLine($"  lookFailed={_look.Failed}  showBefore={_showBefore}  split={_splitBefore}");
+    }
+
     public bool ShowBefore
     {
         get => _showBefore;
@@ -106,17 +121,16 @@ public sealed class PhotoPane : VisualElement
     }
 
     private bool _cropTool;
-    public bool CropTool
-    {
-        get => _cropTool;
-        set
-        {
-            if (_cropTool == value) return;
-            _cropTool = value;
-            _crop.EndDrag();
-            InvalidatePaint();
-        }
-    }
+    private float _savedCropX, _savedCropY, _savedCropW = 1f, _savedCropH = 1f;
+    private float _savedStraighten;
+    private readonly List<(SKRect Rect, string Id)> _cropHits = new();
+    private string? _cropHoverId;
+
+    public bool CropTool => _cropTool;
+
+    public event Action? CropCommitted;
+    public event Action? CropCancelled;
+    public event Action<int>? Rotate90Clicked;
 
     private bool _splitBefore;
     public bool SplitBefore
@@ -217,10 +231,76 @@ public sealed class PhotoPane : VisualElement
         _settings = settings;
         _lookFast = fast;
         _look.Invalidate();
+        _tileLook.Invalidate();
         if (source != null && source.Handle != IntPtr.Zero)
             SyncViewToSource();
         _showingPhoto = source != null || _developed != null;
         InvalidatePaint();
+    }
+
+    public void SetNativeSize(int width, int height)
+    {
+        if (width == _nativeW && height == _nativeH)
+            return;
+        _nativeW = Math.Max(0, width);
+        _nativeH = Math.Max(0, height);
+        if (_source != null)
+            SyncViewToSource();
+        InvalidatePaint();
+    }
+
+    public void SetViewportTile(SKImage? image, float x, float y, float w, float h)
+    {
+        _tile = image;
+        _tileX = x;
+        _tileY = y;
+        _tileW = w;
+        _tileH = h;
+        _look.Invalidate();
+        _tileLook.Invalidate();
+        InvalidatePaint();
+    }
+
+    public void ClearViewportTile()
+    {
+        if (_tile == null && _tileW <= 0)
+            return;
+        _tile = null;
+        _tileW = _tileH = 0;
+        _look.Invalidate();
+        _tileLook.Invalidate();
+        InvalidatePaint();
+    }
+
+    /// <summary>True when the proxy would be magnified on screen (need native pixels for the visible crop).</summary>
+    public bool TryGetViewportRequest(out SKRect sourceAabb, out int screenW, out int screenH)
+    {
+        sourceAabb = SKRect.Empty;
+        screenW = 1;
+        screenH = 1;
+        if (_cropTool || _source == null || _source.Handle == IntPtr.Zero)
+            return false;
+
+        float w = Transform.Computed.Width;
+        float h = Transform.Computed.Height;
+        var dest = ImageDest.Width > 0.5f ? ImageDest : ComputeDest(w, h);
+        var pane = new SKRect(0, 0, w, h);
+        var vis = dest;
+        vis.Intersect(pane);
+        if (vis.Width < 2f || vis.Height < 2f)
+            return false;
+
+        int rot = _settings != null ? _settings.Rotate90 & 3 : 0;
+        int texX = (rot & 1) != 0 ? _source.Height : _source.Width;
+        if (dest.Width <= texX * 1.02f)
+            return false;
+
+        sourceAabb = DevelopGeom.VisibleSourceAabb(dest, vis, _settings);
+        if (sourceAabb.Width < 1e-5f || sourceAabb.Height < 1e-5f)
+            return false;
+        screenW = Math.Max(1, (int)MathF.Ceiling(vis.Width));
+        screenH = Math.Max(1, (int)MathF.Ceiling(vis.Height));
+        return true;
     }
 
     /// <summary>Show an image. When <paramref name="owns"/> is false the caller keeps ownership.</summary>
@@ -436,6 +516,7 @@ public sealed class PhotoPane : VisualElement
 
         var dest = _drawDest;
         var pane = new SKRect(0, 0, Transform.Computed.Width, Transform.Computed.Height);
+        bool applyCrop = !_cropTool && _settings.HasCrop;
 
         if (_splitBefore)
         {
@@ -451,14 +532,45 @@ public sealed class PhotoPane : VisualElement
                 canvas.DrawImage(before, SourceOf(before, dest, left), left);
             if (right.Width > 0.5f)
             {
-                if (!_look.Draw(canvas, dest, right, _source, _settings, _lookFast))
+                if (!_look.Draw(canvas, dest, right, _source, _settings, _lookFast, applyCrop))
                     canvas.DrawImage(_source, SourceOf(_source, dest, right), right);
             }
             return;
         }
 
-        if (!_look.Draw(canvas, dest, _drawClip, _source, _settings, _lookFast))
-            canvas.DrawImage(_source, SourceOf(_source, dest, _drawClip), _drawClip);
+        var vis = _drawClip;
+        float voX = (vis.Left - dest.Left) / dest.Width;
+        float voY = (vis.Top - dest.Top) / dest.Height;
+        float vsX = vis.Width / dest.Width;
+        float vsY = vis.Height / dest.Height;
+        float ux = 0f, uy = 0f, uw = 1f, uh = 1f;
+        if (applyCrop && _settings.HasCrop)
+        {
+            ux = _settings.CropX;
+            uy = _settings.CropY;
+            uw = _settings.CropW;
+            uh = _settings.CropH;
+        }
+        float cx = ux + voX * uw;
+        float cy = uy + voY * uh;
+        float cw = vsX * uw;
+        float ch = vsY * uh;
+
+        if (!_look.Draw(canvas, vis, vis, _source, _settings, _lookFast, applyCrop: true,
+                0f, 0f, 1f, 1f, cx, cy, cw, ch))
+            canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
+
+        if (_tile == null || _tile.Handle == IntPtr.Zero || _tileW < 1e-5f || _tileH < 1e-5f)
+            return;
+
+        var tileSrc = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
+        var tileDest = DevelopGeom.SourceAabbToDest(tileSrc, dest, _settings);
+        tileDest.Intersect(vis);
+        if (tileDest.Width < 1f || tileDest.Height < 1f)
+            return;
+
+        _tileLook.Draw(canvas, vis, tileDest, _tile, _settings, _lookFast, applyCrop: true,
+            _tileX, _tileY, _tileW, _tileH, cx, cy, cw, ch);
     }
 
     private void DrawOverlay(SKCanvas canvas)
@@ -468,7 +580,10 @@ public sealed class PhotoPane : VisualElement
         var pane = new SKRect(0, 0, w, h);
 
         if (_cropTool && HasPhoto)
+        {
             _crop.Draw(canvas, ImageDest, pane, _straightenPreview);
+            DrawCropBar(canvas, pane);
+        }
 
         if (_splitBefore)
         {
@@ -543,9 +658,15 @@ public sealed class PhotoPane : VisualElement
 
         if (_cropTool)
         {
+            if (HitCropBar(e.Relative.X, e.Relative.Y))
+                return;
             var handle = _crop.Hit(ImageDest, e.Relative.X, e.Relative.Y);
             if (handle != CropHandle.None)
+            {
+                if (handle == CropHandle.Rotate)
+                    _savedStraighten = StraightenPreview;
                 _crop.BeginDrag(handle, e.Relative.X, e.Relative.Y);
+            }
         }
     }
 
@@ -573,8 +694,29 @@ public sealed class PhotoPane : VisualElement
 
         if (_cropTool && _crop.Active != CropHandle.None)
         {
-            if (_crop.UpdateDrag(e.Relative.X, e.Relative.Y, ImageDest))
+            GetFrameSize(out int fw, out int fh);
+            if (_crop.Active == CropHandle.Rotate)
             {
+                var box = _crop.DestOnImage(ImageDest);
+                float a0 = MathF.Atan2(_downLocal.Y - box.MidY, _downLocal.X - box.MidX);
+                float a1 = MathF.Atan2(e.Relative.Y - box.MidY, e.Relative.X - box.MidX);
+                float deg = _savedStraighten + (a1 - a0) * (180f / MathF.PI);
+                StraightenPreview = Math.Clamp(deg, -45f, 45f);
+                if (_settings != null)
+                    _settings.Straighten = StraightenPreview;
+                _crop.ClampInside(
+                    _settings?.Rotate90 ?? 0, StraightenPreview,
+                    _settings?.FlipH ?? false, _settings?.FlipV ?? false);
+                _look.Invalidate();
+                _tileLook.Invalidate();
+                InvalidatePaint();
+                CropChanged?.Invoke();
+            }
+            else if (_crop.UpdateDrag(e.Relative.X, e.Relative.Y, ImageDest, fw, fh))
+            {
+                _crop.ClampInside(
+                    _settings?.Rotate90 ?? 0, StraightenPreview,
+                    _settings?.FlipH ?? false, _settings?.FlipV ?? false);
                 InvalidatePaint();
                 CropChanged?.Invoke();
             }
@@ -655,11 +797,18 @@ public sealed class PhotoPane : VisualElement
     private void OnHover(VisualElement el, Vector2 pos)
     {
         _pointerLocal = PointToClient(pos.X, pos.Y);
+        if (!_cropTool)
+            return;
+        string? id = CropBarIdAt(_pointerLocal.X, _pointerLocal.Y);
+        if (id == _cropHoverId)
+            return;
+        _cropHoverId = id;
+        InvalidatePaint();
     }
 
     private void ToggleClickZoom(Vector2 local)
     {
-        if (ZoomMode == ZoomMode.OneToOne || _freeZoom)
+        if (ZoomMode == ZoomMode.OneToOne && !_freeZoom)
         {
             SetZoomMode(ZoomMode.Fit);
             return;
@@ -828,17 +977,122 @@ public sealed class PhotoPane : VisualElement
     private int ViewW => _viewW > 0 ? _viewW : _source?.Width ?? _developed?.Width ?? 0;
     private int ViewH => _viewH > 0 ? _viewH : _source?.Height ?? _developed?.Height ?? 0;
 
-    private void SyncViewToSource()
+    public void BeginCrop()
+    {
+        _savedCropX = _crop.X;
+        _savedCropY = _crop.Y;
+        _savedCropW = _crop.W > 0.001f ? _crop.W : 1f;
+        _savedCropH = _crop.H > 0.001f ? _crop.H : 1f;
+        _savedStraighten = StraightenPreview;
+        if (_crop.W < 0.001f || _crop.H < 0.001f)
+            _crop.ResetFull();
+        _cropTool = true;
+        _crop.EndDrag();
+        _freeZoom = false;
+        ZoomMode = ZoomMode.Fit;
+        SyncViewToSource(force: true);
+        InvalidatePaint();
+    }
+
+    public bool CommitCrop()
+    {
+        if (!_cropTool)
+            return false;
+        _crop.Clamp();
+        _cropTool = false;
+        _crop.EndDrag();
+        _freeZoom = false;
+        ZoomMode = ZoomMode.Fit;
+        SyncViewToSource(force: true);
+        CropCommitted?.Invoke();
+        InvalidatePaint();
+        return true;
+    }
+
+    public bool CancelCrop()
+    {
+        if (!_cropTool)
+            return false;
+        _crop.X = _savedCropX;
+        _crop.Y = _savedCropY;
+        _crop.W = _savedCropW;
+        _crop.H = _savedCropH;
+        StraightenPreview = _savedStraighten;
+        if (_settings != null)
+            _settings.Straighten = _savedStraighten;
+        _cropTool = false;
+        _crop.EndDrag();
+        _freeZoom = false;
+        ZoomMode = ZoomMode.Fit;
+        SyncViewToSource(force: true);
+        CropCancelled?.Invoke();
+        InvalidatePaint();
+        return true;
+    }
+
+    public void NotifyOrientation()
+    {
+        _freeZoom = false;
+        ZoomMode = ZoomMode.Fit;
+        _look.Invalidate();
+        _tileLook.Invalidate();
+        _crop.ClampInside(
+            _settings?.Rotate90 ?? 0, StraightenPreview,
+            _settings?.FlipH ?? false, _settings?.FlipV ?? false);
+        SyncViewToSource(force: true);
+        InvalidatePaint();
+    }
+
+    public void CaptureView(PhotoDocument doc)
+    {
+        if (doc == null) return;
+        doc.SavedZoomMode = ZoomMode;
+        doc.SavedZoom = Zoom;
+        doc.SavedPanX = PanX;
+        doc.SavedPanY = PanY;
+        doc.SavedFreeZoom = _freeZoom;
+        doc.HasSavedView = true;
+    }
+
+    public void RestoreView(PhotoDocument doc)
+    {
+        if (doc == null || !doc.HasSavedView)
+            return;
+        ZoomMode = doc.SavedZoomMode;
+        Zoom = doc.SavedZoom;
+        PanX = doc.SavedPanX;
+        PanY = doc.SavedPanY;
+        _freeZoom = doc.SavedFreeZoom;
+        SyncViewport();
+        InvalidatePaint();
+    }
+
+    private void GetFrameSize(out int fw, out int fh)
+    {
+        int sw = _nativeW > 0 ? _nativeW : (_source?.Width ?? _viewW);
+        int sh = _nativeH > 0 ? _nativeH : (_source?.Height ?? _viewH);
+        int rot = _settings != null ? _settings.Rotate90 & 3 : 0;
+        fw = (rot & 1) != 0 ? sh : sw;
+        fh = (rot & 1) != 0 ? sw : sh;
+        if (fw < 1) fw = 1;
+        if (fh < 1) fh = 1;
+    }
+
+    private void SyncViewToSource(bool force = false)
     {
         if (_source == null || _source.Handle == IntPtr.Zero)
             return;
 
-        int sw = _source.Width;
-        int sh = _source.Height;
-        int rot = _settings != null ? _settings.Rotate90 & 3 : 0;
-        int nw = (rot & 1) != 0 ? sh : sw;
-        int nh = (rot & 1) != 0 ? sw : sh;
-        if (nw == _viewW && nh == _viewH && _viewW > 0)
+        GetFrameSize(out int fw, out int fh);
+        int nw = fw;
+        int nh = fh;
+        if (!_cropTool && _crop.W > 0.001f && _crop.H > 0.001f && (_crop.W < 0.999f || _crop.H < 0.999f))
+        {
+            nw = Math.Max(1, (int)Math.Round(fw * _crop.W));
+            nh = Math.Max(1, (int)Math.Round(fh * _crop.H));
+        }
+
+        if (!force && nw == _viewW && nh == _viewH && _viewW > 0)
             return;
 
         int oldW = _viewW;
@@ -850,7 +1104,7 @@ public sealed class PhotoPane : VisualElement
             _freeZoom = false;
             ZoomMode = ZoomMode.Fit;
         }
-        else if (oldW == 0)
+        else if (oldW == 0 || force)
         {
             _freeZoom = false;
             ZoomMode = ZoomMode.Fit;
@@ -858,6 +1112,120 @@ public sealed class PhotoPane : VisualElement
 
         SyncViewport();
         ViewChanged?.Invoke();
+    }
+
+    private void DrawCropBar(SKCanvas canvas, SKRect pane)
+    {
+        _cropHits.Clear();
+        string[] ids = { "free", "orig", "1:1", "4:3", "3:2", "16:9", "rotl", "rotr", "reset", "cancel", "ok" };
+        float w = 76f;
+        float h = 24f;
+        float gap = 4f;
+        float x = pane.Left + 8f;
+        float y = pane.Top + 8f;
+        using var bg = new SKPaint { Color = new SKColor(0, 0, 0, 170), IsAntialias = true };
+        using var text = new SKPaint
+        {
+            Color = Theme.Text,
+            IsAntialias = true,
+            TextSize = 11,
+            Typeface = SKTypeface.Default,
+            TextAlign = SKTextAlign.Center
+        };
+        float barH = ids.Length * (h + gap) + 8f;
+        canvas.DrawRoundRect(new SKRect(x - 4, y - 4, x + w + 4, y + barH), 6, 6, bg);
+        for (int i = 0; i < ids.Length; i++)
+        {
+            var r = new SKRect(x, y, x + w, y + h);
+            _cropHits.Add((r, ids[i]));
+            bool hover = ids[i] == _cropHoverId;
+            SKColor fill = ids[i] == "ok" ? Theme.Accent : Theme.Button;
+            if (hover)
+                fill = Theme.Lighten(fill, 22);
+            using (var paint = new SKPaint { Color = fill, IsAntialias = true })
+                canvas.DrawRoundRect(r, 4, 4, paint);
+            text.Color = ids[i] == "ok" ? Theme.ButtonTextOnAccent : Theme.Text;
+            canvas.DrawText(LabelOf(ids[i]), r.MidX, r.MidY + 4, text);
+            y += h + gap;
+        }
+    }
+
+    private static string LabelOf(string id) => id switch
+    {
+        "free" => "Free",
+        "orig" => "Orig",
+        "rotl" => "Rot L",
+        "rotr" => "Rot R",
+        "reset" => "Reset",
+        "cancel" => "Cancel",
+        "ok" => "OK",
+        _ => id
+    };
+
+    private string? CropBarIdAt(float lx, float ly)
+    {
+        foreach (var (rect, id) in _cropHits)
+        {
+            if (rect.Contains(lx, ly))
+                return id;
+        }
+        return null;
+    }
+
+    private bool HitCropBar(float lx, float ly)
+    {
+        foreach (var (rect, id) in _cropHits)
+        {
+            if (!rect.Contains(lx, ly))
+                continue;
+            GetFrameSize(out int fw, out int fh);
+            switch (id)
+            {
+                case "free":
+                    _crop.Aspect = 0f;
+                    break;
+                case "orig":
+                    _crop.ApplyAspect(fw / (float)fh, fw, fh);
+                    break;
+                case "1:1":
+                    _crop.ApplyAspect(1f, fw, fh);
+                    break;
+                case "4:3":
+                    _crop.ApplyAspect(4f / 3f, fw, fh);
+                    break;
+                case "3:2":
+                    _crop.ApplyAspect(3f / 2f, fw, fh);
+                    break;
+                case "16:9":
+                    _crop.ApplyAspect(16f / 9f, fw, fh);
+                    break;
+                case "rotl":
+                    Rotate90Clicked?.Invoke(-1);
+                    return true;
+                case "rotr":
+                    Rotate90Clicked?.Invoke(1);
+                    return true;
+                case "reset":
+                    _crop.ResetFull();
+                    _crop.Aspect = 0f;
+                    StraightenPreview = 0f;
+                    if (_settings != null)
+                        _settings.Straighten = 0f;
+                    _look.Invalidate();
+                    _tileLook.Invalidate();
+                    break;
+                case "cancel":
+                    CancelCrop();
+                    return true;
+                case "ok":
+                    CommitCrop();
+                    return true;
+            }
+            InvalidatePaint();
+            CropChanged?.Invoke();
+            return true;
+        }
+        return false;
     }
 
     private bool CanPan()
@@ -897,6 +1265,7 @@ public sealed class PhotoPane : VisualElement
         _source = null;
         _settings = null;
         _look.Dispose();
+        _tileLook.Dispose();
         _viewW = 0;
         _viewH = 0;
         base.Dispose();

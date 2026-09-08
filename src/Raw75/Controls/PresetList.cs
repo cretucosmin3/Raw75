@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
+using Raw75.Presets;
 using Silk.NET.Input;
 using SkiaSharp;
 
@@ -11,11 +12,12 @@ namespace Raw75.Controls;
 public class PresetList : VisualElement
 {
     private const float RowH = 28f;
-    private readonly VisualElement _save;
+    private readonly IconButton _save;
     private readonly List<NameRow> _rows = new();
 
     public event Action<string>? Applied;
     public event Action? SaveClicked;
+    public event Action<string>? Deleted;
 
     public PresetList()
     {
@@ -33,36 +35,8 @@ public class PresetList : VisualElement
             }
         };
 
-        _save = new VisualElement
-        {
-            Name = "PresetList_Save",
-            Text = "Save preset",
-            Cursor = StandardCursor.Hand,
-            Style = new ElementStyle
-            {
-                BackColor = Theme.PanelAlt,
-                Border = new BorderStyle
-                {
-                    Width = 0,
-                    Color = Theme.Hairline,
-                    Roundness = 0
-                },
-                Text = new TextStyle
-                {
-                    Color = Theme.Text,
-                    Size = 13,
-                    Weight = 600,
-                    Alignment = TextAlign.Left,
-                    Padding = 8
-                }
-            }
-        };
-        _save.Events.OnClick += (_, args) =>
-        {
-            if (args.Button != (int)MouseButton.Left) return;
-            SaveClicked?.Invoke();
-            args.Handled = true;
-        };
+        _save = new IconButton("Save preset");
+        _save.Clicked += () => SaveClicked?.Invoke();
         AddChild(_save);
     }
 
@@ -81,13 +55,14 @@ public class PresetList : VisualElement
         for (int i = 0; i < names.Count; i++)
         {
             string name = names[i] ?? "";
-            var row = new NameRow(name);
+            var row = new NameRow(name, PresetStore.IsUser(name));
             row.Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
                 Applied?.Invoke(name);
                 args.Handled = true;
             };
+            row.DeleteClicked += () => Deleted?.Invoke(name);
             _rows.Add(row);
             AddChild(row);
         }
@@ -122,7 +97,9 @@ public class PresetList : VisualElement
 
     private sealed class NameRow : VisualElement
     {
-        public NameRow(string name)
+        public event Action? DeleteClicked;
+
+        public NameRow(string name, bool canDelete)
         {
             Name = $"Preset_{name}";
             Text = name;
@@ -140,6 +117,33 @@ public class PresetList : VisualElement
                 }
             };
 
+            if (canDelete)
+            {
+                var x = new VisualElement
+                {
+                    Name = $"{Name}_Del",
+                    Text = "×",
+                    Cursor = StandardCursor.Hand,
+                    Style = new ElementStyle
+                    {
+                        BackColor = SKColors.Transparent,
+                        Text = new TextStyle
+                        {
+                            Color = Theme.TextDim,
+                            Size = 14,
+                            Weight = 600,
+                            Alignment = TextAlign.Center
+                        }
+                    }
+                };
+                x.Events.OnClick += (_, args) =>
+                {
+                    args.Handled = true;
+                    DeleteClicked?.Invoke();
+                };
+                AddChild(x);
+            }
+
             Events.OnMouseEnter += _ =>
             {
                 Style.BackColor = Theme.Selected;
@@ -152,6 +156,16 @@ public class PresetList : VisualElement
                 Style.Text.Color = Theme.TextDim;
                 InvalidatePaint();
             };
+        }
+
+        protected override void LayoutChildren()
+        {
+            if (Children.Count == 0)
+                return;
+            float ox = Transform.Computed.X;
+            float oy = Transform.Computed.Y;
+            float w = Math.Max(1f, Transform.Width);
+            Children[0].Transform.SetAbsoluteFrame(ox + w - 22, oy + 4, 18, 20);
         }
     }
 }

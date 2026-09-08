@@ -45,7 +45,9 @@ public sealed class DevelopSettings
     public bool FlipV { get; set; }
 
     [JsonIgnore]
-    public bool HasCrop => CropW > 0.001f && CropH > 0.001f;
+    public bool HasCrop =>
+        CropW > 0.001f && CropH > 0.001f
+        && (CropW < 0.999f || CropH < 0.999f || CropX > 0.001f || CropY > 0.001f);
 
     public static HslBand[] CreateHsl()
     {

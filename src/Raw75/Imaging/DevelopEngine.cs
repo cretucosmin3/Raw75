@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Blossom;
 using Raw75.Develop;
+using Raw75.Io;
 using Raw75.Pipeline;
 using SkiaSharp;
 
@@ -14,6 +16,10 @@ public sealed class DevelopEngine
     private int _generation;
     private int _invalidateSeq;
     private int _hiResBusy;
+    private int _viewSeq;
+    private SKRect _pendingAabb;
+    private int _pendingSw;
+    private int _pendingSh;
     private int _busy;
     private int _liveBusy;
     private int _livePending;
@@ -24,6 +30,7 @@ public sealed class DevelopEngine
     public event Action<PhotoDocument>? Updated;
     public event Action<PhotoDocument>? LiveUpdated;
     public event Action<PhotoDocument>? HistogramUpdated;
+    public event Action<PhotoDocument>? ViewportUpdated;
     public event Action<bool>? BusyChanged;
 
     public bool IsBusy => Volatile.Read(ref _busy) > 0;
@@ -67,9 +74,8 @@ public sealed class DevelopEngine
         }
 
         var settings = doc.Settings.Clone();
-        RasterBuffer src = doc.HiResRgba.HasPixels
-            ? doc.HiResRgba
-            : doc.SourceRgba;
+        // Preview pipe only (darktable darkroom ROI/proxy). Never CPU-develop native.
+        RasterBuffer src = doc.SourceRgba;
         SetBusy(true);
         Task.Run(() => ApplyBackground(doc, settings, src, openGen, seq, preview: false));
         RequestHistogram(doc);
@@ -190,6 +196,114 @@ public sealed class DevelopEngine
         }
     }
 
+    /// <summary>
+    /// Decode small thumbs for catalog photos that have no Preview/Thumb yet.
+    /// Does not bump the open generation, so the active decode keeps going.
+    /// </summary>
+    public void FillMissingThumbs(IReadOnlyList<PhotoDocument> docs)
+    {
+        if (docs == null || docs.Count == 0)
+            return;
+        var copy = new PhotoDocument[docs.Count];
+        for (int i = 0; i < docs.Count; i++)
+            copy[i] = docs[i];
+
+        Task.Run(() =>
+        {
+            int posted = 0;
+            for (int i = 0; i < copy.Length; i++)
+            {
+                PhotoDocument doc = copy[i];
+                if (doc.IsDisposed || doc.Preview != null || doc.Thumb != null)
+                    continue;
+                try
+                {
+                    RasterBuffer buf;
+                    if (RawDecoder.IsRawPath(doc.Path))
+                        buf = RawDecoder.DecodeThumbnail(doc.Path);
+                    else
+                    {
+                        RasterBuffer? raster = RawDecoder.TryDecodeRaster(doc.Path);
+                        if (raster == null)
+                            continue;
+                        buf = raster.Value;
+                    }
+
+                    buf = RawDecoder.Limit(buf, 160);
+                    int n = Interlocked.Increment(ref posted);
+                    bool flushThis = n % 8 == 0 || i == copy.Length - 1;
+                    PhotoDocument target = doc;
+                    RasterBuffer shot = buf;
+                    Browser.Post(() =>
+                    {
+                        if (target.IsDisposed || target.Preview != null || target.Thumb != null)
+                            return;
+                        try
+                        {
+                            SKImage image = RawDecoder.Upload(shot, out _);
+                            Assign(target, thumb: image);
+                            if (flushThis)
+                                Updated?.Invoke(target);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning("Thumb upload " + target.Name + ": " + ex.Message);
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning("Thumb " + doc.Name + ": " + ex.Message);
+                }
+            }
+
+            Browser.Post(() =>
+            {
+                PhotoDocument? current = Volatile.Read(ref _current);
+                if (current != null)
+                    Updated?.Invoke(current);
+            });
+        });
+    }
+
+    public void RequestViewport(PhotoDocument doc, SKRect sourceAabb, int screenW, int screenH)
+    {
+        if (doc == null || doc.IsDisposed)
+            return;
+        if (sourceAabb.Width < 1e-5f || sourceAabb.Height < 1e-5f)
+            return;
+
+        _pendingAabb = sourceAabb;
+        _pendingSw = Math.Max(1, screenW);
+        _pendingSh = Math.Max(1, screenH);
+
+        if (doc.HiResRgba.HasPixels && TileCovers(doc, sourceAabb, _pendingSw, _pendingSh))
+            return;
+
+        int seq = Interlocked.Increment(ref _viewSeq);
+        int gen = Volatile.Read(ref _generation);
+
+        if (doc.HiResRgba.HasPixels)
+        {
+            Task.Run(() => BuildViewport(doc, sourceAabb, _pendingSw, _pendingSh, gen, seq));
+            return;
+        }
+
+        EnsureHiRes(doc);
+    }
+
+    public void ClearViewport(PhotoDocument doc)
+    {
+        if (doc == null)
+            return;
+        SKImage? old = doc.ViewportTile;
+        doc.ViewportTile = null;
+        doc.TileW = doc.TileH = 0;
+        if (old != null)
+            RetireIfUnused(doc, old);
+        ViewportUpdated?.Invoke(doc);
+    }
+
     public void EnsureHiRes(PhotoDocument doc)
     {
         if (doc == null || doc.HiResRgba.Width > 0)
@@ -198,19 +312,25 @@ public sealed class DevelopEngine
             return;
 
         int gen = Volatile.Read(ref _generation);
-        Log.Info("Loading full-resolution preview…");
+        Log.Info("Loading full-resolution source for viewport tiles…");
         _status("Loading full resolution…");
         Task.Run(() =>
         {
             try
             {
-                RasterBuffer buf = RawDecoder.DecodeFull(doc.Path);
+                RasterBuffer buf = RawDecoder.DecodeRasterFull(doc.Path)
+                    ?? RawDecoder.DecodeFull(doc.Path);
                 Browser.Post(() =>
                 {
-                    if (Stale(gen) || !ReferenceEquals(doc, Volatile.Read(ref _current)))
+                    if (Stale(gen) || doc.IsDisposed || !ReferenceEquals(doc, Volatile.Read(ref _current)))
                         return;
                     doc.HiResRgba = buf;
-                    Invalidate(doc, preview: false);
+                    doc.NativeWidth = buf.Width;
+                    doc.NativeHeight = buf.Height;
+                    _status(doc.Name + "  ·  full " + buf.Width + "×" + buf.Height);
+                    ViewportUpdated?.Invoke(doc);
+                    int seq = Volatile.Read(ref _viewSeq);
+                    Task.Run(() => BuildViewport(doc, _pendingAabb, _pendingSw, _pendingSh, gen, seq));
                 });
             }
             catch (Exception ex)
@@ -225,6 +345,90 @@ public sealed class DevelopEngine
         });
     }
 
+    private void BuildViewport(PhotoDocument doc, SKRect aabb, int screenW, int screenH, int gen, int seq)
+    {
+        try
+        {
+            if (Stale(gen) || seq != Volatile.Read(ref _viewSeq) || !doc.HiResRgba.HasPixels)
+                return;
+            if (aabb.Width < 1e-5f || aabb.Height < 1e-5f)
+                return;
+
+            RasterBuffer src = doc.HiResRgba;
+            float padX = aabb.Width * 0.2f;
+            float padY = aabb.Height * 0.2f;
+            float x0 = Math.Clamp(aabb.Left - padX, 0f, 1f);
+            float y0 = Math.Clamp(aabb.Top - padY, 0f, 1f);
+            float x1 = Math.Clamp(aabb.Right + padX, 0f, 1f);
+            float y1 = Math.Clamp(aabb.Bottom + padY, 0f, 1f);
+            if (x1 <= x0 || y1 <= y0)
+                return;
+
+            if (TileCovers(doc, aabb, screenW, screenH))
+                return;
+
+            int px = (int)Math.Floor(x0 * src.Width);
+            int py = (int)Math.Floor(y0 * src.Height);
+            int pw = Math.Max(1, (int)Math.Ceiling(x1 * src.Width) - px);
+            int ph = Math.Max(1, (int)Math.Ceiling(y1 * src.Height) - py);
+            int cap = Math.Clamp(Math.Max(screenW, screenH) * 2, 1024, 2048);
+            RasterBuffer crop = RawDecoder.SampleRegion(src, px, py, pw, ph, cap);
+            if (!crop.HasPixels)
+                return;
+            if (seq != Volatile.Read(ref _viewSeq) || Stale(gen))
+                return;
+
+            float nx = px / (float)src.Width;
+            float ny = py / (float)src.Height;
+            float nw = pw / (float)src.Width;
+            float nh = ph / (float)src.Height;
+
+            Browser.Post(() =>
+            {
+                if (Stale(gen) || seq != Volatile.Read(ref _viewSeq) || doc.IsDisposed)
+                    return;
+                try
+                {
+                    SKImage image = RawDecoder.Upload(crop, out _);
+                    SKImage? old = doc.ViewportTile;
+                    doc.ViewportTile = image;
+                    doc.TileX = nx;
+                    doc.TileY = ny;
+                    doc.TileW = nw;
+                    doc.TileH = nh;
+                    RetireIfUnused(doc, old);
+                    ViewportUpdated?.Invoke(doc);
+                    Log.Info($"Viewport tile {image.Width}x{image.Height} src=({nx:0.00},{ny:0.00},{nw:0.00},{nh:0.00})");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning("Viewport tile upload: " + ex.Message);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Viewport tile: " + ex.Message);
+        }
+    }
+
+    private static bool TileCovers(PhotoDocument doc, SKRect need, int screenW, int screenH)
+    {
+        if (doc.ViewportTile == null || doc.ViewportTile.Handle == IntPtr.Zero || doc.TileW < 1e-5f)
+            return false;
+        if (need.Left < doc.TileX || need.Top < doc.TileY
+            || need.Right > doc.TileX + doc.TileW || need.Bottom > doc.TileY + doc.TileH)
+            return false;
+
+        float visW = Math.Max(1e-5f, need.Width);
+        float visH = Math.Max(1e-5f, need.Height);
+        float pxPerSrcX = doc.ViewportTile.Width / doc.TileW;
+        float pxPerSrcY = doc.ViewportTile.Height / doc.TileH;
+        float haveX = pxPerSrcX * visW;
+        float haveY = pxPerSrcY * visH;
+        return haveX >= screenW * 0.9f && haveY >= screenH * 0.9f;
+    }
+
     private void OpenBackground(PhotoDocument doc, int gen)
     {
         try
@@ -232,10 +436,13 @@ public sealed class DevelopEngine
             if (Stale(gen))
                 return;
 
-            RasterBuffer? raster = RawDecoder.TryDecodeRaster(doc.Path);
-            if (raster != null)
+            RasterBuffer? fullRaster = RawDecoder.DecodeRasterFull(doc.Path);
+            if (fullRaster != null)
             {
-                Publish(doc, gen, raster.Value, asThumb: true, asProxy: true, kind: "raster");
+                RasterBuffer proxy = RawDecoder.Limit(fullRaster.Value,
+                    RawDecoder.ProxyLongEdge(fullRaster.Value.Width, fullRaster.Value.Height));
+                Publish(doc, gen, proxy, asThumb: true, asProxy: true, kind: "raster",
+                    nativeW: fullRaster.Value.Width, nativeH: fullRaster.Value.Height);
                 return;
             }
 
@@ -251,7 +458,8 @@ public sealed class DevelopEngine
             if (Stale(gen))
                 return;
 
-            Publish(doc, gen, RawDecoder.DecodePreview(doc.Path), asThumb: false, asProxy: true, kind: "preview");
+            RasterBuffer preview = RawDecoder.DecodePreview(doc.Path, out int nw, out int nh);
+            Publish(doc, gen, preview, asThumb: false, asProxy: true, kind: "preview", nativeW: nw, nativeH: nh);
         }
         catch (Exception ex)
         {
@@ -267,7 +475,8 @@ public sealed class DevelopEngine
         }
     }
 
-    private void Publish(PhotoDocument doc, int gen, RasterBuffer raster, bool asThumb, bool asProxy, string kind)
+    private void Publish(PhotoDocument doc, int gen, RasterBuffer raster, bool asThumb, bool asProxy, string kind,
+        int nativeW = 0, int nativeH = 0)
     {
         if (Stale(gen))
             return;
@@ -288,6 +497,16 @@ public sealed class DevelopEngine
                     doc.SourceRgba = raster;
                     doc.SourceLinear = raster.HasLinear;
                     doc.LiveRgba = RawDecoder.Limit(raster, 256);
+                    if (nativeW > 0)
+                    {
+                        doc.NativeWidth = nativeW;
+                        doc.NativeHeight = nativeH;
+                    }
+                    else if (doc.NativeWidth <= 0)
+                    {
+                        doc.NativeWidth = raster.Width;
+                        doc.NativeHeight = raster.Height;
+                    }
                 }
 
                 Log.Info($"Assign {kind}");
@@ -295,7 +514,7 @@ public sealed class DevelopEngine
                     Assign(doc, thumb: image);
                 if (asProxy)
                     Assign(doc, proxy: image);
-                if (doc.Display == null || asProxy)
+                if (asProxy || (doc.Display == null && doc.Look == null && doc.Preview == null))
                     Assign(doc, display: image);
 
                 if (doc.SourceWidth <= 0 || asProxy)
@@ -309,6 +528,8 @@ public sealed class DevelopEngine
                 Log.Info($"Showing {kind}");
                 Updated?.Invoke(doc);
                 Log.Info($"Shown {kind}");
+                if (asProxy && (doc.Preview == null || doc.Look == null))
+                    ScheduleLooks(doc, doc.Settings.Clone());
             }
             catch (Exception ex)
             {
@@ -332,8 +553,9 @@ public sealed class DevelopEngine
             if (Stale(gen) || seq != Volatile.Read(ref _invalidateSeq))
                 return;
 
-            if (preview && Math.Max(src.Width, src.Height) > 900)
-                src = RawDecoder.Limit(src, 900);
+            int cap = preview ? 900 : 2048;
+            if (Math.Max(src.Width, src.Height) > cap)
+                src = RawDecoder.Limit(src, cap);
 
             Log.Info($"Develop CPU {src.Width}x{src.Height} preview={preview}");
             RasterBuffer developed = DevelopCpu.Apply(src, settings, fast: false);
@@ -351,6 +573,7 @@ public sealed class DevelopEngine
                     Assign(doc, display: image);
                     DevelopCpu.FillHistogram(developed, doc);
                     Updated?.Invoke(doc);
+                    ScheduleLooks(doc, settings);
                     Log.Info("Develop shown");
                 }
                 catch (Exception ex)
@@ -384,6 +607,53 @@ public sealed class DevelopEngine
         Browser.Post(() => BusyChanged?.Invoke(busy));
     }
 
+    private void ScheduleLooks(PhotoDocument doc, DevelopSettings settings)
+    {
+        RasterBuffer src = doc.SourceRgba.HasPixels ? doc.SourceRgba : doc.LiveRgba;
+        if (!src.HasPixels)
+            return;
+        src = RawDecoder.Limit(src, 720);
+        Task.Run(() => BakeLooks(doc, settings, src));
+    }
+
+    private void BakeLooks(PhotoDocument doc, DevelopSettings settings, RasterBuffer src)
+    {
+        try
+        {
+            if (!src.HasPixels)
+                return;
+            RasterBuffer lookBuf = DevelopCpu.Apply(src, settings, fast: true);
+            RasterBuffer prevBuf = RawDecoder.Limit(lookBuf, 160);
+            byte[]? lookJpeg = WorkspaceStore.EncodeJpeg(lookBuf, 85);
+            byte[]? prevJpeg = WorkspaceStore.EncodeJpeg(prevBuf, 82);
+            WorkspaceStore.SaveLooks(doc, settings, prevJpeg, lookJpeg);
+
+            Browser.Post(() =>
+            {
+                try
+                {
+                    SKImage preview = RawDecoder.Upload(prevBuf, out _);
+                    SKImage look = RawDecoder.Upload(lookBuf, out _);
+                    SKImage? oldP = doc.Preview;
+                    SKImage? oldL = doc.Look;
+                    doc.Preview = preview;
+                    doc.Look = look;
+                    RetireIfUnused(doc, oldP);
+                    RetireIfUnused(doc, oldL);
+                    Updated?.Invoke(doc);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning("Look upload: " + ex.Message);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Bake looks: " + ex.Message);
+        }
+    }
+
     private bool Stale(int gen) => gen != Volatile.Read(ref _generation);
 
     private static void Assign(PhotoDocument doc, SKImage? thumb = null, SKImage? proxy = null, SKImage? display = null)
@@ -414,7 +684,9 @@ public sealed class DevelopEngine
     {
         if (image == null)
             return;
-        if (ReferenceEquals(image, doc.Thumb) || ReferenceEquals(image, doc.Proxy) || ReferenceEquals(image, doc.Display))
+        if (ReferenceEquals(image, doc.Thumb) || ReferenceEquals(image, doc.Proxy)
+            || ReferenceEquals(image, doc.Display) || ReferenceEquals(image, doc.Preview)
+            || ReferenceEquals(image, doc.Look) || ReferenceEquals(image, doc.ViewportTile))
             return;
         GpuRetain.Retire(image);
     }
