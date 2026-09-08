@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Sibling clone: ../Blossom — override with /p:BlossomRoot=... if needed. -->
+    <BlossomRoot Condition="'$(BlossomRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Blossom\'))</BlossomRoot>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>Raw75</RootNamespace>
+    <AssemblyName>Raw75</AssemblyName>
+    <Description>Desktop application for editing raw photos.</Description>
+    <Authors>Cosmin Crețu</Authors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(BlossomRoot)src\Blossom\Blossom.csproj" />
+  </ItemGroup>
+
+  <!-- Vendored GLFW used by Blossom/Silk.NET at runtime (not copied into this repo). -->
+  <ItemGroup>
+    <None Include="$(BlossomRoot)glfw\**\*">
+      <Link>%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+</Project>
