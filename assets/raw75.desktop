@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Raw75
+Comment=RAW photo editor
+Exec=Raw75
+Icon=raw75
+Terminal=false
+Categories=Graphics;Photography;2DGraphics;
+StartupWMClass=Raw75
+Keywords=RAW;NEF;photo;develop;

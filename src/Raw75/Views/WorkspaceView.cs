@@ -80,8 +80,15 @@ public sealed class WorkspaceView : View
         float st = Theme.StatusH;
 
         AddElement(Bar("Top", Theme.TopBar, 0, 0, W, top, Anchor.Left | Anchor.Right | Anchor.Top));
-        AddLabel("Brand", "Raw75", 16, 14, 88, 22, Theme.Text, 16, 700);
-        var open = Chip("Open", 112, 10, 72, 28);
+        var brand = new BrandMark
+        {
+            Transform = new Transform(16, 12, 92, 24)
+            {
+                Anchor = Anchor.Left | Anchor.Top
+            }
+        };
+        AddElement(brand);
+        var open = Chip("Open", 118, 10, 72, 28);
         open.Events.OnClick += (_, e) => { e.Handled = true; OpenFiles(); };
         var exp = Chip("Export", W - 100, 10, 80, 28);
         exp.Events.OnClick += (_, e) => { e.Handled = true; StartExport(); };
@@ -146,7 +153,7 @@ public sealed class WorkspaceView : View
             UpdateZoomLabel();
             var d = _session.Active;
             if (d == null) return;
-            if (_photo.ZoomMode == ZoomMode.OneToOne || _photo.Zoom >= 1f)
+            if (_photo.ZoomMode == ZoomMode.OneToOne)
                 _engine.EnsureHiRes(d);
         };
         _photo.CropChanged += () =>
@@ -396,9 +403,10 @@ public sealed class WorkspaceView : View
         CopyCropInto(d);
         _photo.SetLook(d.Proxy ?? d.Display, d.Settings, fast);
         _engine.RequestHistogram(d);
-        if (!settle && !_photo.LookFailed)
-            return;
-        _engine.Invalidate(d, preview: !settle);
+        if (_photo.LookFailed)
+            _engine.Invalidate(d, preview: !settle);
+        else if (settle)
+            _engine.Invalidate(d, preview: false);
     }
 
     private void OnHistogram(PhotoDocument doc)
