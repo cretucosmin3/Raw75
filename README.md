@@ -6,7 +6,7 @@ UI is Blossom. Photo preview is Skia on the GPU.
 
 ## Spec
 
-See `SPEC.md` for the real pipeline. How we sit on Blossom: `docs/blossom.md`.
+See `SPEC.md` for the pipeline, `PLAN.md` for the work, `docs/blossom.md` for the UI host.
 
 Short version: LibRaw once, GPU after that. Proxy for sliders, tiles at 1:1, same passes for preview and export. ImageSharp only writes the file. Presets are JSON offsets.
 
@@ -14,38 +14,38 @@ Short version: LibRaw once, GPU after that. Proxy for sliders, tiles at 1:1, sam
 
 ### Tone
 
-- [ ] Exposure / brightness
-- [ ] Contrast
-- [ ] Highlights & shadows
-- [ ] Whites & blacks
-- [ ] Live histogram (RGB + luminance, clipped pixels)
+- [x] Exposure / brightness
+- [x] Contrast
+- [x] Highlights & shadows
+- [x] Whites & blacks
+- [x] Live histogram (RGB + luminance, clipped pixels)
 
 ### Color
 
-- [ ] Temperature & tint
-- [ ] Vibrance & saturation
-- [ ] HSL mixer (six colors)
+- [x] Temperature & tint
+- [x] Vibrance & saturation
+- [x] HSL mixer (six colors)
 
 ### Detail & crop
 
-- [ ] Sharpen & denoise
-- [ ] Crop (free, 1:1, 4:3, 16:9)
-- [ ] Straighten, 90° rotate, flip
+- [x] Sharpen & denoise
+- [x] Crop (handles on the photo)
+- [x] Straighten, 90° rotate, flip
 
 ### Working
 
-- [ ] Zoom & pan, 1:1
-- [ ] Before / after
-- [ ] Undo / redo
-- [ ] Export (JPEG, PNG, WebP, TIFF)
+- [x] Zoom & pan, 1:1, click-zoom
+- [x] Before / after (and split)
+- [x] Undo / redo
+- [x] Export (JPEG, PNG, WebP, TIFF)
 
 ### Underneath
 
-- [ ] Open RAW into a GPU texture
-- [ ] One SkSL shader for the edit
-- [ ] JSON presets
-- [ ] `.cube` LUTs
-- [ ] HDR merge
+- [x] Open RAW into a GPU texture (thumbnail, then half-size preview)
+- [x] SkSL develop shader
+- [x] JSON presets
+- [x] `.cube` LUT support in the shader (set LutPath)
+- [x] HDR merge (simple average of open photos; align/de-ghost later)
 
 ## Build
 

@@ -1,0 +1,441 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using Blossom;
+using Sdcb.LibRaw;
+using SkiaSharp;
+
+namespace Raw75.Imaging;
+
+internal readonly struct RasterBuffer
+{
+    public readonly byte[]? Rgba;
+    public readonly float[]? Linear;
+    public readonly int Width;
+    public readonly int Height;
+
+    public bool HasPixels => Width > 0 && Height > 0 && (Linear != null || Rgba != null);
+    public bool HasLinear => Linear != null && Width > 0 && Linear.Length >= Width * Height * 4;
+
+    public RasterBuffer(byte[] rgba, int width, int height)
+    {
+        Rgba = rgba ?? throw new ArgumentNullException(nameof(rgba));
+        Linear = null;
+        Width = width;
+        Height = height;
+    }
+
+    public RasterBuffer(float[] linear, int width, int height, byte[]? rgba = null)
+    {
+        Linear = linear ?? throw new ArgumentNullException(nameof(linear));
+        Rgba = rgba;
+        Width = width;
+        Height = height;
+    }
+}
+
+internal static class RawDecoder
+{
+    private static readonly object LibRawGate = new();
+    private static readonly System.Collections.Concurrent.ConcurrentBag<SKBitmap> LiveBitmaps = new();
+    internal const int DisplayMaxEdge = 1600;
+
+    private static readonly HashSet<string> RasterExt = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"
+    };
+
+    public static bool IsRawPath(string path)
+    {
+        string ext = Path.GetExtension(path);
+        return !RasterExt.Contains(ext);
+    }
+
+    public static RasterBuffer? TryDecodeRaster(string path)
+    {
+        if (IsRawPath(path))
+            return null;
+
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            using var bmp = SKBitmap.Decode(bytes);
+            if (bmp == null || bmp.Width <= 0)
+                return null;
+            return FromBitmap(bmp);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static RasterBuffer DecodeThumbnail(string path)
+    {
+        LibRawNative.EnsureLoaded();
+        lock (LibRawGate)
+        {
+            using var raw = RawContext.OpenFile(path);
+            using ProcessedImage image = raw.ExportThumbnail(0);
+            var buf = ToBuffer(image);
+            Log.Info($"Thumb {buf.Width}x{buf.Height} type={image.ImageType} bits={image.Bits} ch={image.Channels}");
+            return buf;
+        }
+    }
+
+    public static RasterBuffer DecodePreview(string path)
+    {
+        LibRawNative.EnsureLoaded();
+        lock (LibRawGate)
+        {
+            using var raw = RawContext.OpenFile(path);
+            bool camWb = false;
+            try
+            {
+                camWb = raw.CameraMultipler[0] > 0.05f && raw.CameraMultipler[1] > 0.05f;
+            }
+            catch { }
+
+            using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half: true));
+            var buf = ToBuffer(image);
+            Log.Info($"Preview {buf.Width}x{buf.Height} bits={image.Bits} ch={image.Channels} camWb={camWb}");
+            return buf;
+        }
+    }
+
+    public static RasterBuffer DecodeFull(string path)
+    {
+        LibRawNative.EnsureLoaded();
+        lock (LibRawGate)
+        {
+            using var raw = RawContext.OpenFile(path);
+            bool camWb = false;
+            try
+            {
+                camWb = raw.CameraMultipler[0] > 0.05f && raw.CameraMultipler[1] > 0.05f;
+            }
+            catch { }
+
+            using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half: false));
+            var buf = ToBuffer(image);
+            Log.Info($"Full {buf.Width}x{buf.Height} bits={image.Bits} ch={image.Channels}");
+            return buf;
+        }
+    }
+
+    public static RasterBuffer Limit(RasterBuffer src, int maxEdge)
+    {
+        int m = Math.Max(src.Width, src.Height);
+        if (m <= maxEdge)
+            return src;
+
+        float scale = maxEdge / (float)m;
+        int nw = Math.Max(1, (int)Math.Round(src.Width * scale));
+        int nh = Math.Max(1, (int)Math.Round(src.Height * scale));
+
+        if (src.HasLinear)
+        {
+            float[] dst = new float[nw * nh * 4];
+            float[] lin = src.Linear!;
+            for (int y = 0; y < nh; y++)
+            {
+                int sy = Math.Min(src.Height - 1, y * src.Height / nh);
+                int srcRow = sy * src.Width * 4;
+                int dstRow = y * nw * 4;
+                for (int x = 0; x < nw; x++)
+                {
+                    int sx = Math.Min(src.Width - 1, x * src.Width / nw);
+                    int si = srcRow + sx * 4;
+                    int di = dstRow + x * 4;
+                    dst[di] = lin[si];
+                    dst[di + 1] = lin[si + 1];
+                    dst[di + 2] = lin[si + 2];
+                    dst[di + 3] = lin[si + 3];
+                }
+            }
+
+            Log.Info($"Limited linear to {nw}x{nh}");
+            return new RasterBuffer(dst, nw, nh);
+        }
+
+        byte[] rgba = src.Rgba ?? Array.Empty<byte>();
+        byte[] dst8 = new byte[nw * nh * 4];
+        for (int y = 0; y < nh; y++)
+        {
+            int sy = Math.Min(src.Height - 1, y * src.Height / nh);
+            int srcRow = sy * src.Width * 4;
+            int dstRow = y * nw * 4;
+            for (int x = 0; x < nw; x++)
+            {
+                int sx = Math.Min(src.Width - 1, x * src.Width / nw);
+                int si = srcRow + sx * 4;
+                int di = dstRow + x * 4;
+                dst8[di] = rgba[si];
+                dst8[di + 1] = rgba[si + 1];
+                dst8[di + 2] = rgba[si + 2];
+                dst8[di + 3] = rgba[si + 3];
+            }
+        }
+
+        Log.Info($"Limited preview to {nw}x{nh}");
+        return new RasterBuffer(dst8, nw, nh);
+    }
+
+    /// <summary>UI thread only. Caller must keep <paramref name="keep"/> alive with the image.</summary>
+    public static SKImage Upload(RasterBuffer buf, out SKBitmap keep)
+    {
+        if (buf.Width < 1 || buf.Height < 1)
+            throw new InvalidDataException("Empty raster.");
+        if (buf.HasLinear)
+            return UploadLinear(buf, out keep);
+        if (buf.Rgba == null)
+            throw new InvalidDataException("Empty raster.");
+
+        var info = new SKImageInfo(buf.Width, buf.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        keep = new SKBitmap(info);
+        IntPtr pixels = keep.GetPixels();
+        if (pixels == IntPtr.Zero)
+        {
+            keep.Dispose();
+            throw new InvalidOperationException("SKBitmap pixel alloc failed.");
+        }
+
+        int stride = keep.RowBytes;
+        int srcStride = buf.Width * 4;
+        if (stride == srcStride)
+        {
+            Marshal.Copy(buf.Rgba, 0, pixels, srcStride * buf.Height);
+        }
+        else
+        {
+            for (int y = 0; y < buf.Height; y++)
+                Marshal.Copy(buf.Rgba, y * srcStride, pixels + y * stride, srcStride);
+        }
+
+        return Freeze(keep, out keep);
+    }
+
+    private static SKImage UploadLinear(RasterBuffer buf, out SKBitmap keep)
+    {
+        float[] lin = buf.Linear!;
+        int w = buf.Width;
+        int h = buf.Height;
+        var info = new SKImageInfo(w, h, SKColorType.RgbaF16, SKAlphaType.Unpremul);
+        keep = new SKBitmap(info);
+        IntPtr pixels = keep.GetPixels();
+        if (pixels == IntPtr.Zero)
+        {
+            keep.Dispose();
+            throw new InvalidOperationException("F16 pixel alloc failed.");
+        }
+
+        int stride = keep.RowBytes;
+        for (int y = 0; y < h; y++)
+        {
+            int srcRow = y * w * 4;
+            IntPtr row = pixels + y * stride;
+            for (int x = 0; x < w; x++)
+            {
+                int si = srcRow + x * 4;
+                int di = x * 8;
+                WriteHalf(row, di, lin[si]);
+                WriteHalf(row, di + 2, lin[si + 1]);
+                WriteHalf(row, di + 4, lin[si + 2]);
+                WriteHalf(row, di + 6, lin[si + 3]);
+            }
+        }
+
+        return Freeze(keep, out keep);
+    }
+
+    private static void WriteHalf(IntPtr row, int offset, float v)
+    {
+        if (v < -65504f) v = -65504f;
+        else if (v > 65504f) v = 65504f;
+        ushort bits = BitConverter.HalfToUInt16Bits((Half)v);
+        Marshal.WriteInt16(row, offset, (short)bits);
+    }
+
+    private static SKImage Freeze(SKBitmap keep, out SKBitmap live)
+    {
+        live = keep;
+        keep.SetImmutable();
+        SKImage? image = SKImage.FromBitmap(keep);
+        if (image == null)
+        {
+            keep.Dispose();
+            throw new InvalidOperationException("SKImage.FromBitmap returned null.");
+        }
+
+        LiveBitmaps.Add(keep);
+        return image;
+    }
+
+    private static void ConfigureLinear(OutputParams c, bool camWb, bool half)
+    {
+        c.HalfSize = half;
+        c.UseCameraWb = camWb;
+        c.UseAutoWb = !camWb;
+        c.Interpolation = !half;
+        c.OutputBps = 16;
+        c.OutputColor = (LibRawColorSpace)1;
+        c.Brightness = 1f;
+        c.NoAutoBright = true;
+        c.AdjustMaximumThr = 0f;
+        c.HighlightMode = 2;
+        try
+        {
+            c.Gamma[0] = 1f;
+            c.Gamma[1] = 1f;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("LibRaw gamma: " + ex.Message);
+        }
+    }
+
+    public static SKImage Upload(SKBitmap bitmap)
+    {
+        ArgumentNullException.ThrowIfNull(bitmap);
+        return Upload(FromBitmap(bitmap), out _);
+    }
+
+    private static RasterBuffer FromBitmap(SKBitmap bmp)
+    {
+        int w = bmp.Width;
+        int h = bmp.Height;
+        byte[] rgba = new byte[w * h * 4];
+        using var pixmap = bmp.PeekPixels();
+        if (pixmap == null)
+            throw new InvalidDataException("Bitmap has no pixels.");
+
+        unsafe
+        {
+            byte* src = (byte*)pixmap.GetPixels();
+            int stride = pixmap.RowBytes;
+            bool bgra = pixmap.ColorType == SKColorType.Bgra8888;
+            for (int y = 0; y < h; y++)
+            {
+                byte* row = src + y * stride;
+                int di = y * w * 4;
+                for (int x = 0; x < w; x++)
+                {
+                    byte* p = row + x * 4;
+                    if (bgra)
+                    {
+                        rgba[di] = p[2];
+                        rgba[di + 1] = p[1];
+                        rgba[di + 2] = p[0];
+                    }
+                    else
+                    {
+                        rgba[di] = p[0];
+                        rgba[di + 1] = p[1];
+                        rgba[di + 2] = p[2];
+                    }
+                    rgba[di + 3] = 255;
+                    di += 4;
+                }
+            }
+        }
+
+        return new RasterBuffer(rgba, w, h);
+    }
+
+    private static RasterBuffer ToBuffer(ProcessedImage image)
+    {
+        int dataLen = image.DataSize;
+        if (dataLen >= 3)
+        {
+            var head = image.AsSpan<byte>();
+            if (head.Length >= 3 && head[0] == 0xFF && head[1] == 0xD8)
+            {
+                using var decoded = SKBitmap.Decode(head.ToArray());
+                if (decoded != null && decoded.Width > 0)
+                    return FromBitmap(decoded);
+            }
+        }
+
+        if (image.ImageType == ProcessedImageType.Jpeg)
+        {
+            using var decoded = SKBitmap.Decode(image.AsSpan<byte>().ToArray());
+            if (decoded == null)
+                throw new InvalidDataException("LibRaw JPEG thumbnail could not be decoded.");
+            return FromBitmap(decoded);
+        }
+
+        int w = image.Width;
+        int h = image.Height;
+        int channels = Math.Max(1, image.Channels);
+        int bits = image.Bits;
+        if (w <= 0 || h <= 0)
+            throw new InvalidDataException("LibRaw produced an empty image.");
+
+        if (bits <= 8)
+        {
+            byte[] rgba = new byte[w * h * 4];
+            Copy8(image.AsSpan<byte>(), rgba, w, h, channels);
+            return new RasterBuffer(rgba, w, h);
+        }
+
+        return Copy16Linear(image.AsSpan<ushort>(), w, h, channels);
+    }
+
+    private static void Copy8(ReadOnlySpan<byte> src, byte[] dst, int w, int h, int channels)
+    {
+        int need = w * h * channels;
+        if (src.Length < need)
+            throw new InvalidDataException($"LibRaw 8-bit buffer short: {src.Length} < {need}");
+
+        int si = 0;
+        int di = 0;
+        for (int i = 0; i < w * h; i++)
+        {
+            if (channels >= 3)
+            {
+                dst[di] = src[si];
+                dst[di + 1] = src[si + 1];
+                dst[di + 2] = src[si + 2];
+            }
+            else
+            {
+                dst[di] = dst[di + 1] = dst[di + 2] = src[si];
+            }
+            dst[di + 3] = 255;
+            di += 4;
+            si += channels;
+        }
+    }
+
+    private static RasterBuffer Copy16Linear(ReadOnlySpan<ushort> src, int w, int h, int channels)
+    {
+        int need = w * h * channels;
+        if (src.Length < need)
+            throw new InvalidDataException($"LibRaw 16-bit buffer short: {src.Length} < {need}");
+
+        float[] lin = new float[w * h * 4];
+        const float scale = 1f / 65535f;
+        int si = 0;
+        int di = 0;
+        for (int i = 0; i < w * h; i++)
+        {
+            if (channels >= 3)
+            {
+                lin[di] = src[si] * scale;
+                lin[di + 1] = src[si + 1] * scale;
+                lin[di + 2] = src[si + 2] * scale;
+            }
+            else
+            {
+                float y = src[si] * scale;
+                lin[di] = lin[di + 1] = lin[di + 2] = y;
+            }
+            lin[di + 3] = 1f;
+            di += 4;
+            si += channels;
+        }
+
+        return new RasterBuffer(lin, w, h);
+    }
+}

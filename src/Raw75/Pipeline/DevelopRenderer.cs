@@ -1,0 +1,663 @@
+using System;
+using Blossom;
+using Blossom.Core;
+using Raw75.Develop;
+using SkiaSharp;
+
+namespace Raw75.Pipeline;
+
+/// <summary>
+/// GPU develop path (SkSL). Geometry → WB/EV/tone/HSL → cheap denoise/sharpen → LUT → sRGB.
+/// Same uniforms for proxy, 1:1, and export; this type only produces an 8-bit display snapshot.
+/// </summary>
+public static class DevelopRenderer
+{
+    private static readonly object Gate = new();
+    private static SKRuntimeEffect? _effect;
+    private static bool _compileAttempted;
+    private static SKImage? _white;
+    private static string? _cachedLutPath;
+    private static SKImage? _cachedLut;
+
+    public static SKImage? Apply(SKImage source, DevelopSettings s)
+    {
+        if (source == null)
+            return null;
+        int w = source.Width;
+        int h = source.Height;
+        int rot = s != null ? s.Rotate90 & 3 : 0;
+        if ((rot & 1) != 0)
+        {
+            int t = w;
+            w = h;
+            h = t;
+        }
+        return Apply(source, s ?? new DevelopSettings(), w, h, 0f, false);
+    }
+
+    public static SKImage? Apply(SKImage source, DevelopSettings s, int outW, int outH)
+    {
+        return Apply(source, s, outW, outH, 0f, false);
+    }
+
+    public static SKImage? Apply(
+        SKImage source,
+        DevelopSettings s,
+        int outW,
+        int outH,
+        float split,
+        bool before)
+    {
+        if (source == null)
+            return null;
+        s ??= new DevelopSettings();
+        outW = Math.Max(1, outW);
+        outH = Math.Max(1, outH);
+
+        SKRuntimeEffect? effect = EnsureEffect();
+        if (effect == null)
+            return Blit(source, outW, outH);
+
+        SKImage lut = GetLut(s, out float lutSize, out float lutAmount);
+        SKImage mask = WhitePixel();
+
+        // CPU surface: a GPU ping-pong on the window GRContext during slider
+        // drags (same thread as the frame) was aborting Skia.
+        SKSurface? surface = SKSurface.Create(new SKImageInfo(outW, outH, SKColorType.Rgba8888, SKAlphaType.Premul));
+        if (surface == null)
+            return Blit(source, outW, outH);
+
+        try
+        {
+            using var imgShader = source.ToShader();
+            using var lutShader = lut.ToShader();
+            using var maskShader = mask.ToShader();
+            if (imgShader == null)
+                return Blit(source, outW, outH);
+
+            SKShader? shader;
+            lock (Gate)
+            {
+                var uniforms = new SKRuntimeEffectUniforms(effect);
+                BindUniforms(uniforms, s, source.Width, source.Height, outW, outH, split, before, lutSize, lutAmount);
+
+                var children = new SKRuntimeEffectChildren(effect);
+                children.Add("u_image", imgShader);
+                children.Add("u_lut", lutShader);
+                children.Add("u_mask", maskShader);
+
+                shader = effect.ToShader(true, uniforms, children);
+            }
+
+            if (shader == null)
+                return Blit(source, outW, outH);
+
+            using (shader)
+            using (var paint = new SKPaint { Shader = shader, IsAntialias = false })
+            {
+                var canvas = surface.Canvas;
+                canvas.Clear(SKColors.Black);
+                canvas.DrawRect(new SKRect(0, 0, outW, outH), paint);
+                canvas.Flush();
+                return surface.Snapshot();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("DevelopRenderer.Apply: " + ex.Message);
+            return Blit(source, outW, outH);
+        }
+        finally
+        {
+            surface.Dispose();
+        }
+    }
+
+    public static void ComputeHistogramFromDisplay(SKBitmap bgra, PhotoDocument doc)
+    {
+        if (doc == null)
+            return;
+        HistogramCompute.Compute(bgra, doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
+    }
+
+    public static void FillHistogram(SKImage display, float[] r, float[] g, float[] b, float[] y)
+    {
+        HistogramCompute.Compute(display, r, g, b, y);
+    }
+
+    public static void FillHistogram(SKImage display, PhotoDocument doc)
+    {
+        if (doc == null)
+            return;
+        HistogramCompute.Compute(display, doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
+    }
+
+    internal static SKImage? LastLut { get; private set; }
+
+    /// <summary>One-time blit onto the window GRContext so live SKSL samples a GPU texture.</summary>
+    public static SKImage PromoteGpu(SKImage image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (image.Handle == IntPtr.Zero || !Gpu.IsReady)
+            return image;
+        try
+        {
+            SKColorType ct = image.ColorType == SKColorType.RgbaF16
+                ? SKColorType.RgbaF16
+                : SKColorType.Rgba8888;
+            using SKSurface? surface = Gpu.CreateSurface(
+                image.Width, image.Height, ct, SKAlphaType.Unpremul);
+            if (surface == null)
+                return image;
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.DrawImage(image, 0, 0);
+            SKImage? snap = Gpu.Snapshot(surface);
+            return snap ?? image;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("GPU promote: " + ex.Message);
+            return image;
+        }
+    }
+
+    internal static SKRuntimeEffect? EnsureEffect()
+    {
+        if (_effect != null)
+            return _effect;
+        lock (Gate)
+        {
+            if (_effect != null)
+                return _effect;
+            if (_compileAttempted && _effect == null)
+                return null;
+            _compileAttempted = true;
+            _effect = SKRuntimeEffect.Create(DevelopSksl, out string errors);
+            if (_effect == null)
+                Log.Error("DevelopRenderer SKSL compile failed: " + errors);
+            return _effect;
+        }
+    }
+
+    internal static void BindUniforms(
+        SKRuntimeEffectUniforms u,
+        DevelopSettings s,
+        int srcW,
+        int srcH,
+        int dstW,
+        int dstH,
+        float split,
+        bool before,
+        float lutSize,
+        float lutAmount,
+        bool fast = false,
+        bool applyCrop = true,
+        bool srcLinear = true)
+    {
+        Set(u, "u_resolution", new[] { (float)dstW, (float)dstH });
+        Set(u, "u_srcSize", new[] { (float)srcW, (float)srcH });
+        Set(u, "u_temp", s.Temperature / 100f);
+        Set(u, "u_tint", s.Tint / 100f);
+        Set(u, "u_ev", s.Exposure);
+        Set(u, "u_match", s.MatchGray ? 1f : 0f);
+        Set(u, "u_contrast", s.Contrast / 100f);
+        Set(u, "u_highlights", s.Highlights / 100f);
+        Set(u, "u_shadows", s.Shadows / 100f);
+        Set(u, "u_whites", s.Whites / 100f);
+        Set(u, "u_blacks", s.Blacks / 100f);
+        Set(u, "u_vibrance", s.Vibrance / 100f);
+        Set(u, "u_saturation", s.Saturation / 100f);
+        HslBand[] hsl = s.Hsl;
+        for (int i = 0; i < 6; i++)
+        {
+            HslBand band = (hsl != null && hsl.Length == 6) ? hsl[i] : default;
+            Set(u, "u_hsl" + i, new[] { band.Hue / 100f, band.Sat / 100f, band.Luma / 100f, 0f });
+        }
+        Set(u, "u_sharpen", fast ? 0f : s.Sharpen / 150f);
+        Set(u, "u_denoiseLuma", fast ? 0f : s.DenoiseLuma / 100f);
+        Set(u, "u_denoiseChroma", fast ? 0f : s.DenoiseChroma / 100f);
+        float cw = applyCrop ? s.CropW : 0f;
+        float ch = applyCrop ? s.CropH : 0f;
+        if (cw < 0.001f || ch < 0.001f)
+        {
+            Set(u, "u_crop", new[] { 0f, 0f, 1f, 1f });
+        }
+        else
+        {
+            Set(u, "u_crop", new[] { s.CropX, s.CropY, cw, ch });
+        }
+        Set(u, "u_straighten", s.Straighten);
+        Set(u, "u_rot", (float)(s.Rotate90 & 3));
+        Set(u, "u_flipH", s.FlipH ? 1f : 0f);
+        Set(u, "u_flipV", s.FlipV ? 1f : 0f);
+        Set(u, "u_split", split);
+        Set(u, "u_before", before ? 1f : 0f);
+        Set(u, "u_lutSize", lutSize);
+        Set(u, "u_lutAmount", lutAmount);
+        Set(u, "u_hasLut", lutAmount > 0.001f && lutSize > 1.5f ? 1f : 0f);
+        Set(u, "u_srcLinear", srcLinear ? 1f : 0f);
+    }
+
+    private static void Set(SKRuntimeEffectUniforms u, string name, float value)
+    {
+        try { u[name] = value; }
+        catch (ArgumentException) { }
+    }
+
+    private static void Set(SKRuntimeEffectUniforms u, string name, float[] value)
+    {
+        try { u[name] = value; }
+        catch (ArgumentException) { }
+    }
+
+    internal static SKImage GetLut(DevelopSettings s, out float lutSize, out float lutAmount)
+    {
+        lutAmount = 0f;
+        lutSize = 2f;
+        string? path = s.LutPath;
+        if (string.IsNullOrWhiteSpace(path) || s.LutAmount <= 0.001f)
+        {
+            LastLut = WhitePixel();
+            return LastLut;
+        }
+
+        lock (Gate)
+        {
+            if (_cachedLutPath != path)
+            {
+                _cachedLut?.Dispose();
+                _cachedLut = CubeLut.LoadCubeAs2d(path);
+                _cachedLutPath = path;
+                if (_cachedLut == null)
+                    Log.Error("DevelopRenderer: failed to load LUT " + path);
+            }
+
+            if (_cachedLut == null)
+            {
+                LastLut = WhitePixel();
+                return LastLut;
+            }
+
+            int h = Math.Max(1, _cachedLut.Height);
+            lutSize = h;
+            lutAmount = Math.Clamp(s.LutAmount, 0f, 1f);
+            LastLut = _cachedLut;
+            return _cachedLut;
+        }
+    }
+
+    internal static SKImage WhitePixel()
+    {
+        if (_white != null)
+            return _white;
+        lock (Gate)
+        {
+            if (_white != null)
+                return _white;
+            var info = new SKImageInfo(1, 1, SKColorType.Rgba8888, SKAlphaType.Opaque);
+            using var bmp = new SKBitmap(info);
+            bmp.Erase(SKColors.White);
+            bmp.SetImmutable();
+            _white = SKImage.FromBitmap(bmp);
+            return _white;
+        }
+    }
+
+    private static SKSurface? CreateSurface(int w, int h)
+    {
+        var info = new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul);
+        return SKSurface.Create(info);
+    }
+
+    private static SKImage? Blit(SKImage source, int outW, int outH)
+    {
+        SKSurface? surface = CreateSurface(outW, outH);
+        if (surface == null)
+            return null;
+        try
+        {
+            var canvas = surface.Canvas;
+            canvas.Clear(SKColors.Black);
+            SKRect dest = Contain(outW, outH, source.Width, source.Height);
+            canvas.DrawImage(source, dest);
+            canvas.Flush();
+            return surface.Snapshot();
+        }
+        finally
+        {
+            surface.Dispose();
+        }
+    }
+
+    private static SKRect Contain(int boxW, int boxH, int imgW, int imgH)
+    {
+        if (imgW < 1 || imgH < 1)
+            return new SKRect(0, 0, boxW, boxH);
+        float s = Math.Min(boxW / (float)imgW, boxH / (float)imgH);
+        float w = imgW * s;
+        float h = imgH * s;
+        float x = (boxW - w) * 0.5f;
+        float y = (boxH - h) * 0.5f;
+        return new SKRect(x, y, x + w, y + h);
+    }
+
+    // Frozen op order (SPEC): sample+geom → WB → EV → match-gray → contrast (log2(1+rgb))
+    // → hi/sh → whites/blacks → vibrance → sat → HSL → denoise → sharpen → LUT → sRGB.
+    // Neighborhood filters are fused 4/5-tap approximations for v1.
+    public const string DevelopSksl = @"
+            uniform shader u_image;
+            uniform shader u_lut;
+            uniform shader u_mask;
+            uniform float2 u_resolution;
+            uniform float2 u_srcSize;
+            uniform float u_temp;
+            uniform float u_tint;
+            uniform float u_ev;
+            uniform float u_match;
+            uniform float u_contrast;
+            uniform float u_highlights;
+            uniform float u_shadows;
+            uniform float u_whites;
+            uniform float u_blacks;
+            uniform float u_vibrance;
+            uniform float u_saturation;
+            uniform float4 u_hsl0;
+            uniform float4 u_hsl1;
+            uniform float4 u_hsl2;
+            uniform float4 u_hsl3;
+            uniform float4 u_hsl4;
+            uniform float4 u_hsl5;
+            uniform float u_sharpen;
+            uniform float u_denoiseLuma;
+            uniform float u_denoiseChroma;
+            uniform float4 u_crop;
+            uniform float u_straighten;
+            uniform float u_rot;
+            uniform float u_flipH;
+            uniform float u_flipV;
+            uniform float u_split;
+            uniform float u_before;
+            uniform float u_lutSize;
+            uniform float u_lutAmount;
+            uniform float u_hasLut;
+            uniform float u_srcLinear;
+
+            float to_lin_1(float s) {
+                s = clamp(s, 0.0, 1.0);
+                if (s <= 0.04045) {
+                    return s / 12.92;
+                }
+                return pow((s + 0.055) / 1.055, 2.4);
+            }
+
+            float3 to_lin(float3 s) {
+                return float3(to_lin_1(s.r), to_lin_1(s.g), to_lin_1(s.b));
+            }
+
+            float to_srgb_1(float l) {
+                l = clamp(l, 0.0, 1.0);
+                if (l <= 0.0031308) {
+                    return 12.92 * l;
+                }
+                return 1.055 * pow(l, 0.4166667) - 0.055;
+            }
+
+            float3 to_srgb(float3 l) {
+                return float3(to_srgb_1(l.r), to_srgb_1(l.g), to_srgb_1(l.b));
+            }
+
+            float luma2020(float3 c) {
+                return dot(c, float3(0.2627, 0.6780, 0.0593));
+            }
+
+            float hue_w(float h, float center, float width) {
+                float d = abs(h - center);
+                if (d > 180.0) {
+                    d = 360.0 - d;
+                }
+                return clamp(1.0 - d / width, 0.0, 1.0);
+            }
+
+            float3 rgb_to_hsl(float3 c) {
+                float maxc = max(max(c.r, c.g), c.b);
+                float minc = min(min(c.r, c.g), c.b);
+                float l = (maxc + minc) * 0.5;
+                float d = maxc - minc;
+                float s = 0.0;
+                float h = 0.0;
+                if (d > 0.00001) {
+                    float den = 1.0 - abs(2.0 * l - 1.0);
+                    if (den < 0.00001) {
+                        den = 0.00001;
+                    }
+                    s = d / den;
+                    if (c.r >= c.g && c.r >= c.b) {
+                        h = (c.g - c.b) / d;
+                    } else if (c.g >= c.b) {
+                        h = 2.0 + (c.b - c.r) / d;
+                    } else {
+                        h = 4.0 + (c.r - c.g) / d;
+                    }
+                    h = h * 60.0;
+                    if (h < 0.0) {
+                        h += 360.0;
+                    }
+                }
+                return float3(h, s, l);
+            }
+
+            float hue2rgb(float p, float q, float t) {
+                if (t < 0.0) t += 1.0;
+                if (t > 1.0) t -= 1.0;
+                if (t < 0.1666667) return p + (q - p) * 6.0 * t;
+                if (t < 0.5) return q;
+                if (t < 0.6666667) return p + (q - p) * (0.6666667 - t) * 6.0;
+                return p;
+            }
+
+            float3 hsl_to_rgb(float3 hsl) {
+                float h = hsl.x / 360.0;
+                float s = clamp(hsl.y, 0.0, 1.0);
+                float l = clamp(hsl.z, 0.0, 1.0);
+                if (s < 0.00001) {
+                    return float3(l);
+                }
+                float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
+                float p = 2.0 * l - q;
+                return float3(
+                    hue2rgb(p, q, h + 0.3333333),
+                    hue2rgb(p, q, h),
+                    hue2rgb(p, q, h - 0.3333333)
+                );
+            }
+
+            float2 apply_geom(float2 uv) {
+                float rot = u_rot;
+                float2 p = uv;
+                if (rot > 0.5 && rot < 1.5) {
+                    p = float2(uv.y, 1.0 - uv.x);
+                } else if (rot >= 1.5 && rot < 2.5) {
+                    p = float2(1.0 - uv.x, 1.0 - uv.y);
+                } else if (rot >= 2.5) {
+                    p = float2(1.0 - uv.y, uv.x);
+                }
+                if (u_flipH > 0.5) {
+                    p.x = 1.0 - p.x;
+                }
+                if (u_flipV > 0.5) {
+                    p.y = 1.0 - p.y;
+                }
+                if (abs(u_straighten) > 0.001) {
+                    float a = u_straighten * 0.01745329251;
+                    float2 q = p - float2(0.5);
+                    float c = cos(a);
+                    float sn = sin(a);
+                    p = float2(q.x * c - q.y * sn, q.x * sn + q.y * c) + float2(0.5);
+                }
+                float4 crop = u_crop;
+                if (crop.z < 0.001 || crop.w < 0.001) {
+                    crop = float4(0.0, 0.0, 1.0, 1.0);
+                }
+                return crop.xy + p * crop.zw;
+            }
+
+            float3 sample_lut(float3 rgb) {
+                float size = u_lutSize;
+                float3 c = clamp(rgb, 0.0, 1.0);
+                float b = c.b * (size - 1.0);
+                float b0 = floor(b);
+                float b1 = min(b0 + 1.0, size - 1.0);
+                float bf = b - b0;
+                float r = c.r * (size - 1.0);
+                float g = c.g * (size - 1.0);
+                float2 p0 = float2(r + b0 * size + 0.5, g + 0.5);
+                float2 p1 = float2(r + b1 * size + 0.5, g + 0.5);
+                float3 s0 = sample(u_lut, p0).rgb;
+                float3 s1 = sample(u_lut, p1).rgb;
+                return mix(s0, s1, bf);
+            }
+
+            float smoother(float x, float a, float b) {
+                float t = clamp((x - a) / (b - a), 0.0, 1.0);
+                return t * t * (3.0 - 2.0 * t);
+            }
+
+            float filmic1(float x) {
+                x = max(x, 0.0);
+                float a = 2.51;
+                float b = 0.03;
+                float c = 2.43;
+                float d = 0.59;
+                float e = 0.14;
+                return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+            }
+
+            float3 filmic(float3 x) {
+                return float3(filmic1(x.r), filmic1(x.g), filmic1(x.b));
+            }
+
+            float3 apply_look(float3 col) {
+                col.r += 0.15 * u_temp;
+                col.b -= 0.15 * u_temp;
+                col.g -= 0.15 * u_tint;
+                col = max(col, 0.0);
+
+                col *= pow(2.0, u_ev);
+
+                if (u_match > 0.001) {
+                    float lum = max(luma2020(col), 0.0001);
+                    float g = 0.18 / lum;
+                    col *= mix(1.0, g, u_match * 0.35);
+                }
+
+                float3 enc = log2(1.0 + col);
+                float k = 1.0 + u_contrast * 0.85;
+                enc = (enc - 0.5) * k + 0.5;
+                col = max(exp2(enc) - 1.0, 0.0);
+
+                float lum2 = luma2020(col);
+                float shw = 1.0 - smoother(lum2, 0.02, 0.22);
+                float hiw = smoother(lum2, 0.35, 2.5);
+                col *= mix(1.0, pow(2.0, u_shadows * 1.15), shw);
+                col *= mix(1.0, pow(2.0, u_highlights * 1.0), hiw);
+
+                lum2 = luma2020(col);
+                float ww = smoother(lum2, 0.8, 4.0);
+                float bw = 1.0 - smoother(lum2, 0.0, 0.12);
+                col *= mix(1.0, pow(2.0, u_whites * 0.85), ww);
+                col *= mix(1.0, pow(2.0, u_blacks * 0.85), bw);
+                col = max(col, 0.0);
+
+                float lum3 = luma2020(col);
+                float3 gray = float3(lum3);
+                float sat = 0.0;
+                float mx = max(max(col.r, col.g), col.b);
+                float mn = min(min(col.r, col.g), col.b);
+                if (mx > 0.00001) {
+                    sat = (mx - mn) / mx;
+                }
+                float vBoost = u_vibrance * (1.0 - sat);
+                col = mix(gray, col, 1.0 + vBoost);
+                col = mix(float3(luma2020(col)), col, 1.0 + u_saturation);
+
+                float3 hsl = rgb_to_hsl(max(col, 0.0));
+                float w0 = hue_w(hsl.x, 0.0, 35.0);
+                float w1 = hue_w(hsl.x, 30.0, 30.0);
+                float w2 = hue_w(hsl.x, 60.0, 30.0);
+                float w3 = hue_w(hsl.x, 120.0, 45.0);
+                float w4 = hue_w(hsl.x, 180.0, 35.0);
+                float w5 = hue_w(hsl.x, 240.0, 45.0);
+                float hueShift = (u_hsl0.x * w0 + u_hsl1.x * w1 + u_hsl2.x * w2 + u_hsl3.x * w3 + u_hsl4.x * w4 + u_hsl5.x * w5) * 45.0;
+                float satMul = 1.0 + (u_hsl0.y * w0 + u_hsl1.y * w1 + u_hsl2.y * w2 + u_hsl3.y * w3 + u_hsl4.y * w4 + u_hsl5.y * w5);
+                float lumMul = 1.0 + (u_hsl0.z * w0 + u_hsl1.z * w1 + u_hsl2.z * w2 + u_hsl3.z * w3 + u_hsl4.z * w4 + u_hsl5.z * w5);
+                hsl.x = hsl.x + hueShift;
+                if (hsl.x < 0.0) hsl.x += 360.0;
+                if (hsl.x >= 360.0) hsl.x -= 360.0;
+                hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
+                hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
+                col = hsl_to_rgb(hsl);
+                return max(col, 0.0);
+            }
+
+            half4 main(float2 fragCoord) {
+                float2 uv = fragCoord / u_resolution;
+                if (u_split > 0.001) {
+                    if (abs(uv.x - u_split) < 0.002) {
+                        return half4(1.0, 1.0, 1.0, 1.0);
+                    }
+                }
+
+                float2 srcUv = apply_geom(uv);
+                srcUv = clamp(srcUv, 0.0, 1.0);
+                // Image child shaders are sampled in pixel space of the source.
+                float2 srcCoord = srcUv * u_srcSize;
+                half4 orig = sample(u_image, srcCoord);
+
+                float lookAmt = 1.0 - u_before;
+                if (u_split > 0.001 && uv.x < u_split) {
+                    lookAmt = 0.0;
+                }
+                lookAmt *= sample(u_mask, fragCoord).r;
+
+                float3 lin = u_srcLinear > 0.5 ? max(orig.rgb, 0.0) : to_lin(orig.rgb);
+
+                if (u_denoiseLuma > 0.001 || u_denoiseChroma > 0.001) {
+                    float3 acc = lin;
+                    acc += to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb);
+                    acc += to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb);
+                    acc += to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb);
+                    acc += to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb);
+                    acc *= 0.2;
+                    float lc = luma2020(lin);
+                    float lb = luma2020(acc);
+                    float3 cc = lin - lc;
+                    float3 cb = acc - lb;
+                    lin = float3(mix(lc, lb, u_denoiseLuma)) + mix(cc, cb, u_denoiseChroma);
+                }
+
+                float3 processed = lin;
+                if (lookAmt > 0.001) {
+                    processed = apply_look(lin);
+                }
+
+                if (u_sharpen > 0.001) {
+                    float lC = luma2020(to_lin(orig.rgb));
+                    float lN = luma2020(to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb));
+                    lN += luma2020(to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb));
+                    lN += luma2020(to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb));
+                    lN += luma2020(to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb));
+                    lN *= 0.25;
+                    processed += (lC - lN) * u_sharpen * 1.35;
+                }
+
+                float3 disp = to_srgb(filmic(processed));
+                if (u_hasLut > 0.5 && u_lutAmount > 0.001) {
+                    disp = mix(disp, sample_lut(disp), u_lutAmount);
+                }
+
+                float3 outc = mix(orig.rgb, disp, lookAmt);
+                outc = clamp(outc, 0.0, 1.0);
+                return half4(outc, orig.a);
+            }
+        ";
+}
