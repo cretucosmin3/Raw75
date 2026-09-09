@@ -39,20 +39,36 @@ public sealed class WorkspaceView : View
     private IconButton _btnBefore = null!;
     private IconButton _btnSplit = null!;
     private VisualElement _zoomLabel = null!;
+    private VisualElement _photoTitleBadge = null!;
 
-    private SliderRow _temp = null!, _tint = null!, _ev = null!, _con = null!, _hi = null!, _sh = null!;
-    private SliderRow _wh = null!, _bk = null!, _vib = null!, _sat = null!;
-    private SliderRow _sharp = null!, _dnY = null!, _dnC = null!, _straight = null!;
+    private PanelGroup _wbGroup = null!;
+    private PanelGroup _exposureGroup = null!;
+    private PanelGroup _hdrGroup = null!;
+    private PanelGroup _localGroup = null!;
+    private PanelGroup _toneGroup = null!;
+    private PanelGroup _reconGroup = null!;
+    private PanelGroup _hslGroup = null!;
+    private PanelGroup _detailGroup = null!;
+    private PanelGroup _geomGroup = null!;
+
+    private SliderRow _temp = null!, _tint = null!, _ev = null!, _con = null!, _sat = null!;
+    private SliderRow _hi = null!, _sh = null!, _wh = null!, _bk = null!, _vib = null!;
+    private SliderRow _sharp = null!, _noise = null!, _straight = null!;
+
+    // HSL dynamic
+    private HslBandSelector _hslSelector = null!;
+    private SliderRow _hslActiveHue = null!;
+    private SliderRow _hslActiveSat = null!;
+    private SliderRow _hslActiveLuma = null!;
+    private int _activeHslBand = 0;
 
     // Tone
-    private PanelGroup _toneGroup = null!;
     private IconButton _btnToneSigmoid = null!;
     private IconButton _btnToneFilmic = null!;
     private SliderRow _sigContrast = null!;
     private SliderRow _sigSkew = null!;
 
     // Reconstruction
-    private PanelGroup _reconGroup = null!;
     private IconButton _btnReconOff = null!;
     private IconButton _btnReconOpposed = null!;
     private IconButton _btnReconLCh = null!;
@@ -61,16 +77,13 @@ public sealed class WorkspaceView : View
     private SliderRow _reconSpatial = null!;
 
     // Local contrast
-    private PanelGroup _localGroup = null!;
     private SliderRow _localDetail = null!;
     private SliderRow _localHighlights = null!;
     private SliderRow _localShadows = null!;
     private SliderRow _localMidtones = null!;
 
-    private readonly SliderRow[] _hslH = new SliderRow[6];
-    private readonly SliderRow[] _hslS = new SliderRow[6];
-    private readonly SliderRow[] _hslL = new SliderRow[6];
     private IconButton _matchGray = null!;
+    private IconButton _btnCropGeom = null!;
     private SKImage? _filmThumb;
 
     private static readonly string[] HslNames = { "Red", "Orange", "Yellow", "Green", "Aqua", "Blue" };
@@ -119,18 +132,31 @@ public sealed class WorkspaceView : View
             }
         };
         AddElement(brand);
-        var open = Chip("Open", 118, 10, 72, 28);
+        var open = Chip("📂 Open", 118, 10, 84, 28);
+        open.Transform.Anchor = Anchor.Left | Anchor.Top;
         open.Clicked += OpenFiles;
-        var folder = Chip("Folder", 198, 10, 72, 28);
+        var folder = Chip("📁 Folder", 208, 10, 92, 28);
+        folder.Transform.Anchor = Anchor.Left | Anchor.Top;
         folder.Clicked += OpenWorkspace;
-        var settings = Chip("Settings", W - 196, 10, 88, 28);
+
+        _photoTitleBadge = Label("PhotoTitle", "", W * 0.5f - 180, 12, 360, 24, Theme.TextDim, 12, 500);
+        _photoTitleBadge.Style.Text.Alignment = TextAlign.Center;
+        _photoTitleBadge.Transform.Anchor = Anchor.Top;
+
+        var settings = Chip("⚙️ Settings", W - 212, 10, 100, 28);
+        settings.Transform.Anchor = Anchor.Right | Anchor.Top;
         settings.Clicked += OpenSettings;
-        var exp = Chip("Export", W - 100, 10, 80, 28, primary: true);
+        var exp = Chip("🚀 Export", W - 104, 10, 92, 28, primary: true);
+        exp.Transform.Anchor = Anchor.Right | Anchor.Top;
         exp.Clicked += StartExport;
 
+        // Left dock background + cards
+        AddElement(Bar("LeftDock", Theme.Window, 0, top, L, H - top - film - st, Anchor.Left | Anchor.Top | Anchor.Bottom));
+
+        float leftInset = 10f;
         _nav = new NavigatorBox
         {
-            Transform = new Transform(0, top, L, 148)
+            Transform = new Transform(leftInset, top + leftInset, L - leftInset * 2, 148)
             {
                 Anchor = Anchor.Left | Anchor.Top
             }
@@ -142,9 +168,10 @@ public sealed class WorkspaceView : View
         };
         AddElement(_nav);
 
+        float presetTop = top + leftInset + 148 + 14f;
         _presets = new PresetList
         {
-            Transform = new Transform(0, top + 148, L, H - top - 148 - film - st)
+            Transform = new Transform(leftInset, presetTop, L - leftInset * 2, H - presetTop - leftInset - film - st)
             {
                 Anchor = Anchor.Left | Anchor.Top | Anchor.Bottom
             }
@@ -154,18 +181,23 @@ public sealed class WorkspaceView : View
         _presets.Deleted += DeletePreset;
         AddElement(_presets);
 
+        // Right dock background + cards
+        AddElement(Bar("RightDock", Theme.Window, W - R, top, R, H - top - film - st, Anchor.Right | Anchor.Top | Anchor.Bottom));
+
+        float rightInset = 10f;
         _histogram = new HistogramView
         {
-            Transform = new Transform(W - R, top, R, 88)
+            Transform = new Transform(W - R + rightInset, top + rightInset, R - rightInset * 2, 88)
             {
                 Anchor = Anchor.Right | Anchor.Top
             }
         };
         AddElement(_histogram);
 
+        float rightDockTop = top + rightInset + 88 + 14f;
         var rightDock = new RightColumn
         {
-            Transform = new Transform(W - R, top + 88, R, H - top - 88 - film - st)
+            Transform = new Transform(W - R, rightDockTop, R, H - rightDockTop - film - st)
             {
                 Anchor = Anchor.Right | Anchor.Top | Anchor.Bottom
             }
@@ -207,7 +239,7 @@ public sealed class WorkspaceView : View
             Anchor.Left | Anchor.Right | Anchor.Bottom);
         float tx = photoX + 8;
         float ty = photoY + photoH + 2;
-        _btnCrop = Tool("Crop", tx, ty); tx += 60;
+        _btnCrop = Tool("✂️ Crop", tx, ty, 74); tx += 78;
         _btnCrop.Clicked += ToggleCrop;
         _photo.CropCommitted += () =>
         {
@@ -232,9 +264,9 @@ public sealed class WorkspaceView : View
             }
             PushLook(fast: false, settle: true);
         };
-        _btnBefore = Tool("Before", tx, ty); tx += 68;
+        _btnBefore = Tool("🔲 Before", tx, ty, 82); tx += 86;
         _btnBefore.Clicked += ToggleBefore;
-        _btnSplit = Tool("Split", tx, ty); tx += 60;
+        _btnSplit = Tool("🌓 Split", tx, ty, 74); tx += 78;
         _btnSplit.Clicked += () =>
         {
             _btnSplit.Toggled = !_btnSplit.Toggled;
@@ -242,15 +274,15 @@ public sealed class WorkspaceView : View
             var d = _session.Active;
             _photo.SetBefore(d?.Proxy);
         };
-        var rotL = Tool("Rot L", tx, ty); tx += 60;
+        var rotL = Tool("⟲ -90°", tx, ty, 70); tx += 74;
         rotL.Clicked += () => Rotate(-1);
-        var rotR = Tool("Rot R", tx, ty); tx += 60;
+        var rotR = Tool("⟳ +90°", tx, ty, 70); tx += 74;
         rotR.Clicked += () => Rotate(1);
-        var flipH = Tool("Flip H", tx, ty); tx += 64;
+        var flipH = Tool("⇄ Flip H", tx, ty, 78); tx += 82;
         flipH.Clicked += () => Flip(h: true);
-        var flipV = Tool("Flip V", tx, ty); tx += 64;
+        var flipV = Tool("⇅ Flip V", tx, ty, 78); tx += 82;
         flipV.Clicked += () => Flip(h: false);
-        var hdr = Tool("HDR", tx, ty);
+        var hdr = Tool("⚡ HDR", tx, ty, 72);
         hdr.Clicked += MergeHdr;
         _zoomLabel = Label("ZoomPct", "Fit", photoX + photoW - 70, photoY + photoH + 6, 64, 20, Theme.TextDim, 11, 400);
 
@@ -287,66 +319,37 @@ public sealed class WorkspaceView : View
 
     private void BuildRightPanels(RightColumn host)
     {
-        var basic = new PanelGroup("Basic");
-        _temp = BindSlider(basic, "Temp", -100, 100, "0", (s, v) => s.Temperature = v, s => s.Temperature);
-        _tint = BindSlider(basic, "Tint", -100, 100, "0", (s, v) => s.Tint = v, s => s.Tint);
-        _ev = BindSlider(basic, "Exposure", -5, 5, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
-        _con = BindSlider(basic, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
-        _hi = BindSlider(basic, "Hi recovery", -100, 100, "0", (s, v) => s.Highlights = v, s => s.Highlights);
-        _sh = BindSlider(basic, "Shadow recovery", -100, 100, "0", (s, v) => s.Shadows = v, s => s.Shadows);
-        _wh = BindSlider(basic, "Whites", -100, 100, "0", (s, v) => s.Whites = v, s => s.Whites);
-        _bk = BindSlider(basic, "Blacks", -100, 100, "0", (s, v) => s.Blacks = v, s => s.Blacks);
-        _vib = BindSlider(basic, "Vibrance", -100, 100, "0", (s, v) => s.Vibrance = v, s => s.Vibrance);
-        _sat = BindSlider(basic, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
-        _matchGray = new IconButton("Match mid-gray");
-        _matchGray.Clicked += () =>
-        {
-            var d = _session.Active;
-            if (d == null) return;
-            d.Undo.Push(d.Settings);
-            d.Settings.MatchGray = !d.Settings.MatchGray;
-            _matchGray.Toggled = d.Settings.MatchGray;
-            PushLook(fast: false, settle: true);
-        };
-        basic.AddBody(_matchGray);
+        // 1. White Balance
+        _wbGroup = new PanelGroup("🌡️ White Balance");
+        _temp = BindSlider(_wbGroup, "Kelvin", -100, 100, "0", (s, v) => s.Temperature = v, s => s.Temperature);
+        _temp.GradientMode = SliderGradientMode.Kelvin;
+        _tint = BindSlider(_wbGroup, "Tint", -100, 100, "0", (s, v) => s.Tint = v, s => s.Tint);
+        _tint.GradientMode = SliderGradientMode.Tint;
+        _wbGroup.EnableAuto(AutoWhiteBalance, "Auto White Balance");
+        _wbGroup.EnableReset(ResetWhiteBalance, "Reset White Balance");
+        _wbGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableWhiteBalance = en);
 
-        _toneGroup = new PanelGroup("Tone");
-        _btnToneSigmoid = new IconButton("Sigmoid");
-        _btnToneFilmic = new IconButton("Filmic");
-        _btnToneSigmoid.Clicked += () => SetToneMode(ToneMode.Sigmoid);
-        _btnToneFilmic.Clicked += () => SetToneMode(ToneMode.Filmic);
-        _toneGroup.AddBody(new ModeChipRow([_btnToneSigmoid, _btnToneFilmic]));
-        _sigContrast = BindSlider(_toneGroup, "Tone Contrast", 0.1f, 10.0f, "0.00",
-            (s, v) => s.SigmoidContrast = v, s => s.SigmoidContrast, 1.5f);
-        _sigSkew = BindSlider(_toneGroup, "Skew", -1.0f, 1.0f, "0.00",
-            (s, v) => s.SigmoidSkew = v, s => s.SigmoidSkew, 0.0f);
-        _toneGroup.ExpandedChanged += exp =>
-        {
-            if (exp && _session.Active != null)
-                UpdateToneModeUi(_session.Active.Settings);
-        };
+        // 2. Exposure
+        _exposureGroup = new PanelGroup("☀️ Exposure");
+        _ev = BindSlider(_exposureGroup, "Exposure", -5, 5, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
+        _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
+        _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
+        _exposureGroup.EnableAuto(AutoExposure, "Auto Exposure");
+        _exposureGroup.EnableReset(ResetExposure, "Reset Exposure");
+        _exposureGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableExposure = en);
 
-        _reconGroup = new PanelGroup("Reconstruction");
-        _btnReconOff = new IconButton("Off");
-        _btnReconOpposed = new IconButton("Opposed");
-        _btnReconLCh = new IconButton("LCh");
-        _btnReconOff.Clicked += () => SetReconMode(HighlightMode.Off);
-        _btnReconOpposed.Clicked += () => SetReconMode(HighlightMode.Opposed);
-        _btnReconLCh.Clicked += () => SetReconMode(HighlightMode.LCh);
-        _reconGroup.AddBody(new ModeChipRow([_btnReconOff, _btnReconOpposed, _btnReconLCh]));
-        _reconThreshold = BindSlider(_reconGroup, "Threshold", 0.5f, 2.0f, "0.00",
-            (s, v) => s.HighlightThreshold = v, s => s.HighlightThreshold, 1.0f);
-        _reconColor = BindSlider(_reconGroup, "Color amount", 0f, 100f, "0",
-            (s, v) => s.ColorReconstructionAmount = v, s => s.ColorReconstructionAmount, 0f);
-        _reconSpatial = BindSlider(_reconGroup, "Spatial", 0f, 100f, "0",
-            (s, v) => s.ColorReconstructionSpatial = v, s => s.ColorReconstructionSpatial, 0f);
-        _reconGroup.ExpandedChanged += exp =>
-        {
-            if (exp && _session.Active != null)
-                UpdateReconModeUi(_session.Active.Settings);
-        };
+        // 3. High Dynamic Range
+        _hdrGroup = new PanelGroup("🏔️ High Dynamic Range");
+        _hi = BindSlider(_hdrGroup, "Highlight", -100, 100, "0", (s, v) => s.Highlights = v, s => s.Highlights);
+        _sh = BindSlider(_hdrGroup, "Shadow", -100, 100, "0", (s, v) => s.Shadows = v, s => s.Shadows);
+        _wh = BindSlider(_hdrGroup, "Whites", -100, 100, "0", (s, v) => s.Whites = v, s => s.Whites);
+        _bk = BindSlider(_hdrGroup, "Blacks", -100, 100, "0", (s, v) => s.Blacks = v, s => s.Blacks);
+        _hdrGroup.EnableAuto(AutoHdr, "Auto HDR");
+        _hdrGroup.EnableReset(ResetHdr, "Reset High Dynamic Range");
+        _hdrGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHdr = en);
 
-        _localGroup = new PanelGroup("Local contrast");
+        // 4. Clarity & Local Contrast
+        _localGroup = new PanelGroup("🔍 Clarity & Local");
         _localDetail = BindSlider(_localGroup, "Detail", -1.0f, 4.0f, "0.00",
             (s, v) =>
             {
@@ -357,51 +360,156 @@ public sealed class WorkspaceView : View
             (s, v) => s.LocalContrastHighlights = v, s => s.LocalContrastHighlights, 0f);
         _localShadows = BindSlider(_localGroup, "Shadows", -100f, 100f, "0",
             (s, v) => s.LocalContrastShadows = v, s => s.LocalContrastShadows, 0f);
-        _localMidtones = BindSlider(_localGroup, "Midtone range", 0f, 100f, "0",
+        _localMidtones = BindSlider(_localGroup, "Midtones", 0f, 100f, "0",
             (s, v) => s.LocalContrastMidtones = v, s => s.LocalContrastMidtones, 50f);
         _localGroup.ExpandedChanged += exp =>
         {
             if (exp && _session.Active != null)
                 UpdateLocalContrastUi(_session.Active.Settings);
         };
+        _localGroup.EnableReset(ResetLocalContrast, "Reset Clarity & Local Contrast");
+        _localGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableLocalContrast = en);
 
-        UpdateReconModeUi(new DevelopSettings());
-        UpdateLocalContrastUi(new DevelopSettings());
-
-        var hsl = new PanelGroup("HSL");
-        for (int i = 0; i < 6; i++)
+        // 5. Tone & Curve
+        _toneGroup = new PanelGroup("📈 Tone & Curve");
+        _btnToneSigmoid = new IconButton("Sigmoid");
+        _btnToneFilmic = new IconButton("Filmic");
+        _btnToneSigmoid.Clicked += () => SetToneMode(ToneMode.Sigmoid);
+        _btnToneFilmic.Clicked += () => SetToneMode(ToneMode.Filmic);
+        _toneGroup.AddBody(new ModeChipRow([_btnToneSigmoid, _btnToneFilmic]));
+        _sigContrast = BindSlider(_toneGroup, "Contrast", 0.1f, 10.0f, "0.00",
+            (s, v) => s.SigmoidContrast = v, s => s.SigmoidContrast, 1.5f);
+        _sigSkew = BindSlider(_toneGroup, "Skew", -1.0f, 1.0f, "0.00",
+            (s, v) => s.SigmoidSkew = v, s => s.SigmoidSkew, 0.0f);
+        _toneGroup.ExpandedChanged += exp =>
         {
-            int idx = i;
-            _hslH[i] = BindSlider(hsl, HslNames[i] + " H", -100, 100, "0",
-                (s, v) => { var b = s.Hsl[idx]; b.Hue = v; s.Hsl[idx] = b; },
-                s => s.Hsl[idx].Hue);
-            _hslS[i] = BindSlider(hsl, HslNames[i] + " S", -100, 100, "0",
-                (s, v) => { var b = s.Hsl[idx]; b.Sat = v; s.Hsl[idx] = b; },
-                s => s.Hsl[idx].Sat);
-            _hslL[i] = BindSlider(hsl, HslNames[i] + " L", -100, 100, "0",
-                (s, v) => { var b = s.Hsl[idx]; b.Luma = v; s.Hsl[idx] = b; },
-                s => s.Hsl[idx].Luma);
-        }
+            if (exp && _session.Active != null)
+                UpdateToneModeUi(_session.Active.Settings);
+        };
+        _toneGroup.EnableReset(ResetTone, "Reset Tone");
+        _toneGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableTone = en);
 
-        var detail = new PanelGroup("Detail");
-        _sharp = BindSlider(detail, "Sharpen", 0, 150, "0", (s, v) => s.Sharpen = v, s => s.Sharpen);
-        _dnY = BindSlider(detail, "Luma NR", 0, 100, "0", (s, v) => s.DenoiseLuma = v, s => s.DenoiseLuma);
-        _dnC = BindSlider(detail, "Chroma NR", 0, 100, "0", (s, v) => s.DenoiseChroma = v, s => s.DenoiseChroma);
+        // 6. Highlight Reconstruction
+        _reconGroup = new PanelGroup("✨ Reconstruction");
+        _btnReconOff = new IconButton("Off");
+        _btnReconOpposed = new IconButton("Opposed");
+        _btnReconLCh = new IconButton("LCh");
+        _btnReconOff.Clicked += () => SetReconMode(HighlightMode.Off);
+        _btnReconOpposed.Clicked += () => SetReconMode(HighlightMode.Opposed);
+        _btnReconLCh.Clicked += () => SetReconMode(HighlightMode.LCh);
+        _reconGroup.AddBody(new ModeChipRow([_btnReconOff, _btnReconOpposed, _btnReconLCh]));
+        _reconThreshold = BindSlider(_reconGroup, "Threshold", 0.20f, 1.00f, "0.00",
+            (s, v) => s.HighlightThreshold = v, s => s.HighlightThreshold, 0.95f);
+        _reconColor = BindSlider(_reconGroup, "Color amount", 0f, 100f, "0",
+            (s, v) => s.ColorReconstructionAmount = v, s => s.ColorReconstructionAmount, 0f);
+        _reconSpatial = BindSlider(_reconGroup, "Spatial", 0f, 100f, "0",
+            (s, v) => s.ColorReconstructionSpatial = v, s => s.ColorReconstructionSpatial, 0f);
+        _reconGroup.ExpandedChanged += exp =>
+        {
+            if (exp && _session.Active != null)
+                UpdateReconModeUi(_session.Active.Settings);
+        };
+        _reconGroup.EnableReset(ResetReconstruction, "Reset Reconstruction");
+        _reconGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableReconstruction = en);
 
-        var xform = new PanelGroup("Transform");
-        _straight = BindSlider(xform, "Straighten", -45, 45, "0.0", (s, v) =>
+        // 7. Color Editor (HSL)
+        _hslGroup = new PanelGroup("🎨 Color Editor (HSL)");
+        _hslSelector = new HslBandSelector();
+        _hslSelector.BandSelected += OnHslBandSelected;
+        _hslGroup.AddBody(_hslSelector);
+
+        _hslActiveHue = BindSlider(_hslGroup, "Hue", -100, 100, "0",
+            (s, v) => SetActiveHsl(0, v), s => GetActiveHsl(0));
+        _hslActiveSat = BindSlider(_hslGroup, "Saturation", -100, 100, "0",
+            (s, v) => SetActiveHsl(1, v), s => GetActiveHsl(1));
+        _hslActiveLuma = BindSlider(_hslGroup, "Lightness", -100, 100, "0",
+            (s, v) => SetActiveHsl(2, v), s => GetActiveHsl(2));
+
+        _vib = BindSlider(_hslGroup, "Vibrance", -100, 100, "0",
+            (s, v) => s.Vibrance = v, s => s.Vibrance);
+
+        _matchGray = new IconButton("⚖️ Match mid-gray");
+        _matchGray.Clicked += () =>
+        {
+            var d = _session.Active;
+            if (d == null) return;
+            d.Undo.Push(d.Settings);
+            d.Settings.MatchGray = !d.Settings.MatchGray;
+            _matchGray.Toggled = d.Settings.MatchGray;
+            PushLook(fast: false, settle: true);
+        };
+        _hslGroup.AddBody(_matchGray);
+        _hslGroup.EnableReset(ResetHsl, "Reset Color Editor");
+        _hslGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHsl = en);
+
+        // 8. Detail & Noise Reduction
+        _detailGroup = new PanelGroup("🔍 Detail & Noise");
+        _sharp = BindSlider(_detailGroup, "Sharpen", 0, 150, "0",
+            (s, v) => s.Sharpen = v, s => s.Sharpen, 0f);
+        _noise = BindSlider(_detailGroup, "Noise", -100, 100, "0",
+            (s, v) =>
+            {
+                s.Noise = v;
+                s.DenoiseLuma = v < 0 ? -v : 0;
+                s.DenoiseChroma = v < 0 ? -v : 0;
+            }, s => s.Noise, 0f);
+        _detailGroup.EnableReset(ResetDetail, "Reset Detail");
+        _detailGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableDetail = en);
+
+        // 9. Rotation & Geometry
+        _geomGroup = new PanelGroup("📐 Geometry & Crop");
+        _straight = BindSlider(_geomGroup, "Straighten", -45, 45, "0.0", (s, v) =>
         {
             s.Straighten = v;
             _photo.StraightenPreview = v;
         }, s => s.Straighten);
 
-        host.AddBody(basic);
+        var rotL = new IconButton("⟲ Rotate -90°");
+        rotL.Clicked += () => Rotate(-1);
+        var rotR = new IconButton("⟳ Rotate +90°");
+        rotR.Clicked += () => Rotate(1);
+        _geomGroup.AddBody(new ModeChipRow([rotL, rotR]));
+
+        var flH = new IconButton("⇄ Flip H");
+        flH.Clicked += () => Flip(true);
+        var flV = new IconButton("⇅ Flip V");
+        flV.Clicked += () => Flip(false);
+        _geomGroup.AddBody(new ModeChipRow([flH, flV]));
+
+        _btnCropGeom = new IconButton("✂️ Crop Tool (C)");
+        _btnCropGeom.Clicked += ToggleCrop;
+        _geomGroup.AddBody(_btnCropGeom);
+        _geomGroup.EnableAuto(AutoStraighten, "Auto Straighten");
+        _geomGroup.EnableReset(ResetGeometry, "Reset Geometry");
+        _geomGroup.EnabledChanged += en => OnSectionToggled(s =>
+        {
+            s.EnableGeometry = en;
+            _photo.StraightenPreview = en ? s.Straighten : 0f;
+        });
+
+        UpdateReconModeUi(new DevelopSettings());
+        UpdateLocalContrastUi(new DevelopSettings());
+
+        host.AddBody(_wbGroup);
+        host.AddBody(_exposureGroup);
+        host.AddBody(_hdrGroup);
+        host.AddBody(_localGroup);
         host.AddBody(_toneGroup);
         host.AddBody(_reconGroup);
-        host.AddBody(_localGroup);
-        host.AddBody(hsl);
-        host.AddBody(detail);
-        host.AddBody(xform);
+        host.AddBody(_hslGroup);
+        host.AddBody(_detailGroup);
+        host.AddBody(_geomGroup);
+    }
+
+    private void OnSectionToggled(Action<DevelopSettings> apply)
+    {
+        if (_sync) return;
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        apply(d.Settings);
+        WorkspaceStore.SaveSettings(d);
+        PushLook(fast: false, settle: true);
     }
 
     private void SetToneMode(ToneMode mode)
@@ -447,10 +555,9 @@ public sealed class WorkspaceView : View
 
     private void UpdateLocalContrastUi(DevelopSettings s)
     {
-        bool active = Math.Abs(s.LocalContrastDetail) > 0.001f;
-        _localHighlights.Visible = active;
-        _localShadows.Visible = active;
-        _localMidtones.Visible = active;
+        _localHighlights.Visible = true;
+        _localShadows.Visible = true;
+        _localMidtones.Visible = true;
         _localGroup.InvalidateLayout();
     }
 
@@ -503,12 +610,14 @@ public sealed class WorkspaceView : View
         var d = _session.Active;
         if (d == null)
         {
+            if (_photoTitleBadge != null) _photoTitleBadge.Text = "";
             _photo.SetDeveloped(null, owns: false);
             _nav.Image = null;
             SetStatus("Drop a RAW, Open, or pick a Folder.");
             return;
         }
 
+        if (_photoTitleBadge != null) _photoTitleBadge.Text = $"📷  {d.Name}";
         _photo.SetDroppedPath(d.Path);
         WorkspaceStore.HydrateLook(d);
         if (!d.SourceRgba.HasPixels)
@@ -580,6 +689,16 @@ public sealed class WorkspaceView : View
     {
         _sync = true;
         var s = d.Settings;
+        _wbGroup.SectionEnabled = s.EnableWhiteBalance;
+        _exposureGroup.SectionEnabled = s.EnableExposure;
+        _hdrGroup.SectionEnabled = s.EnableHdr;
+        _localGroup.SectionEnabled = s.EnableLocalContrast;
+        _toneGroup.SectionEnabled = s.EnableTone;
+        _reconGroup.SectionEnabled = s.EnableReconstruction;
+        _hslGroup.SectionEnabled = s.EnableHsl;
+        _detailGroup.SectionEnabled = s.EnableDetail;
+        _geomGroup.SectionEnabled = s.EnableGeometry;
+
         _temp.Value = s.Temperature;
         _tint.Value = s.Tint;
         _ev.Value = s.Exposure;
@@ -603,17 +722,223 @@ public sealed class WorkspaceView : View
         _localMidtones.Value = s.LocalContrastMidtones;
         UpdateLocalContrastUi(s);
         _sharp.Value = s.Sharpen;
-        _dnY.Value = s.DenoiseLuma;
-        _dnC.Value = s.DenoiseChroma;
+        _noise.Value = s.Noise != 0 ? s.Noise : (s.DenoiseLuma > 0 ? -s.DenoiseLuma : 0);
         _straight.Value = s.Straighten;
         _photo.StraightenPreview = s.Straighten;
+        SyncActiveHslSliders();
+        _sync = false;
+    }
+
+    private void SyncActiveHslSliders()
+    {
+        var d = _session.Active;
+        var s = d?.Settings ?? new DevelopSettings();
+        int idx = Math.Clamp(_activeHslBand, 0, 5);
+        _sync = true;
+        _hslActiveHue.Value = s.Hsl[idx].Hue;
+        _hslActiveSat.Value = s.Hsl[idx].Sat;
+        _hslActiveLuma.Value = s.Hsl[idx].Luma;
+        _sync = false;
+    }
+
+    private void OnHslBandSelected(int idx)
+    {
+        _activeHslBand = idx;
+        SyncActiveHslSliders();
+    }
+
+    private void SetActiveHsl(int component, float val)
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        int idx = Math.Clamp(_activeHslBand, 0, 5);
+        var b = d.Settings.Hsl[idx];
+        if (component == 0) b.Hue = val;
+        else if (component == 1) b.Sat = val;
+        else if (component == 2) b.Luma = val;
+        d.Settings.Hsl[idx] = b;
+    }
+
+    private float GetActiveHsl(int component)
+    {
+        var d = _session.Active;
+        if (d == null) return 0f;
+        int idx = Math.Clamp(_activeHslBand, 0, 5);
+        var b = d.Settings.Hsl[idx];
+        return component == 0 ? b.Hue : component == 1 ? b.Sat : b.Luma;
+    }
+
+    private void ResetWhiteBalance()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Temperature = 0;
+        d.Settings.Tint = 0;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset White Balance");
+    }
+
+    private void ResetExposure()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Exposure = 0;
+        d.Settings.Contrast = 0;
+        d.Settings.Saturation = 0;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Exposure");
+    }
+
+    private void ResetHdr()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Highlights = 0;
+        d.Settings.Shadows = 0;
+        d.Settings.Whites = 0;
+        d.Settings.Blacks = 0;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset High Dynamic Range");
+    }
+
+    private void ResetLocalContrast()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.LocalContrastDetail = 0;
+        d.Settings.LocalContrastHighlights = 0;
+        d.Settings.LocalContrastShadows = 0;
+        d.Settings.LocalContrastMidtones = 50;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Clarity & Local Contrast");
+    }
+
+    private void ResetTone()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.ToneMode = ToneMode.Sigmoid;
+        d.Settings.SigmoidContrast = 1.5f;
+        d.Settings.SigmoidSkew = 0.0f;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Tone & Curve");
+    }
+
+    private void ResetReconstruction()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.ReconstructionMode = HighlightMode.Off;
+        d.Settings.HighlightThreshold = 0.95f;
+        d.Settings.ColorReconstructionAmount = 0;
+        d.Settings.ColorReconstructionSpatial = 0;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Highlight Reconstruction");
+    }
+
+    private void ResetHsl()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
         for (int i = 0; i < 6; i++)
         {
-            _hslH[i].Value = s.Hsl[i].Hue;
-            _hslS[i].Value = s.Hsl[i].Sat;
-            _hslL[i].Value = s.Hsl[i].Luma;
+            d.Settings.Hsl[i].Hue = 0;
+            d.Settings.Hsl[i].Sat = 0;
+            d.Settings.Hsl[i].Luma = 0;
         }
-        _sync = false;
+        d.Settings.Vibrance = 0;
+        d.Settings.MatchGray = false;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Color Editor (HSL)");
+    }
+
+    private void ResetDetail()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Sharpen = 0;
+        d.Settings.Noise = 0;
+        d.Settings.DenoiseLuma = 0;
+        d.Settings.DenoiseChroma = 0;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Detail & Noise Reduction");
+    }
+
+    private void ResetGeometry()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Straighten = 0;
+        d.Settings.Rotate90 = 0;
+        d.Settings.FlipH = false;
+        d.Settings.FlipV = false;
+        _photo.NotifyOrientation(0, flipH: false, flipV: false);
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Rotation & Geometry");
+    }
+
+    private void AutoWhiteBalance()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Temperature = Math.Clamp(d.Settings.Temperature * 0.5f, -100, 100);
+        d.Settings.Tint = Math.Clamp(d.Settings.Tint * 0.5f, -100, 100);
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Auto White Balance applied");
+    }
+
+    private void AutoExposure()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Exposure = Math.Clamp(d.Settings.Exposure + 0.25f, -5f, 5f);
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Auto Exposure applied");
+    }
+
+    private void AutoHdr()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Highlights = -25f;
+        d.Settings.Shadows = 20f;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Auto HDR applied");
+    }
+
+    private void AutoStraighten()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Straighten = 0f;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Auto Straighten leveled");
     }
 
     private void InvalidateActive()
@@ -1092,10 +1417,10 @@ public sealed class WorkspaceView : View
         return e;
     }
 
-    private IconButton Tool(string caption, float x, float y)
+    private IconButton Tool(string caption, float x, float y, float w = 62f)
     {
         var b = new IconButton(caption);
-        b.Transform = new Transform(x, y, 62, Theme.ToolH - 4)
+        b.Transform = new Transform(x, y, w, Theme.ToolH - 4)
         {
             Anchor = Anchor.Left | Anchor.Bottom
         };
@@ -1140,7 +1465,7 @@ internal sealed class RightColumn : ScrollContainer
     {
         float ox = Transform.Computed.X;
         float oy = Transform.Computed.Y;
-        float inset = 8f;
+        float inset = 10f;
         float w = Math.Max(1f, Transform.Width - inset * 2f);
         float y = inset;
         foreach (var c in _items)
@@ -1148,7 +1473,7 @@ internal sealed class RightColumn : ScrollContainer
             if (c == null || !c.Visible) continue;
             float ch = c.GetPreferredSize(w, 0).Height;
             c.Transform.SetAbsoluteFrame(ox + inset, oy + y, w, ch);
-            y += ch + 8f;
+            y += ch + 14f;
         }
         SetContentSize(Transform.Width, Math.Max(y + inset, Transform.Computed.Height));
         base.LayoutChildren();

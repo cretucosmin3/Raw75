@@ -25,35 +25,45 @@ internal static class DevelopCpu
         int dh = hasCrop ? Math.Max(1, (int)Math.Round(fh * ch)) : fh;
         byte[] dst = new byte[dw * dh * 4];
 
-        float temp = s.Temperature / 100f;
-        float tint = s.Tint / 100f;
-        float ev = MathF.Pow(2f, s.Exposure);
-        float contrast = s.Contrast / 100f;
-        float hi = s.Highlights / 100f;
-        float shd = s.Shadows / 100f;
-        float whites = s.Whites / 100f;
-        float blacks = s.Blacks / 100f;
-        float vib = s.Vibrance / 100f;
-        float sat = s.Saturation / 100f;
-        float sharp = fast ? 0f : s.Sharpen / 150f;
-        float denoiseLuma = s.DenoiseLuma / 100f;
-        float denoiseChroma = s.DenoiseChroma / 100f;
-        float straight = s.Straighten;
+        float temp = s.EnableWhiteBalance ? s.Temperature / 100f : 0f;
+        float tint = s.EnableWhiteBalance ? s.Tint / 100f : 0f;
+        float ev = s.EnableExposure ? MathF.Pow(2f, s.Exposure) : 1f;
+        float contrast = s.EnableExposure ? s.Contrast / 100f : 0f;
+        float hi = s.EnableHdr ? s.Highlights / 100f : 0f;
+        float shd = s.EnableHdr ? s.Shadows / 100f : 0f;
+        float whites = s.EnableHdr ? s.Whites / 100f : 0f;
+        float blacks = s.EnableHdr ? s.Blacks / 100f : 0f;
+        float vib = s.EnableHsl ? s.Vibrance / 100f : 0f;
+        float sat = s.EnableExposure ? s.Saturation / 100f : 0f;
+        float sharp = !s.EnableDetail ? 0f : s.Sharpen / 150f;
+        float noiseVal = s.EnableDetail ? s.Noise : 0f;
+        if (noiseVal == 0f && s.EnableDetail && (s.DenoiseLuma > 0f || s.DenoiseChroma > 0f))
+            noiseVal = -Math.Max(s.DenoiseLuma, s.DenoiseChroma);
+        bool doDenoise = noiseVal < -0.5f;
+        bool doGrain = noiseVal > 0.5f;
+        float denoiseAmt = doDenoise ? -noiseVal / 100f : 0f;
+        float grainAmt = doGrain ? noiseVal / 100f : 0f;
+
+        float straight = s.EnableGeometry ? s.Straighten : 0f;
         bool flipH = s.FlipH;
         bool flipV = s.FlipV;
-        ToneMode toneMode = s.ToneMode;
-        SigmoidParams sig = toneMode == ToneMode.Sigmoid
+        ToneMode toneMode = s.EnableTone ? s.ToneMode : ToneMode.Sigmoid;
+        SigmoidParams sig = (s.EnableTone && toneMode == ToneMode.Sigmoid)
             ? SigmoidParams.Compute(s.SigmoidContrast, s.SigmoidSkew)
-            : default;
-        HighlightMode reconMode = s.ReconstructionMode;
+            : (s.EnableTone ? default : SigmoidParams.Compute(1.0f, 0.0f));
+        HighlightMode reconMode = s.EnableReconstruction ? s.ReconstructionMode : HighlightMode.Off;
         float hlThreshold = s.HighlightThreshold;
-        bool doRecon = reconMode != HighlightMode.Off && !fast;
-        float clipThresh = hlThreshold * 0.987f;
+        bool doRecon = reconMode != HighlightMode.Off;
+        float clipThresh = Math.Clamp(hlThreshold * 0.985f, 0.05f, 1.0f);
 
-        bool hasColorRecon = s.ColorReconstructionAmount > 0.001f;
-        bool hasLocalContrast = Math.Abs(s.LocalContrastDetail) > 0.001f;
-        bool neighbor = (denoiseLuma > 0.001f || denoiseChroma > 0.001f);
-        bool needBuffer = hasColorRecon || hasLocalContrast || neighbor;
+        bool hasColorRecon = s.EnableReconstruction && s.ColorReconstructionAmount > 0.001f;
+        bool hasLocalContrast = s.EnableLocalContrast && (
+            Math.Abs(s.LocalContrastDetail) > 0.001f ||
+            Math.Abs(s.LocalContrastHighlights) > 0.001f ||
+            Math.Abs(s.LocalContrastShadows) > 0.001f ||
+            Math.Abs(s.LocalContrastMidtones - 50.0f) > 0.5f);
+        bool neighbor = doDenoise;
+        bool needBuffer = hasColorRecon || hasLocalContrast || neighbor || doGrain;
 
         bool linearSrc = src.HasLinear;
         float[]? linSrc = src.Linear;
@@ -121,6 +131,20 @@ internal static class DevelopCpu
                             ApplyOpposedReconstruction(
                                 sx, sy, sw, sh, linearSrc, linSrc, rgba,
                                 clipThresh, ref r, ref g, ref b);
+                        }
+
+                        // Smooth highlight rolloff: compress excess into [clipThresh..1.0]
+                        // so recovered highlights show visible texture instead of blowing out
+                        float maxCh = Math.Max(r, Math.Max(g, b));
+                        if (maxCh > clipThresh)
+                        {
+                            float over = maxCh - clipThresh;
+                            float headroom = Math.Max(1.0f - clipThresh, 0.08f);
+                            float compressed = clipThresh + headroom * (1f - MathF.Exp(-over / headroom));
+                            float scale = compressed / maxCh;
+                            r *= scale;
+                            g *= scale;
+                            b *= scale;
                         }
                     }
                 }
@@ -203,14 +227,14 @@ internal static class DevelopCpu
                 float r = look[li];
                 float g = look[li + 1];
                 float b = look[li + 2];
-                if (neighbor)
+                if (doDenoise)
                 {
                     float lc = Luma(r, g, b);
                     float c0_r = r - lc;
                     float c0_g = g - lc;
                     float c0_b = b - lc;
 
-                    float rangeSigma = 0.08f + 0.25f * denoiseLuma;
+                    float rangeSigma = 0.05f + 0.35f * denoiseAmt;
                     float sumL = lc;
                     float sumW_L = 1.0f;
                     float sumCr = c0_r, sumCg = c0_g, sumCb = c0_b;
@@ -220,53 +244,64 @@ internal static class DevelopCpu
                     {
                         SampleLook(look, dw, dh, x + dx, y + dy, out float nr, out float ng, out float nb);
                         float nl = Luma(nr, ng, nb);
-                        if (denoiseLuma > 0.001f)
-                        {
-                            float wl = sw * MathF.Exp(-MathF.Abs(nl - lc) / rangeSigma);
-                            sumL += nl * wl;
-                            sumW_L += wl;
-                        }
-                        if (denoiseChroma > 0.001f)
-                        {
-                            sumCr += (nr - nl) * sw;
-                            sumCg += (ng - nl) * sw;
-                            sumCb += (nb - nl) * sw;
-                            sumW_C += sw;
-                        }
+                        float wl = sw * MathF.Exp(-MathF.Abs(nl - lc) / rangeSigma);
+                        sumL += nl * wl;
+                        sumW_L += wl;
+                        sumCr += (nr - nl) * sw;
+                        sumCg += (ng - nl) * sw;
+                        sumCb += (nb - nl) * sw;
+                        sumW_C += sw;
                     }
 
-                    // Inner 4 taps (radius 2)
-                    Tap(-2, 0, 0.8f);
-                    Tap(2, 0, 0.8f);
-                    Tap(0, -2, 0.8f);
-                    Tap(0, 2, 0.8f);
+                    // Inner taps (radius 1 & 2)
+                    Tap(-1, 0, 1.0f); Tap(1, 0, 1.0f); Tap(0, -1, 1.0f); Tap(0, 1, 1.0f);
+                    Tap(-2, 0, 0.8f); Tap(2, 0, 0.8f); Tap(0, -2, 0.8f); Tap(0, 2, 0.8f);
 
                     if (!fast)
                     {
-                        // Ring 1 (radius 1 & 1.41)
-                        Tap(-1, 0, 1.0f); Tap(1, 0, 1.0f); Tap(0, -1, 1.0f); Tap(0, 1, 1.0f);
+                        // Ring 1 diagonals
                         Tap(-1, -1, 0.8f); Tap(1, -1, 0.8f); Tap(-1, 1, 0.8f); Tap(1, 1, 0.8f);
 
-                        // Ring 2 (radius 2.83 & 3)
+                        // Ring 2 diagonals & ring 3
                         Tap(-2, -2, 0.5f); Tap(2, -2, 0.5f); Tap(-2, 2, 0.5f); Tap(2, 2, 0.5f);
                         Tap(-3, 0, 0.4f); Tap(3, 0, 0.4f); Tap(0, -3, 0.4f); Tap(0, 3, 0.4f);
 
-                        // Ring 3 (radius 4 & 4.24)
+                        // Ring 4
                         Tap(-4, 0, 0.25f); Tap(4, 0, 0.25f); Tap(0, -4, 0.25f); Tap(0, 4, 0.25f);
-                        Tap(-3, -3, 0.2f); Tap(3, -3, 0.2f); Tap(-3, 3, 0.2f); Tap(3, 3, 0.2f);
                     }
 
-                    float kL = fast ? denoiseLuma * 0.5f : denoiseLuma;
-                    float kC = fast ? denoiseChroma * 0.5f : denoiseChroma;
+                    float kL = fast ? denoiseAmt * 0.80f : denoiseAmt;
+                    float kC = fast ? denoiseAmt * 0.90f : denoiseAmt;
 
-                    float finalL = denoiseLuma > 0.001f ? (lc + (sumL / sumW_L - lc) * kL) : lc;
-                    float finalCr = denoiseChroma > 0.001f ? (c0_r + (sumCr / sumW_C - c0_r) * kC) : c0_r;
-                    float finalCg = denoiseChroma > 0.001f ? (c0_g + (sumCg / sumW_C - c0_g) * kC) : c0_g;
-                    float finalCb = denoiseChroma > 0.001f ? (c0_b + (sumCb / sumW_C - c0_b) * kC) : c0_b;
+                    float finalL = lc + (sumL / sumW_L - lc) * kL;
+                    float finalCr = c0_r + (sumCr / sumW_C - c0_r) * kC;
+                    float finalCg = c0_g + (sumCg / sumW_C - c0_g) * kC;
+                    float finalCb = c0_b + (sumCb / sumW_C - c0_b) * kC;
 
                     r = MathF.Max(0f, finalL + finalCr);
                     g = MathF.Max(0f, finalL + finalCg);
                     b = MathF.Max(0f, finalL + finalCb);
+                }
+
+                if (doGrain)
+                {
+                    float lum = Luma(r, g, b);
+                    float midtoneCurve = MathF.Sin(Math.Clamp(lum, 0f, 1f) * MathF.PI);
+                    uint n1 = (uint)(x * 73856093 ^ y * 19349663 ^ 12345);
+                    n1 = (n1 ^ (n1 >> 13)) * 0x5bd1e995;
+                    n1 ^= n1 >> 15;
+                    float g1 = (n1 & 0xFFFF) / 32768.0f - 1.0f;
+
+                    uint n2 = (uint)((x >> 1) * 73856093 ^ (y >> 1) * 19349663 ^ 67891);
+                    n2 = (n2 ^ (n2 >> 13)) * 0x5bd1e995;
+                    n2 ^= n2 >> 15;
+                    float g2 = (n2 & 0xFFFF) / 32768.0f - 1.0f;
+
+                    float rawGrain = g1 * 0.70f + g2 * 0.30f;
+                    float grain = rawGrain * grainAmt * 0.12f * (0.35f + 0.65f * midtoneCurve);
+                    r = MathF.Max(0f, r + grain);
+                    g = MathF.Max(0f, g + grain);
+                    b = MathF.Max(0f, b + grain);
                 }
 
                 int di = (y * dw + x) * 4;
@@ -278,8 +313,13 @@ internal static class DevelopCpu
             }
         }
 
-        if (!fast && sharp > 0.001f)
-            UnsharpBytes(dst, dw, dh, sharp);
+        if (sharp > 0.001f)
+        {
+            if (fast)
+                UnsharpBytesFast(dst, dw, dh, sharp);
+            else
+                UnsharpBytes(dst, dw, dh, sharp);
+        }
         return new RasterBuffer(dst, dw, dh);
     }
 
@@ -298,6 +338,29 @@ internal static class DevelopCpu
                 AccByte(copy, dw, dh, x, y - 1, ref accR, ref accG, ref accB);
                 AccByte(copy, dw, dh, x, y + 1, ref accR, ref accG, ref accB);
                 float nr = accR * 0.25f, ng = accG * 0.25f, nb = accB * 0.25f;
+                dst[di] = ToByte((copy[di] + (copy[di] - nr) * amt) / 255f);
+                dst[di + 1] = ToByte((copy[di + 1] + (copy[di + 1] - ng) * amt) / 255f);
+                dst[di + 2] = ToByte((copy[di + 2] + (copy[di + 2] - nb) * amt) / 255f);
+            }
+        }
+    }
+
+    private static void UnsharpBytesFast(byte[] dst, int dw, int dh, float sharp)
+    {
+        byte[] copy = (byte[])dst.Clone();
+        float amt = sharp * 2.0f;
+        for (int y = 1; y < dh - 1; y++)
+        {
+            int row = y * dw * 4;
+            int prevRow = (y - 1) * dw * 4;
+            int nextRow = (y + 1) * dw * 4;
+            for (int x = 1; x < dw - 1; x++)
+            {
+                int di = row + x * 4;
+                float nr = (copy[di - 4] + copy[di + 4] + copy[prevRow + x * 4] + copy[nextRow + x * 4]) * 0.25f;
+                float ng = (copy[di - 3] + copy[di + 5] + copy[prevRow + x * 4 + 1] + copy[nextRow + x * 4 + 1]) * 0.25f;
+                float nb = (copy[di - 2] + copy[di + 6] + copy[prevRow + x * 4 + 2] + copy[nextRow + x * 4 + 2]) * 0.25f;
+
                 dst[di] = ToByte((copy[di] + (copy[di] - nr) * amt) / 255f);
                 dst[di + 1] = ToByte((copy[di + 1] + (copy[di + 1] - ng) * amt) / 255f);
                 dst[di + 2] = ToByte((copy[di + 2] + (copy[di + 2] - nb) * amt) / 255f);
@@ -332,7 +395,7 @@ internal static class DevelopCpu
         g *= ev;
         b *= ev;
 
-        if (s.MatchGray)
+        if (s.EnableHsl && s.MatchGray)
         {
             float lum0 = Luma(r, g, b);
             if (lum0 < 1e-4f) lum0 = 1e-4f;
@@ -563,9 +626,9 @@ internal static class DevelopCpu
         float chromaG = cntChromaG > 0.5f ? sumChromaG / cntChromaG : 0f;
         float chromaB = cntChromaB > 0.5f ? sumChromaB / cntChromaB : 0f;
 
-        if (r >= clipThresh) r = MathF.Max(r, ref0r + chromaR);
-        if (g >= clipThresh) g = MathF.Max(g, ref0g + chromaG);
-        if (b >= clipThresh) b = MathF.Max(b, ref0b + chromaB);
+        if (r >= clipThresh) r = ref0r + chromaR;
+        if (g >= clipThresh) g = ref0g + chromaG;
+        if (b >= clipThresh) b = ref0b + chromaB;
     }
 
     private static void AccumulateOpposedNeighbor(
@@ -653,9 +716,9 @@ internal static class DevelopCpu
         float recG = lum - h * 0.16666667f - c / Sqrt12;
         float recB = lum + h * 0.33333333f;
 
-        if (r >= clipThresh) r = MathF.Max(r, recR);
-        if (g >= clipThresh) g = MathF.Max(g, recG);
-        if (b >= clipThresh) b = MathF.Max(b, recB);
+        if (r >= clipThresh) r = recR;
+        if (g >= clipThresh) g = recG;
+        if (b >= clipThresh) b = recB;
     }
 
     private static void AccumulateLchNeighbor(
@@ -981,7 +1044,8 @@ internal static class DevelopCpu
     private static void ApplyLocalLaplacianSettle(
         float[] look, int w, int h, float detail, float midtones, float shadows, float highlights)
     {
-        if (Math.Abs(detail) < 1e-4f) return;
+        if (Math.Abs(detail) < 1e-4f && Math.Abs(highlights) < 1e-4f && Math.Abs(shadows) < 1e-4f && Math.Abs(midtones - 50f) < 0.1f)
+            return;
 
         float sigma = Math.Clamp(midtones / 100f, 0.05f, 1f);
         float shd = shadows / 100f;
@@ -1089,7 +1153,9 @@ internal static class DevelopCpu
     private static void ApplyLocalContrastFast(
         float[] look, int w, int h, float detail, float midtones, float shadows, float highlights)
     {
-        if (Math.Abs(detail) < 1e-4f) return;
+        if (Math.Abs(detail) < 1e-4f && Math.Abs(highlights) < 1e-4f && Math.Abs(shadows) < 1e-4f && Math.Abs(midtones - 50f) < 0.1f)
+            return;
+
         float sigma = Math.Clamp(midtones / 100f, 0.05f, 1f);
         float shd = shadows / 100f;
         float hi = highlights / 100f;
@@ -1098,6 +1164,10 @@ internal static class DevelopCpu
         for (int i = 0; i < w * h; i++)
             lums[i] = Math.Max(Luma(look[3 * i], look[3 * i + 1], look[3 * i + 2]), 1e-4f);
 
+        int step = Math.Max(2, Math.Min(w, h) / 48);
+        int s2 = step * 2;
+        int s3 = step * 3;
+
         for (int y = 0; y < h; y++)
         {
             for (int x = 0; x < w; x++)
@@ -1105,18 +1175,41 @@ internal static class DevelopCpu
                 int idx = y * w + x;
                 float lum = lums[idx];
 
-                float l1 = lums[y * w + Math.Max(0, x - 1)];
-                float l2 = lums[y * w + Math.Min(w - 1, x + 1)];
-                float l3 = lums[Math.Max(0, y - 1) * w + x];
-                float l4 = lums[Math.Min(h - 1, y + 1) * w + x];
+                float l1 = lums[y * w + Math.Max(0, x - step)];
+                float l2 = lums[y * w + Math.Min(w - 1, x + step)];
+                float l3 = lums[Math.Max(0, y - step) * w + x];
+                float l4 = lums[Math.Min(h - 1, y + step) * w + x];
+
+                float l5 = lums[y * w + Math.Max(0, x - s2)];
+                float l6 = lums[y * w + Math.Min(w - 1, x + s2)];
+                float l7 = lums[Math.Max(0, y - s2) * w + x];
+                float l8 = lums[Math.Min(h - 1, y + s2) * w + x];
+
+                float l9 = lums[y * w + Math.Max(0, x - s3)];
+                float l10 = lums[y * w + Math.Min(w - 1, x + s3)];
+                float l11 = lums[Math.Max(0, y - s3) * w + x];
+                float l12 = lums[Math.Min(h - 1, y + s3) * w + x];
 
                 float rangeSigma = 0.35f;
                 float w1 = MathF.Exp(-MathF.Abs(l1 - lum) / rangeSigma);
                 float w2 = MathF.Exp(-MathF.Abs(l2 - lum) / rangeSigma);
                 float w3 = MathF.Exp(-MathF.Abs(l3 - lum) / rangeSigma);
                 float w4 = MathF.Exp(-MathF.Abs(l4 - lum) / rangeSigma);
-                float sumW = 1f + w1 + w2 + w3 + w4;
-                float g = (lum + l1 * w1 + l2 * w2 + l3 * w3 + l4 * w4) / sumW;
+
+                float w5 = 0.6f * MathF.Exp(-MathF.Abs(l5 - lum) / rangeSigma);
+                float w6 = 0.6f * MathF.Exp(-MathF.Abs(l6 - lum) / rangeSigma);
+                float w7 = 0.6f * MathF.Exp(-MathF.Abs(l7 - lum) / rangeSigma);
+                float w8 = 0.6f * MathF.Exp(-MathF.Abs(l8 - lum) / rangeSigma);
+
+                float w9 = 0.35f * MathF.Exp(-MathF.Abs(l9 - lum) / rangeSigma);
+                float w10 = 0.35f * MathF.Exp(-MathF.Abs(l10 - lum) / rangeSigma);
+                float w11 = 0.35f * MathF.Exp(-MathF.Abs(l11 - lum) / rangeSigma);
+                float w12 = 0.35f * MathF.Exp(-MathF.Abs(l12 - lum) / rangeSigma);
+
+                float sumW = 1f + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 + w9 + w10 + w11 + w12;
+                float g = (lum + l1 * w1 + l2 * w2 + l3 * w3 + l4 * w4
+                               + l5 * w5 + l6 * w6 + l7 * w7 + l8 * w8
+                               + l9 * w9 + l10 * w10 + l11 * w11 + l12 * w12) / sumW;
 
                 float newLum = CurveScalar(lum, g, sigma, shd, hi, detail);
                 float gain = Math.Max(newLum, 0f) / lum;
@@ -1131,27 +1224,17 @@ internal static class DevelopCpu
     private static float CurveScalar(float x, float g, float sigma, float shadows, float highlights, float clarity)
     {
         float c = x - g;
-        float val;
-        if (c > 2f * sigma)
-            val = g + sigma + (1f + shadows) * (c - sigma);
-        else if (c < -2f * sigma)
-            val = g - sigma + (1f + highlights) * (c + sigma);
-        else if (c > 0f)
-        {
-            float t = Math.Clamp(c / (2f * sigma), 0f, 1f);
-            float t2 = t * t;
-            float mt = 1f - t;
-            val = g + sigma * 2f * mt * t + t2 * (sigma + sigma * (1f + shadows));
-        }
+        float detailGain = 1.0f + clarity * 0.75f;
+        float sc = c * detailGain;
+
+        if (sc > 0f)
+            sc *= (1.0f + highlights * 0.60f);
         else
-        {
-            float t = Math.Clamp(-c / (2f * sigma), 0f, 1f);
-            float t2 = t * t;
-            float mt = 1f - t;
-            val = g - sigma * 2f * mt * t + t2 * (-sigma - sigma * (1f + highlights));
-        }
-        val += clarity * c * MathF.Exp(-c * c / MathF.Max(2f * sigma * sigma / 3f, 0.001f));
-        return val;
+            sc *= (1.0f - shadows * 0.60f);
+
+        float midWeight = MathF.Exp(-MathF.Abs(x - sigma) / MathF.Max(sigma, 0.1f));
+        float val = g + sc * (0.65f + 0.35f * midWeight);
+        return MathF.Max(val, 0.0001f);
     }
 
     private static float[] GaussReduce(float[] src, int sw, int sh, int dw, int dh)

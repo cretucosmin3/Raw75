@@ -5,7 +5,7 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>Shared chrome: hover, press, optional checked (toggle) and primary (accent) fill.</summary>
+/// <summary>Shared tactile chrome button: subtle drop shadow, hover, press, toggle and primary states.</summary>
 public class IconButton : VisualElement
 {
     private readonly string _caption;
@@ -54,11 +54,12 @@ public class IconButton : VisualElement
                 Color = Theme.Hairline,
                 Roundness = Theme.RadiusSm
             },
+            Shadow = new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 45)),
             Text = new TextStyle
             {
                 Color = Theme.Text,
-                Size = 12,
-                Weight = 600,
+                Size = 11,
+                Weight = 500,
                 Alignment = TextAlign.Center,
                 Padding = 0
             }
@@ -100,7 +101,7 @@ public class IconButton : VisualElement
 
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
-        float textW = Math.Max(56f, _caption.Length * 7.2f + 16f);
+        float textW = Math.Max(58f, _caption.Length * 7.5f + 18f);
         float w = maxWidth > 0 ? Math.Min(textW, maxWidth) : textW;
         float h = Theme.ToolH;
         if (maxHeight > 0) h = Math.Min(h, maxHeight);
@@ -111,23 +112,24 @@ public class IconButton : VisualElement
     {
         bool accent = _primary || _toggled;
         SKColor fill = accent ? Theme.Accent : Theme.Button;
-        SKColor border = accent ? Theme.Accent : Theme.Hairline;
+        SKColor border = accent ? Theme.AccentHover : Theme.Hairline;
         SKColor text = accent ? Theme.ButtonTextOnAccent : Theme.Text;
 
         if (_pressed)
         {
-            fill = Theme.Darken(fill, 28);
-            border = Theme.Darken(border, 20);
+            fill = Theme.Darken(fill, 24);
+            border = Theme.Darken(border, 18);
         }
         else if (_hovered)
         {
-            fill = Theme.Lighten(fill, accent ? 18 : 22);
-            border = accent ? Theme.Lighten(Theme.Accent, 24) : Theme.Lighten(Theme.Hairline, 40);
+            fill = accent ? Theme.Lighten(fill, 16) : Theme.ButtonHover;
+            border = accent ? Theme.Lighten(Theme.Accent, 24) : Theme.HairlineStrong;
         }
 
         Style.BackColor = fill;
         Style.Border.Color = border;
         Style.Text.Color = text;
+        Style.Text.Weight = accent ? 600 : 500;
         InvalidatePaint();
     }
 }

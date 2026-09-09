@@ -24,6 +24,17 @@ public enum HighlightMode
 /// </summary>
 public sealed class DevelopSettings
 {
+    // Section bypass / enable switches (true = module active, false = module bypassed)
+    public bool EnableWhiteBalance { get; set; } = true;
+    public bool EnableExposure { get; set; } = true;
+    public bool EnableHdr { get; set; } = true;
+    public bool EnableLocalContrast { get; set; } = true;
+    public bool EnableTone { get; set; } = true;
+    public bool EnableReconstruction { get; set; } = true;
+    public bool EnableHsl { get; set; } = true;
+    public bool EnableDetail { get; set; } = true;
+    public bool EnableGeometry { get; set; } = true;
+
     // White balance. Temp/Tint 0 = as shot (camera multipliers).
     public float Temperature { get; set; } // -100..100 (amber/blue offset)
     public float Tint { get; set; }        // -100..100 (green/magenta)
@@ -60,8 +71,9 @@ public sealed class DevelopSettings
     public HslBand[] Hsl { get; set; } = CreateHsl();
 
     public float Sharpen { get; set; }       // 0..150
-    public float DenoiseLuma { get; set; }   // 0..100
-    public float DenoiseChroma { get; set; } // 0..100
+    public float Noise { get; set; }         // -100..100 (-100 = denoise, +100 = film grain, 0 = off)
+    public float DenoiseLuma { get; set; }   // legacy fallback 0..100
+    public float DenoiseChroma { get; set; } // legacy fallback 0..100
 
     public string? LutPath { get; set; }
     public float LutAmount { get; set; } = 1f; // 0..1
@@ -97,6 +109,16 @@ public sealed class DevelopSettings
 
     public void CopyFrom(DevelopSettings src)
     {
+        EnableWhiteBalance = src.EnableWhiteBalance;
+        EnableExposure = src.EnableExposure;
+        EnableHdr = src.EnableHdr;
+        EnableLocalContrast = src.EnableLocalContrast;
+        EnableTone = src.EnableTone;
+        EnableReconstruction = src.EnableReconstruction;
+        EnableHsl = src.EnableHsl;
+        EnableDetail = src.EnableDetail;
+        EnableGeometry = src.EnableGeometry;
+
         Temperature = src.Temperature;
         Tint = src.Tint;
         Exposure = src.Exposure;
@@ -120,6 +142,7 @@ public sealed class DevelopSettings
         LocalContrastShadows = src.LocalContrastShadows;
         LocalContrastMidtones = src.LocalContrastMidtones;
         Sharpen = src.Sharpen;
+        Noise = src.Noise;
         DenoiseLuma = src.DenoiseLuma;
         DenoiseChroma = src.DenoiseChroma;
         LutPath = src.LutPath;
@@ -139,7 +162,16 @@ public sealed class DevelopSettings
     public bool LooksLike(DevelopSettings o)
     {
         if (o == null) return false;
-        return Temperature == o.Temperature && Tint == o.Tint
+        return EnableWhiteBalance == o.EnableWhiteBalance
+            && EnableExposure == o.EnableExposure
+            && EnableHdr == o.EnableHdr
+            && EnableLocalContrast == o.EnableLocalContrast
+            && EnableTone == o.EnableTone
+            && EnableReconstruction == o.EnableReconstruction
+            && EnableHsl == o.EnableHsl
+            && EnableDetail == o.EnableDetail
+            && EnableGeometry == o.EnableGeometry
+            && Temperature == o.Temperature && Tint == o.Tint
             && Exposure == o.Exposure && Contrast == o.Contrast
             && Highlights == o.Highlights && Shadows == o.Shadows
             && Whites == o.Whites && Blacks == o.Blacks
@@ -151,7 +183,7 @@ public sealed class DevelopSettings
             && ColorReconstructionAmount == o.ColorReconstructionAmount && ColorReconstructionSpatial == o.ColorReconstructionSpatial
             && LocalContrastDetail == o.LocalContrastDetail && LocalContrastHighlights == o.LocalContrastHighlights
             && LocalContrastShadows == o.LocalContrastShadows && LocalContrastMidtones == o.LocalContrastMidtones
-            && Sharpen == o.Sharpen && DenoiseLuma == o.DenoiseLuma && DenoiseChroma == o.DenoiseChroma
+            && Sharpen == o.Sharpen && Noise == o.Noise && DenoiseLuma == o.DenoiseLuma && DenoiseChroma == o.DenoiseChroma
             && LutPath == o.LutPath && LutAmount == o.LutAmount
             && CropX == o.CropX && CropY == o.CropY && CropW == o.CropW && CropH == o.CropH
             && Straighten == o.Straighten && Rotate90 == o.Rotate90 && FlipH == o.FlipH && FlipV == o.FlipV

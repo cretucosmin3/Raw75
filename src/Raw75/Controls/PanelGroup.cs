@@ -1,20 +1,42 @@
 using System;
 using System.Collections.Generic;
 using Blossom.Core.Visual;
+using Blossom.Core.Visual.Enums;
 using Silk.NET.Input;
 using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>Collapsible Develop-panel section: disclosure header + stacked body.</summary>
+/// <summary>
+/// Capture One Pro-inspired collapsible section card:
+/// Crisp 28px header with rotating disclosure caret, title, 1px bottom separator line,
+/// drop shadow, and right-aligned micro-actions (Auto, Reset, Presets).
+/// </summary>
 public class PanelGroup : VisualElement
 {
     private readonly VisualElement _header;
+    private readonly CheckToggle _toggle;
+    private readonly VisualElement _titleEl;
+    private readonly List<VisualElement> _actions = new();
     private readonly List<VisualElement> _body = new();
     private bool _expanded = true;
+    private bool _sectionEnabled = true;
     private string _title;
 
     public event Action<bool>? ExpandedChanged;
+    public event Action<bool>? EnabledChanged;
+
+    public bool SectionEnabled
+    {
+        get => _sectionEnabled;
+        set
+        {
+            if (_sectionEnabled == value) return;
+            _sectionEnabled = value;
+            _toggle.Checked = value;
+            ApplyEnabledVisuals();
+        }
+    }
 
     public bool Expanded
     {
@@ -32,35 +54,63 @@ public class PanelGroup : VisualElement
     {
         Name = $"PanelGroup_{title}";
         _title = title ?? "";
-        Padding = new Thickness(14, 8, 14, 14);
+        Padding = new Thickness(10, 8, 10, 10);
         Style = new ElementStyle
         {
-            BackColor = Theme.Panel,
+            BackColor = Theme.Section,
             Border = new BorderStyle
             {
                 Width = 1,
                 Color = Theme.Hairline,
                 Roundness = Theme.Radius
-            }
+            },
+            Shadow = new ShadowStyle(0, 2.5f, 3, 3, new SKColor(0, 0, 0, 75))
         };
 
         _header = new VisualElement
         {
             Name = $"{Name}_Header",
+            Cursor = StandardCursor.Hand,
+            Style = new ElementStyle
+            {
+                BackColor = Theme.SectionHeader,
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.HairlineSubtle,
+                    Roundness = 0
+                }
+            }
+        };
+
+        _toggle = new CheckToggle(initialChecked: true);
+        _toggle.CheckedChanged += isChecked =>
+        {
+            _sectionEnabled = isChecked;
+            ApplyEnabledVisuals();
+            EnabledChanged?.Invoke(_sectionEnabled);
+        };
+        _header.AddChild(_toggle);
+
+        _titleEl = new VisualElement
+        {
+            Name = $"{Name}_Title",
+            IsClickthrough = true,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
                 Text = new TextStyle
                 {
-                    Color = Theme.TextDim,
+                    Color = Theme.Text,
                     Size = 11,
                     Weight = 600,
                     Alignment = TextAlign.Left,
-                    Padding = 10
+                    Padding = 0
                 }
             }
         };
-        _header.Cursor = StandardCursor.Hand;
+
+        _header.AddChild(_titleEl);
         _header.Events.OnClick += (_, args) =>
         {
             if (args.Button != (int)MouseButton.Left) return;
@@ -68,8 +118,111 @@ public class PanelGroup : VisualElement
             args.Handled = true;
         };
 
+        _header.Events.OnMouseEnter += _ =>
+        {
+            if (_header.Style != null)
+                _header.Style.BackColor = Theme.SectionHeaderHover;
+            InvalidatePaint();
+        };
+
+        _header.Events.OnMouseLeave += _ =>
+        {
+            if (_header.Style != null)
+                _header.Style.BackColor = Theme.SectionHeader;
+            InvalidatePaint();
+        };
+
         AddChild(_header);
         ApplyExpanded();
+    }
+
+    public void EnableAuto(Action onAuto, string tooltip = "Auto Adjust")
+    {
+        AddHeaderAction("A", tooltip, onAuto, isAccentHover: true);
+    }
+
+    public void EnableReset(Action onReset, string tooltip = "Reset Section")
+    {
+        AddHeaderAction("↺", tooltip, onReset);
+    }
+
+    public void EnablePresets(Action onPresets, string tooltip = "Presets")
+    {
+        AddHeaderAction("⋯", tooltip, onPresets);
+    }
+
+    public void AddHeaderAction(string label, string tooltip, Action onClick, bool isAccentHover = false)
+    {
+        var btn = new VisualElement
+        {
+            Name = $"{Name}_Action_{label}",
+            Text = label,
+            Cursor = StandardCursor.Hand,
+            Style = new ElementStyle
+            {
+                BackColor = Theme.Well,
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.Hairline,
+                    Roundness = Theme.RadiusSm
+                },
+                Shadow = new ShadowStyle(0, 1, 1, 1, new SKColor(0, 0, 0, 35)),
+                Text = new TextStyle
+                {
+                    Color = Theme.TextSecondary,
+                    Size = 11,
+                    Weight = 600,
+                    Alignment = TextAlign.Center,
+                    Padding = 0
+                }
+            }
+        };
+
+        btn.Events.OnMouseEnter += _ =>
+        {
+            if (btn.Style != null)
+            {
+                btn.Style.BackColor = isAccentHover ? Theme.AccentSoft : Theme.ButtonHover;
+                btn.Style.Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = isAccentHover ? Theme.Accent : Theme.HairlineStrong,
+                    Roundness = Theme.RadiusSm
+                };
+                if (btn.Style.Text != null)
+                    btn.Style.Text.Color = isAccentHover ? Theme.Accent : Theme.Text;
+            }
+            InvalidatePaint();
+        };
+
+        btn.Events.OnMouseLeave += _ =>
+        {
+            if (btn.Style != null)
+            {
+                btn.Style.BackColor = Theme.Well;
+                btn.Style.Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.Hairline,
+                    Roundness = Theme.RadiusSm
+                };
+                if (btn.Style.Text != null)
+                    btn.Style.Text.Color = Theme.TextSecondary;
+            }
+            InvalidatePaint();
+        };
+
+        btn.Events.OnClick += (_, args) =>
+        {
+            if (args.Button != (int)MouseButton.Left) return;
+            onClick?.Invoke();
+            args.Handled = true; // Prevent header collapse/expand
+        };
+
+        _actions.Add(btn);
+        _header.AddChild(btn);
+        InvalidateLayout();
     }
 
     public void AddBody(VisualElement child)
@@ -110,6 +263,28 @@ public class PanelGroup : VisualElement
 
         _header.Transform.SetAbsoluteFrame(originX, originY, w, Theme.GroupHeadH);
 
+        // Layout checkbox toggle on the far left
+        float toggleSize = 14f;
+        float toggleX = originX + 8f;
+        float toggleY = originY + (Theme.GroupHeadH - toggleSize) * 0.5f;
+        _toggle.Transform.SetAbsoluteFrame(toggleX, toggleY, toggleSize, toggleSize);
+
+        // Layout action buttons (from right to left)
+        float ax = originX + w - 8f;
+        for (int i = _actions.Count - 1; i >= 0; i--)
+        {
+            float btnW = 22f;
+            float btnH = 20f;
+            ax -= btnW;
+            _actions[i].Transform.SetAbsoluteFrame(ax, originY + (Theme.GroupHeadH - btnH) * 0.5f, btnW, btnH);
+            ax -= 4f;
+        }
+
+        // Layout title after the checkbox
+        float titleLeft = toggleX + toggleSize + 7f;
+        float titleW = Math.Max(1f, ax - titleLeft);
+        _titleEl.Transform.SetAbsoluteFrame(titleLeft, originY + (Theme.GroupHeadH - 18f) * 0.5f, titleW, 18f);
+
         if (!_expanded) return;
 
         float y = Theme.GroupHeadH + Padding.Top;
@@ -129,9 +304,18 @@ public class PanelGroup : VisualElement
         }
     }
 
+    private void ApplyEnabledVisuals()
+    {
+        if (_titleEl.Style?.Text != null)
+        {
+            _titleEl.Style.Text.Color = _sectionEnabled ? Theme.Text : Theme.TextDisabled;
+        }
+        InvalidatePaint();
+    }
+
     private void ApplyExpanded()
     {
-        _header.Text = (_expanded ? "▾  " : "▸  ") + _title.ToUpperInvariant();
+        _titleEl.Text = (_expanded ? "▾  " : "▸  ") + _title.ToUpperInvariant();
         for (int i = 0; i < _body.Count; i++)
         {
             if (_body[i] != null)

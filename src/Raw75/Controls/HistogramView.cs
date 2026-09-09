@@ -24,13 +24,14 @@ public class HistogramView : VisualElement
         Overflow = OverflowMode.Clip;
         Style = new ElementStyle
         {
-            BackColor = Theme.PhotoWell,
+            BackColor = Theme.Section,
             Border = new BorderStyle
             {
                 Width = 1,
                 Color = Theme.Hairline,
                 Roundness = Theme.Radius
-            }
+            },
+            Shadow = new ShadowStyle(0, 2.5f, 3, 3, new SKColor(0, 0, 0, 75))
         };
     }
 
@@ -59,8 +60,25 @@ public class HistogramView : VisualElement
         float h = Transform.Computed.Height;
         if (w <= 2 || h <= 2) return;
 
-        var plot = new SKRect(1, 1, w - 1, h - 1);
-        if (!_hasData) return;
+        var plot = new SKRect(4, 4, w - 4, h - 4);
+        using (var bgPaint = new SKPaint { Color = Theme.Well, Style = SKPaintStyle.Fill, IsAntialias = true })
+        {
+            canvas.DrawRoundRect(plot, Theme.RadiusSm, Theme.RadiusSm, bgPaint);
+        }
+
+        using (var gridPaint = new SKPaint { Color = Theme.HairlineSubtle, StrokeWidth = 1f, IsAntialias = true })
+        {
+            canvas.DrawLine(plot.Left + plot.Width * 0.25f, plot.Top, plot.Left + plot.Width * 0.25f, plot.Bottom, gridPaint);
+            canvas.DrawLine(plot.Left + plot.Width * 0.50f, plot.Top, plot.Left + plot.Width * 0.50f, plot.Bottom, gridPaint);
+            canvas.DrawLine(plot.Left + plot.Width * 0.75f, plot.Top, plot.Left + plot.Width * 0.75f, plot.Bottom, gridPaint);
+        }
+
+        if (!_hasData)
+        {
+            using var borderPaint = new SKPaint { Color = Theme.HairlineSubtle, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, IsAntialias = true };
+            canvas.DrawRoundRect(plot, Theme.RadiusSm, Theme.RadiusSm, borderPaint);
+            return;
+        }
 
         float peak = 0f;
         for (int i = 0; i < BinCount; i++)

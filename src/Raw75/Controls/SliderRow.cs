@@ -9,15 +9,22 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
+public enum SliderGradientMode
+{
+    None = 0,
+    Kelvin = 1,
+    Tint = 2
+}
+
 /// <summary>
-/// Label above, value on the right, Export-quality track: fill bar + vertical handle.
+/// Compact Capture One Pro-inspired slider:
+/// Inline Single-Row (24px) or Micro-Stacked (30px) with proud pill thumb and recessed track.
 /// </summary>
 public class SliderRow : VisualElement
 {
-    private const float LabelH = 16f;
-    private const float ValueW = 44f;
-    private const float TrackAreaH = 22f;
-    private const float LabelTrackGap = 6f;
+    private const float LabelW = Theme.SliderLabelW; // 72f
+    private const float ValueW = Theme.SliderValueW; // 42f
+    private const float TrackMarginX = 5f;
     private static readonly TimeSpan DoubleClickWindow = TimeSpan.FromMilliseconds(280);
 
     private readonly VisualElement _labelEl;
@@ -28,9 +35,11 @@ public class SliderRow : VisualElement
     private readonly float _max;
     private string _label;
     private readonly string _valueFormat;
+    private readonly bool _inline;
     private bool _dragging;
     private bool _hovered;
     private DateTime _lastDownUtc = DateTime.MinValue;
+    private SliderGradientMode _gradientMode = SliderGradientMode.None;
 
     public float DefaultValue { get; set; }
 
@@ -51,11 +60,21 @@ public class SliderRow : VisualElement
         }
     }
 
+    public SliderGradientMode GradientMode
+    {
+        get => _gradientMode;
+        set
+        {
+            _gradientMode = value;
+            InvalidatePaint();
+        }
+    }
+
     public event Action<float>? Changed;
     public event Action? DragStarted;
     public event Action? DragEnded;
 
-    public SliderRow(string label, float min, float max, string valueFormat = "0")
+    public SliderRow(string label, float min, float max, string valueFormat = "0", bool inline = true)
     {
         Name = $"SliderRow_{label}";
         _label = label ?? "";
@@ -63,8 +82,9 @@ public class SliderRow : VisualElement
         _max = max <= min ? min + 1f : max;
         _valueFormat = string.IsNullOrEmpty(valueFormat) ? "0" : valueFormat;
         _value = Math.Clamp(0f, _min, _max);
+        _inline = inline;
 
-        Transform.Height = Theme.RowH;
+        Transform.Height = _inline ? Theme.RowH : Theme.RowHStacked;
         Cursor = StandardCursor.HResize;
         Style = new ElementStyle
         {
@@ -76,14 +96,14 @@ public class SliderRow : VisualElement
             Name = $"{Name}_Label",
             Text = _label,
             IsClickthrough = true,
-            Style = LabelStyle(TextAlign.Left)
+            Style = LabelStyle(TextAlign.Left, isValue: false)
         };
 
         _valueEl = new VisualElement
         {
             Name = $"{Name}_Value",
             IsClickthrough = true,
-            Style = LabelStyle(TextAlign.Right)
+            Style = LabelStyle(TextAlign.Right, isValue: true)
         };
 
         AddChild(_labelEl);
@@ -94,14 +114,14 @@ public class SliderRow : VisualElement
         Events.OnMouseMove += OnTrackMove;
         Events.OnMouseUp += OnTrackUp;
         Events.OnMouseDoubleClick += OnResetClick;
-        Events.OnMouseEnter += _ => { _hovered = true; InvalidatePaint(); };
-        Events.OnMouseLeave += _ => { _hovered = false; InvalidatePaint(); };
+        Events.OnMouseEnter += _ => { _hovered = true; UpdateValueColor(); InvalidatePaint(); };
+        Events.OnMouseLeave += _ => { _hovered = false; UpdateValueColor(); InvalidatePaint(); };
     }
 
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : 220f);
-        return new SKSize(w, Theme.RowH);
+        return new SKSize(w, _inline ? Theme.RowH : Theme.RowHStacked);
     }
 
     protected override void LayoutChildren()
@@ -110,8 +130,21 @@ public class SliderRow : VisualElement
         float originY = Transform.Computed.Y;
         float w = Math.Max(1f, Transform.Width);
 
-        _labelEl.Transform.SetAbsoluteFrame(originX, originY, Math.Max(1f, w - ValueW), LabelH);
-        _valueEl.Transform.SetAbsoluteFrame(originX + w - ValueW, originY, ValueW, LabelH);
+        if (_inline)
+        {
+            float rowH = Theme.RowH;
+            float textH = 15f;
+            float textY = originY + (rowH - textH) * 0.5f;
+
+            _labelEl.Transform.SetAbsoluteFrame(originX, textY, LabelW, textH);
+            _valueEl.Transform.SetAbsoluteFrame(originX + w - ValueW, textY, ValueW, textH);
+        }
+        else
+        {
+            float labelH = 13f;
+            _labelEl.Transform.SetAbsoluteFrame(originX, originY, Math.Max(1f, w - ValueW), labelH);
+            _valueEl.Transform.SetAbsoluteFrame(originX + w - ValueW, originY, ValueW, labelH);
+        }
     }
 
     protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
@@ -122,17 +155,60 @@ public class SliderRow : VisualElement
     private void DrawTrack(SKCanvas canvas)
     {
         float w = Transform.Computed.Width;
-        float y = LabelH + LabelTrackGap;
-        if (w < 2 || TrackAreaH < 2)
+        if (w < 10f)
             return;
 
+        float trackX;
+        float trackY;
+        float trackW;
+        float trackAreaH;
+
+        if (_inline)
+        {
+            trackX = LabelW + TrackMarginX;
+            trackW = Math.Max(10f, w - LabelW - ValueW - (TrackMarginX * 2f));
+            trackY = 0;
+            trackAreaH = Theme.RowH;
+        }
+        else
+        {
+            trackX = 0;
+            trackW = w;
+            trackY = 15f;
+            trackAreaH = Theme.RowHStacked - 15f;
+        }
+
         canvas.Save();
-        canvas.Translate(0, y);
+        canvas.Translate(trackX, trackY);
+
         float range = Math.Max(0.0001f, _max - _min);
         float t = Math.Clamp((_value - _min) / range, 0f, 1f);
         bool bipolar = _min < 0f && _max > 0f;
         float zeroT = Math.Clamp((0f - _min) / range, 0f, 1f);
-        SliderChrome.Draw(canvas, w, TrackAreaH, t, zeroT, bipolar, _hovered, _dragging);
+
+        SKShader? shader = null;
+        if (_gradientMode == SliderGradientMode.Kelvin)
+        {
+            shader = SKShader.CreateLinearGradient(
+                new SKPoint(0, 0),
+                new SKPoint(trackW, 0),
+                new[] { Theme.KelvinCold, new SKColor(230, 230, 235), Theme.KelvinWarm },
+                new[] { 0.0f, 0.5f, 1.0f },
+                SKShaderTileMode.Clamp);
+        }
+        else if (_gradientMode == SliderGradientMode.Tint)
+        {
+            shader = SKShader.CreateLinearGradient(
+                new SKPoint(0, 0),
+                new SKPoint(trackW, 0),
+                new[] { Theme.TintGreen, new SKColor(200, 200, 205), Theme.TintMagenta },
+                new[] { 0.0f, 0.5f, 1.0f },
+                SKShaderTileMode.Clamp);
+        }
+
+        SliderChrome.Draw(canvas, trackW, trackAreaH, t, zeroT, bipolar, _hovered, _dragging, shader);
+        shader?.Dispose();
+
         canvas.Restore();
     }
 
@@ -153,6 +229,7 @@ public class SliderRow : VisualElement
         _lastDownUtc = now;
         _dragging = true;
         CapturePointer();
+        UpdateValueColor();
         args.Handled = true;
         DragStarted?.Invoke();
         SetValueFromGlobal(args.Global.X);
@@ -192,6 +269,7 @@ public class SliderRow : VisualElement
         _dragging = false;
         if (HasPointerCapture)
             ReleasePointer();
+        UpdateValueColor();
         if (was)
             DragEnded?.Invoke();
     }
@@ -200,7 +278,19 @@ public class SliderRow : VisualElement
     {
         var local = PointToClient(globalX, 0);
         float w = Math.Max(1f, Transform.Computed.Width);
-        float t = Math.Clamp(local.X / w, 0f, 1f);
+
+        float t;
+        if (_inline)
+        {
+            float trackX = LabelW + TrackMarginX;
+            float trackW = Math.Max(1f, w - LabelW - ValueW - (TrackMarginX * 2f));
+            t = Math.Clamp((local.X - trackX) / trackW, 0f, 1f);
+        }
+        else
+        {
+            t = Math.Clamp(local.X / w, 0f, 1f);
+        }
+
         SetValue(_min + t * (_max - _min), fire: true);
     }
 
@@ -229,14 +319,22 @@ public class SliderRow : VisualElement
         }
     }
 
-    private static ElementStyle LabelStyle(TextAlign align) => new()
+    private void UpdateValueColor()
+    {
+        if (_valueEl.Style?.Text != null)
+        {
+            _valueEl.Style.Text.Color = (_dragging || _hovered) ? Theme.Text : Theme.TextDim;
+        }
+    }
+
+    private static ElementStyle LabelStyle(TextAlign align, bool isValue) => new()
     {
         BackColor = SKColors.Transparent,
         Text = new TextStyle
         {
-            Color = align == TextAlign.Right ? Theme.TextDim : Theme.Text,
+            Color = isValue ? Theme.TextDim : Theme.TextSecondary,
             Size = 11,
-            Weight = 500,
+            Weight = isValue ? 500 : 500,
             Alignment = align,
             Padding = 0
         }
