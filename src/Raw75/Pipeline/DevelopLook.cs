@@ -17,16 +17,13 @@ internal sealed class DevelopLook : IDisposable
     private SKShader? _img;
     private SKShader? _lut;
     private SKShader? _mask;
-    private SKShader? _fx;
+    private SKShader? _fxFast;
+    private SKShader? _fxQuality;
     private readonly SKPaint _paint = new() { IsAntialias = false, FilterQuality = SKFilterQuality.Medium };
     private bool _loggedOk;
     private bool _dirty = true;
-    private bool _cachedFast;
     private bool _cachedCrop;
-    private float _cachedDx, _cachedDy;
-    private float _cachedDw, _cachedDh;
     private float _cachedTx, _cachedTy, _cachedTw = 1f, _cachedTh = 1f;
-    private float _cachedCx, _cachedCy, _cachedCw = 1f, _cachedCh = 1f;
     private int _cachedFw, _cachedFh;
 
     public bool Failed { get; private set; }
@@ -66,23 +63,20 @@ internal sealed class DevelopLook : IDisposable
 
         try
         {
-            float dx = dest.Left;
-            float dy = dest.Top;
-            float dw = Math.Max(1f, dest.Width);
-            float dh = Math.Max(1f, dest.Height);
-            bool needShader = _dirty || _fx == null || _paint.Shader == null
-                || _cachedFast != fast || _cachedCrop != applyCrop
-                || Math.Abs(_cachedDx - dx) > 0.01f || Math.Abs(_cachedDy - dy) > 0.01f
-                || Math.Abs(_cachedDw - dw) > 0.01f || Math.Abs(_cachedDh - dh) > 0.01f
+            bool needRebind = _dirty
+                || _cachedCrop != applyCrop
                 || _cachedTx != tileX || _cachedTy != tileY
                 || _cachedTw != tileW || _cachedTh != tileH
-                || _cachedCx != viewCropX || _cachedCy != viewCropY
-                || _cachedCw != viewCropW || _cachedCh != viewCropH
                 || _cachedFw != frameW || _cachedFh != frameH
                 || !ReferenceEquals(_source, source);
 
-            if (needShader)
+            if (needRebind)
             {
+                if (_fxFast != null) GpuRetain.RetireShader(_fxFast);
+                if (_fxQuality != null) GpuRetain.RetireShader(_fxQuality);
+                _fxFast = null;
+                _fxQuality = null;
+
                 BindSource(source);
                 SKImage lut = DevelopRenderer.GetLut(settings, out float lutSize, out float lutAmount);
                 BindLut(lut);
@@ -90,17 +84,34 @@ internal sealed class DevelopLook : IDisposable
                 if (_img == null)
                     return false;
 
+                _dirty = false;
+                _cachedCrop = applyCrop;
+                _cachedTx = tileX;
+                _cachedTy = tileY;
+                _cachedTw = tileW;
+                _cachedTh = tileH;
+                _cachedFw = frameW;
+                _cachedFh = frameH;
+            }
+
+            ref SKShader? activeFx = ref (fast ? ref _fxFast : ref _fxQuality);
+            if (activeFx == null)
+            {
+                if (_img == null)
+                    return false;
+
                 var uniforms = new SKRuntimeEffectUniforms(effect);
                 bool srcLinear = source.ColorType == SKColorType.RgbaF16
                     || source.ColorType == SKColorType.RgbaF32;
+                SKImage lut = DevelopRenderer.GetLut(settings, out float lutSize, out float lutAmount);
                 DevelopRenderer.BindUniforms(
                     uniforms, settings, source.Width, source.Height,
-                    dx, dy, dw, dh,
+                    0f, 0f, 1f, 1f,
                     split: 0f, before: false, lutSize, lutAmount,
                     fast: fast, applyCrop: applyCrop, srcLinear: srcLinear,
                     tileX: tileX, tileY: tileY, tileW: tileW, tileH: tileH,
-                    viewCropX: viewCropX, viewCropY: viewCropY,
-                    viewCropW: viewCropW, viewCropH: viewCropH,
+                    viewCropX: float.NaN, viewCropY: float.NaN,
+                    viewCropW: float.NaN, viewCropH: float.NaN,
                     frameW: frameW, frameH: frameH);
 
                 var children = new SKRuntimeEffectChildren(effect);
@@ -115,34 +126,16 @@ internal sealed class DevelopLook : IDisposable
                     return false;
                 }
 
-                SKShader? prev = _fx;
-                _fx = fx;
-                _paint.Shader = _fx;
-                if (prev != null)
-                    GpuRetain.RetireShader(prev);
-
-                _dirty = false;
-                _cachedFast = fast;
-                _cachedCrop = applyCrop;
-                _cachedDx = dx;
-                _cachedDy = dy;
-                _cachedDw = dw;
-                _cachedDh = dh;
-                _cachedTx = tileX;
-                _cachedTy = tileY;
-                _cachedTw = tileW;
-                _cachedTh = tileH;
-                _cachedCx = viewCropX;
-                _cachedCy = viewCropY;
-                _cachedCw = viewCropW;
-                _cachedCh = viewCropH;
-                _cachedFw = frameW;
-                _cachedFh = frameH;
+                activeFx = fx;
             }
+
+            _paint.Shader = activeFx;
 
             canvas.Save();
             canvas.ClipRect(clip);
-            canvas.DrawRect(dest, _paint);
+            canvas.Translate(dest.Left, dest.Top);
+            canvas.Scale(dest.Width, dest.Height);
+            canvas.DrawRect(new SKRect(0, 0, 1, 1), _paint);
             canvas.Restore();
 
             if (!_loggedOk)
@@ -182,11 +175,14 @@ internal sealed class DevelopLook : IDisposable
     {
         _paint.Shader = null;
         _paint.Dispose();
-        _fx?.Dispose();
+        if (_fxFast != null) GpuRetain.RetireShader(_fxFast);
+        if (_fxQuality != null) GpuRetain.RetireShader(_fxQuality);
+        _fxFast = null;
+        _fxQuality = null;
         _img?.Dispose();
         _lut?.Dispose();
         _mask?.Dispose();
-        _fx = _img = _lut = _mask = null;
+        _img = _lut = _mask = null;
         _source = null;
     }
 }

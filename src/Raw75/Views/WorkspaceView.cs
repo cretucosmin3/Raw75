@@ -223,6 +223,11 @@ public sealed class WorkspaceView : View
             if (d == null) return;
             if (!_restoringView)
                 _photo.CaptureView(d);
+        };
+        _photo.ViewSettled += () =>
+        {
+            var d = _session.Active;
+            if (d == null) return;
             RequestViewport(d);
         };
         _photo.Rotate90Clicked += Rotate;

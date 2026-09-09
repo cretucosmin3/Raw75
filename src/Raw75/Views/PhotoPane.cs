@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 using Blossom;
 using Blossom.Core;
 using Blossom.Core.Input;
@@ -78,6 +80,10 @@ public sealed class PhotoPane : VisualElement
     public SKRect ImageDest { get; private set; }
 
     public event Action? ViewChanged;
+    public event Action? ViewSettled;
+
+    private bool _isInteracting;
+    private CancellationTokenSource? _wheelSettleCts;
 
     public bool LookFailed => _look.Failed;
 
@@ -431,6 +437,7 @@ public sealed class PhotoPane : VisualElement
         SyncViewport();
         InvalidatePaint();
         ViewChanged?.Invoke();
+        ViewSettled?.Invoke();
     }
 
     private void AllocateProbe()
@@ -558,6 +565,8 @@ public sealed class PhotoPane : VisualElement
         var pane = new SKRect(0, 0, Transform.Computed.Width, Transform.Computed.Height);
         bool applyCrop = !_cropTool && _settings.HasCrop;
 
+        bool isFast = _lookFast || _isInteracting;
+
         if (_splitBefore)
         {
             float splitX = Transform.Computed.Width * _splitT;
@@ -572,33 +581,16 @@ public sealed class PhotoPane : VisualElement
                 canvas.DrawImage(before, SourceOf(before, dest, left), left);
             if (right.Width > 0.5f)
             {
-                if (!_look.Draw(canvas, dest, right, _source, _settings, _lookFast, applyCrop))
+                if (!_look.Draw(canvas, dest, right, _source, _settings, isFast, applyCrop))
                     canvas.DrawImage(_source, SourceOf(_source, dest, right), right);
             }
             return;
         }
 
         var vis = _drawClip;
-        float voX = (vis.Left - dest.Left) / dest.Width;
-        float voY = (vis.Top - dest.Top) / dest.Height;
-        float vsX = vis.Width / dest.Width;
-        float vsY = vis.Height / dest.Height;
-        float ux = 0f, uy = 0f, uw = 1f, uh = 1f;
-        if (applyCrop && _settings.HasCrop)
-        {
-            ux = _settings.CropX;
-            uy = _settings.CropY;
-            uw = _settings.CropW;
-            uh = _settings.CropH;
-        }
-        float cx = ux + voX * uw;
-        float cy = uy + voY * uh;
-        float cw = vsX * uw;
-        float ch = vsY * uh;
-
         GetFrameSize(out int fw, out int fh);
-        if (!_look.Draw(canvas, vis, vis, _source, _settings, _lookFast, applyCrop: true,
-                0f, 0f, 1f, 1f, cx, cy, cw, ch, fw, fh))
+        if (!_look.Draw(canvas, dest, vis, _source, _settings, isFast, applyCrop: true,
+                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh))
             canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
 
         if (_tile == null || _tile.Handle == IntPtr.Zero || _tileW < 1e-5f || _tileH < 1e-5f)
@@ -610,8 +602,8 @@ public sealed class PhotoPane : VisualElement
         if (tileDest.Width < 1f || tileDest.Height < 1f)
             return;
 
-        _tileLook.Draw(canvas, vis, tileDest, _tile, _settings, _lookFast, applyCrop: true,
-            _tileX, _tileY, _tileW, _tileH, cx, cy, cw, ch, fw, fh);
+        _tileLook.Draw(canvas, dest, tileDest, _tile, _settings, isFast, applyCrop: true,
+            _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh);
     }
 
     private void DrawOverlay(SKCanvas canvas)
@@ -680,11 +672,14 @@ public sealed class PhotoPane : VisualElement
 
         _pointerDown = true;
         _didDrag = false;
+        _cropTool = _crop.Active != CropHandle.None;
         _downLocal = e.Relative;
-        _pointerLocal = e.Relative;
         _downPanX = PanX;
         _downPanY = PanY;
         CapturePointer();
+        _wheelSettleCts?.Cancel();
+        _wheelSettleCts?.Dispose();
+        _wheelSettleCts = null;
         e.Handled = true;
 
         if (_splitBefore)
@@ -767,6 +762,7 @@ public sealed class PhotoPane : VisualElement
         if (_cropTool || !CanPan())
             return;
 
+        _isInteracting = true;
         float z = Math.Max(Zoom, 1e-6f);
         PanX = _downPanX - dx / z;
         PanY = _downPanY - dy / z;
@@ -785,11 +781,20 @@ public sealed class PhotoPane : VisualElement
         _pointerDown = false;
         _splitDrag = false;
         bool wasCrop = _crop.Active != CropHandle.None;
+        bool wasDrag = _didDrag;
         _crop.EndDrag();
         ReleasePointer();
         e.Handled = true;
 
-        if (_didDrag || wasCrop || _cropTool || !HasPhoto)
+        if (_isInteracting)
+        {
+            _isInteracting = false;
+            InvalidatePaint();
+            if (wasDrag)
+                ViewSettled?.Invoke();
+        }
+
+        if (wasDrag || wasCrop || _cropTool || !HasPhoto)
             return;
 
         ToggleClickZoom(e.Relative);
@@ -823,6 +828,7 @@ public sealed class PhotoPane : VisualElement
             return;
         }
 
+        _isInteracting = true;
         Zoom = next;
         _freeZoom = true;
         PanX = imgX - (lx - w * 0.5f) / Zoom;
@@ -831,7 +837,28 @@ public sealed class PhotoPane : VisualElement
         ImageDest = ComputeDest();
         InvalidatePaint();
         ViewChanged?.Invoke();
+        ScheduleWheelSettled();
         e.Handled = true;
+    }
+
+    private void ScheduleWheelSettled()
+    {
+        _wheelSettleCts?.Cancel();
+        _wheelSettleCts?.Dispose();
+        _wheelSettleCts = new CancellationTokenSource();
+        var token = _wheelSettleCts.Token;
+
+        Task.Delay(120, token).ContinueWith(t =>
+        {
+            if (t.IsCanceled) return;
+            Browser.Post(() =>
+            {
+                if (token.IsCancellationRequested) return;
+                _isInteracting = false;
+                InvalidatePaint();
+                ViewSettled?.Invoke();
+            });
+        }, TaskScheduler.Default);
     }
 
     private void OnHover(VisualElement el, Vector2 pos)
@@ -871,6 +898,7 @@ public sealed class PhotoPane : VisualElement
         ImageDest = ComputeDest();
         InvalidatePaint();
         ViewChanged?.Invoke();
+        ViewSettled?.Invoke();
     }
 
     private void SyncViewport()
