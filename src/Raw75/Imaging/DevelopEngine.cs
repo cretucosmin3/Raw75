@@ -654,6 +654,37 @@ public sealed class DevelopEngine
         }
     }
 
+    /// <summary>
+    /// Develop the native (or already-loaded hi-res) source at crop size and encode.
+    /// Preview <see cref="PhotoDocument.Display"/> is proxy-sized and must not be the export source.
+    /// Does not attach the native buffer to the document.
+    /// </summary>
+    internal static (int Width, int Height) WriteExport(
+        string path,
+        DevelopSettings settings,
+        RasterBuffer hiRes,
+        string dest,
+        string format,
+        int jpegQuality,
+        int longEdge,
+        Action<string>? status)
+    {
+        RasterBuffer src = hiRes.HasPixels
+            ? hiRes
+            : (RawDecoder.DecodeRasterFull(path) ?? RawDecoder.DecodeFull(path));
+        if (!src.HasPixels)
+            throw new InvalidOperationException("Could not decode photo for export.");
+
+        status?.Invoke($"Developing export {src.Width}×{src.Height}…");
+        RasterBuffer developed = DevelopCpu.Apply(src, settings ?? new DevelopSettings(), fast: false);
+        if (!developed.HasPixels || developed.Rgba == null)
+            throw new InvalidOperationException("Develop produced no pixels.");
+
+        status?.Invoke($"Writing {developed.Width}×{developed.Height}…");
+        Log.Info($"Export develop {src.Width}x{src.Height} → {developed.Width}x{developed.Height} {dest}");
+        return Exporter.Export(developed, dest, format, jpegQuality, longEdge);
+    }
+
     private bool Stale(int gen) => gen != Volatile.Read(ref _generation);
 
     private static void Assign(PhotoDocument doc, SKImage? thumb = null, SKImage? proxy = null, SKImage? display = null)

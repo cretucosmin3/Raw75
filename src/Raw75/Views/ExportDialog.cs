@@ -35,8 +35,10 @@ public sealed class ExportDialog : VisualElement
     private readonly IconButton _cancelBtn;
 
     private string _format = "JPEG";
-    private int _quality = 90;
+    private int _quality = 95;
     private int _longEdge;
+    private int _nativeW;
+    private int _nativeH;
 
     public string SuggestedName { get; private set; } = "";
 
@@ -61,7 +63,7 @@ public sealed class ExportDialog : VisualElement
         _title = Label("Title", "Export", Theme.Text, 16, 700, TextAlign.Left);
         _fileLabel = Label("File", "", Theme.TextDim, 12, 400, TextAlign.Left);
         _formatLabel = Label("FormatLbl", "Format", Theme.TextDim, 11, 500, TextAlign.Left);
-        _qualityLabel = Label("QualityLbl", "Quality  90", Theme.TextDim, 11, 500, TextAlign.Left);
+        _qualityLabel = Label("QualityLbl", "Quality  95", Theme.TextDim, 11, 500, TextAlign.Left);
         _edgeLabel = Label("EdgeLbl", "Long edge  Full", Theme.TextDim, 11, 500, TextAlign.Left);
 
         _formatBtns = new IconButton[Formats.Length];
@@ -133,12 +135,16 @@ public sealed class ExportDialog : VisualElement
         SetLongEdge(0);
     }
 
-    public void Open(string suggestedName)
+    public void Open(string suggestedName, int nativeW = 0, int nativeH = 0)
     {
         SuggestedName = suggestedName ?? "";
-        _fileLabel.Text = string.IsNullOrWhiteSpace(SuggestedName)
-            ? "Export photo"
-            : SuggestedName;
+        _nativeW = nativeW;
+        _nativeH = nativeH;
+        string name = string.IsNullOrWhiteSpace(SuggestedName) ? "Export photo" : SuggestedName;
+        _fileLabel.Text = nativeW > 0 && nativeH > 0
+            ? $"{name}  ·  {nativeW}×{nativeH}"
+            : name;
+        SetLongEdge(_longEdge);
         CoverView();
         Visible = true;
         ParentView?.SetActiveKeyboardElement(this);
@@ -251,7 +257,12 @@ public sealed class ExportDialog : VisualElement
             items[i].Transform.SetAbsoluteFrame(x + i * (cell + gap), y, cell, height);
     }
 
-    private static string EdgeCaption(int edge) => edge <= 0 ? "Full" : edge.ToString();
+    private string EdgeCaption(int edge)
+    {
+        if (edge <= 0)
+            return _nativeW > 0 && _nativeH > 0 ? $"Full {_nativeW}×{_nativeH}" : "Full";
+        return edge.ToString();
+    }
 
     private static VisualElement Box(string name, SKColor fill, float round)
     {
