@@ -1,27 +1,66 @@
 using System;
+using Blossom.Core.Visual;
 using SkiaSharp;
 
 namespace Raw75;
 
-/// <summary>Develop chrome: dark panels, one accent, rounded cards.</summary>
+/// <summary>Develop chrome: dark panels, one accent, rounded cards, High density and depth.</summary>
 public static class Theme
 {
-    public static readonly SKColor Window = new(22, 22, 24);
-    public static readonly SKColor Panel = new(32, 32, 36);
-    public static readonly SKColor PanelAlt = new(40, 40, 45);
-    public static readonly SKColor TopBar = new(28, 28, 32);
-    public static readonly SKColor Filmstrip = new(24, 24, 26);
-    public static readonly SKColor Hairline = new(255, 255, 255, 22);
-    public static readonly SKColor Text = new(244, 244, 247);
-    public static readonly SKColor TextDim = new(158, 158, 166);
-    public static readonly SKColor Accent = new(255, 153, 51);
-    public static readonly SKColor AccentSoft = new(255, 153, 51, 36);
-    public static readonly SKColor Track = new(18, 18, 20);
-    public static readonly SKColor TrackHover = new(38, 38, 44);
-    public static readonly SKColor TrackFill = new(255, 153, 51);
-    public static readonly SKColor Handle = new(255, 255, 255);
-    public static readonly SKColor HandleHover = new(255, 214, 170);
-    public static readonly SKColor ButtonTextOnAccent = new(20, 20, 22);
+    // Surfaces & Wells (Refined multi-tier contrast hierarchy)
+    public static readonly SKColor Canvas = new(12, 12, 14);              // Deepest neutral black photo well
+    public static readonly SKColor Window = new(20, 20, 23);              // Global app chrome background
+    public static readonly SKColor TopBar = new(26, 26, 30);              // Main top navigation & action strip
+    public static readonly SKColor BottomBar = new(22, 22, 26);           // Bottom tools strip
+    public static readonly SKColor Panel = new(22, 22, 26);               // Sidebar column background
+    public static readonly SKColor PanelAlt = new(28, 28, 33);            // Elevated secondary column background
+    public static readonly SKColor Filmstrip = new(18, 18, 22);           // Bottom filmstrip backdrop
+    public static readonly SKColor Section = new(32, 32, 38);             // Tool cards & accordion body (clearly elevated from panel)
+    public static readonly SKColor SectionHeader = new(26, 26, 32);       // Accordion header resting surface
+    public static readonly SKColor SectionHeaderHover = new(38, 38, 46);   // Accordion header hover
+    public static readonly SKColor Well = new(16, 16, 19);                // Inset wells, slider track backgrounds
+    public static readonly SKColor WellHover = new(24, 24, 29);           // Hovered track background
+    public static readonly SKColor Overlay = new(46, 46, 54);             // Floating panels & tooltips
+    public static readonly SKColor PhotoWell = new(10, 10, 12);           // Histogram and thumbnail wells
+
+    // Borders & Hairlines
+    public static readonly SKColor Hairline = new(255, 255, 255, 26);     // 1px crisp card and button boundary
+    public static readonly SKColor HairlineSubtle = new(255, 255, 255, 14);// Inner cell dividers & header bottom lines
+    public static readonly SKColor HairlineStrong = new(255, 255, 255, 52);// Active boundary / focused frame
+
+    // Typography
+    public static readonly SKColor Text = new(244, 244, 248);             // Primary high-contrast labels
+    public static readonly SKColor TextSecondary = new(190, 190, 200);     // Module titles, secondary info
+    public static readonly SKColor TextDim = new(140, 140, 152);          // Value readouts, units, hints
+    public static readonly SKColor TextDisabled = new(90, 90, 100);       // Inactive / disabled states
+
+    // Accents & Selection
+    public static readonly SKColor Accent = new(255, 153, 51);            // Signature Raw75 warm amber
+    public static readonly SKColor AccentHover = new(255, 174, 82);       // Lighter interactive amber
+    public static readonly SKColor AccentPressed = new(230, 130, 30);     // Pressed / active drag amber
+    public static readonly SKColor AccentSoft = new(255, 153, 51, 34);    // Soft selection wash (13% alpha)
+    public static readonly SKColor Selected = new(255, 153, 51, 44);      // Selected item background
+    public static readonly SKColor Button = new(36, 36, 43);              // Standard button surface
+    public static readonly SKColor ButtonHover = new(46, 46, 55);         // Button hover surface
+    public static readonly SKColor Hover = ButtonHover;                   // Generic item hover surface
+    public static readonly SKColor ButtonTextOnAccent = new(20, 20, 23);   // High-contrast text on accent pill
+
+    // Slider Specific
+    public static readonly SKColor Track = Well;
+    public static readonly SKColor TrackHover = WellHover;
+    public static readonly SKColor TrackFill = Accent;
+    public static readonly SKColor Handle = new(255, 255, 255);           // Pure white pill thumb
+    public static readonly SKColor HandleHover = new(255, 225, 185);      // Soft warm glow on hover
+    public static readonly SKColor HandleActive = new(255, 240, 215);     // Bright warm pill on active drag
+
+    // Gradients & Channels
+    public static readonly SKColor RedChannel = new(239, 68, 68);
+    public static readonly SKColor GreenChannel = new(34, 197, 94);
+    public static readonly SKColor BlueChannel = new(59, 130, 246);
+    public static readonly SKColor KelvinCold = new(59, 130, 246);
+    public static readonly SKColor KelvinWarm = new(245, 158, 11);
+    public static readonly SKColor TintGreen = new(34, 197, 94);
+    public static readonly SKColor TintMagenta = new(217, 70, 239);
 
     public static SKColor Lighten(SKColor c, int d) => new(
         (byte)Math.Min(255, c.Red + d),
@@ -34,20 +73,29 @@ public static class Theme
         (byte)Math.Max(0, c.Green - d),
         (byte)Math.Max(0, c.Blue - d),
         c.Alpha);
-    public static readonly SKColor PhotoWell = new(10, 10, 12);
-    public static readonly SKColor Selected = new(255, 153, 51, 40);
-    public static readonly SKColor Button = new(48, 48, 54);
 
-    public const float Radius = 8f;
-    public const float RadiusSm = 6f;
-    public const float TopBarH = 48f;
-    public const float LeftW = 260f;
-    public const float RightW = 312f;
-    public const float FilmH = 108f;
-    public const float ToolH = 40f;
-    public const float StatusH = 24f;
-    public const float RowH = 44f;
-    public const float SliderGap = 10f;
-    public const float GroupHeadH = 30f;
-    public const float Pad = 10f;
+    // Geometry & Layout Constants
+    public const float Radius = 6f;
+    public const float RadiusSm = 4f;
+    public const float TopBarH = 42f;
+    public const float LeftW = 280f;
+    public const float RightW = 324f;
+    public const float FilmH = 96f;
+    public const float ToolH = 28f;
+    public const float StatusH = 22f;
+    public const float GroupHeadH = 28f;
+    public const float Pad = 8f;
+    public const float SliderGap = 6f;
+
+    // Compact Slider Constants
+    public const float RowH = 24f;
+    public const float RowHStacked = 30f;
+    public const float SliderLabelW = 72f;
+    public const float SliderValueW = 42f;
+    public const float TrackH = 10f;
+    public const float FillH = 4f;
+    public const float ThumbW = 8f;
+    public const float ThumbH = 16f;
+    public const float ThumbRadius = 4f;
+    public const float InsetX = 2f;
 }

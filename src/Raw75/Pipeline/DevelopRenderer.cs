@@ -221,27 +221,31 @@ public static class DevelopRenderer
         if (tileH < 1e-5f) tileH = 1f;
         Set(u, "u_tileOrigin", new[] { tileX, tileY });
         Set(u, "u_tileSize", new[] { tileW, tileH });
-        Set(u, "u_temp", s.Temperature / 100f);
-        Set(u, "u_tint", s.Tint / 100f);
-        Set(u, "u_ev", s.Exposure);
-        Set(u, "u_match", s.MatchGray ? 1f : 0f);
-        Set(u, "u_contrast", s.Contrast / 100f);
-        Set(u, "u_highlights", s.Highlights / 100f);
-        Set(u, "u_shadows", s.Shadows / 100f);
-        Set(u, "u_whites", s.Whites / 100f);
-        Set(u, "u_blacks", s.Blacks / 100f);
-        Set(u, "u_vibrance", s.Vibrance / 100f);
-        Set(u, "u_saturation", s.Saturation / 100f);
+        Set(u, "u_temp", s.EnableWhiteBalance ? s.Temperature / 100f : 0f);
+        Set(u, "u_tint", s.EnableWhiteBalance ? s.Tint / 100f : 0f);
+        Set(u, "u_ev", s.EnableExposure ? s.Exposure : 0f);
+        Set(u, "u_match", (s.EnableHsl && s.MatchGray) ? 1f : 0f);
+        Set(u, "u_contrast", s.EnableExposure ? s.Contrast / 100f : 0f);
+        Set(u, "u_highlights", s.EnableHdr ? s.Highlights / 100f : 0f);
+        Set(u, "u_shadows", s.EnableHdr ? s.Shadows / 100f : 0f);
+        Set(u, "u_whites", s.EnableHdr ? s.Whites / 100f : 0f);
+        Set(u, "u_blacks", s.EnableHdr ? s.Blacks / 100f : 0f);
+        Set(u, "u_vibrance", s.EnableHsl ? s.Vibrance / 100f : 0f);
+        Set(u, "u_saturation", s.EnableExposure ? s.Saturation / 100f : 0f);
         HslBand[] hsl = s.Hsl;
         for (int i = 0; i < 6; i++)
         {
-            HslBand band = (hsl != null && hsl.Length == 6) ? hsl[i] : default;
+            HslBand band = (s.EnableHsl && hsl != null && hsl.Length == 6) ? hsl[i] : default;
             Set(u, "u_hsl" + i, new[] { band.Hue / 100f, band.Sat / 100f, band.Luma / 100f, 0f });
         }
-        Set(u, "u_sharpen", s.Sharpen / 150f);
+        Set(u, "u_sharpen", !s.EnableDetail ? 0f : s.Sharpen / 150f);
+        float noiseVal = s.EnableDetail ? s.Noise : 0f;
+        if (noiseVal == 0f && s.EnableDetail && (s.DenoiseLuma > 0f || s.DenoiseChroma > 0f))
+            noiseVal = -Math.Max(s.DenoiseLuma, s.DenoiseChroma);
+        Set(u, "u_noise", noiseVal / 100f);
         Set(u, "u_denoiseFast", fast ? 1f : 0f);
-        Set(u, "u_denoiseLuma", s.DenoiseLuma / 100f);
-        Set(u, "u_denoiseChroma", s.DenoiseChroma / 100f);
+        Set(u, "u_denoiseLuma", noiseVal < 0f ? -noiseVal / 100f : 0f);
+        Set(u, "u_denoiseChroma", noiseVal < 0f ? -noiseVal / 100f : 0f);
         float cx, cy, cw, ch;
         if (!float.IsNaN(viewCropW) && viewCropW > 0.0001f && viewCropH > 0.0001f)
         {
@@ -265,7 +269,7 @@ public static class DevelopRenderer
             }
         }
         Set(u, "u_crop", new[] { cx, cy, cw, ch });
-        Set(u, "u_straighten", s.Straighten);
+        Set(u, "u_straighten", s.EnableGeometry ? s.Straighten : 0f);
         Set(u, "u_rot", (float)(s.Rotate90 & 3));
         Set(u, "u_flipH", s.FlipH ? 1f : 0f);
         Set(u, "u_flipV", s.FlipV ? 1f : 0f);
@@ -275,14 +279,16 @@ public static class DevelopRenderer
         Set(u, "u_lutAmount", lutAmount);
         Set(u, "u_hasLut", lutAmount > 0.001f && lutSize > 1.5f ? 1f : 0f);
         Set(u, "u_srcLinear", srcLinear ? 1f : 0f);
-        Set(u, "u_toneMode", s.ToneMode == ToneMode.Filmic ? 1f : 0f);
-        SigmoidParams sig = SigmoidParams.Compute(s.SigmoidContrast, s.SigmoidSkew);
+        Set(u, "u_toneMode", (s.EnableTone && s.ToneMode == ToneMode.Filmic) ? 1f : 0f);
+        SigmoidParams sig = (s.EnableTone && s.ToneMode == ToneMode.Sigmoid)
+            ? SigmoidParams.Compute(s.SigmoidContrast, s.SigmoidSkew)
+            : (s.EnableTone ? default : SigmoidParams.Compute(1.0f, 0.0f));
         Set(u, "u_sigMagnitude", sig.Magnitude);
         Set(u, "u_sigPaperExp", sig.PaperExp);
         Set(u, "u_sigFilmFog", sig.FilmFog);
         Set(u, "u_sigFilmPower", sig.FilmPower);
         Set(u, "u_sigPaperPower", sig.PaperPower);
-        float reconMode = s.ReconstructionMode switch
+        float reconMode = (s.EnableReconstruction ? s.ReconstructionMode : HighlightMode.Off) switch
         {
             HighlightMode.Opposed => 1f,
             HighlightMode.LCh => 2f,
@@ -291,13 +297,13 @@ public static class DevelopRenderer
         Set(u, "u_reconMode", reconMode);
         Set(u, "u_hlThreshold", s.HighlightThreshold);
         Set(u, "u_reconFast", fast ? 1f : 0f);
-        Set(u, "u_reconColorAmount", s.ColorReconstructionAmount / 100f);
+        Set(u, "u_reconColorAmount", s.EnableReconstruction ? s.ColorReconstructionAmount / 100f : 0f);
         Set(u, "u_reconColorSpatial", s.ColorReconstructionSpatial);
 
-        Set(u, "u_localDetail", s.LocalContrastDetail);
-        Set(u, "u_localHighlights", s.LocalContrastHighlights / 100f);
-        Set(u, "u_localShadows", s.LocalContrastShadows / 100f);
-        Set(u, "u_localMidtones", s.LocalContrastMidtones / 100f);
+        Set(u, "u_localDetail", s.EnableLocalContrast ? s.LocalContrastDetail : 0f);
+        Set(u, "u_localHighlights", s.EnableLocalContrast ? s.LocalContrastHighlights / 100f : 0f);
+        Set(u, "u_localShadows", s.EnableLocalContrast ? s.LocalContrastShadows / 100f : 0f);
+        Set(u, "u_localMidtones", s.EnableLocalContrast ? s.LocalContrastMidtones / 100f : 0.5f);
         Set(u, "u_localFast", fast ? 1f : 0f);
     }
 
@@ -435,6 +441,7 @@ public static class DevelopRenderer
             uniform float4 u_hsl4;
             uniform float4 u_hsl5;
             uniform float u_sharpen;
+            uniform float u_noise;
             uniform float u_denoiseLuma;
             uniform float u_denoiseChroma;
             uniform float u_denoiseFast;
@@ -469,24 +476,18 @@ public static class DevelopRenderer
             // ref: local laplacian
             float curve_scalar(float x, float g, float sigma, float shadows, float highlights, float clarity) {
                 float c = x - g;
-                float val;
-                if (c > 2.0 * sigma) {
-                    val = g + sigma + (1.0 + shadows) * (c - sigma);
-                } else if (c < -2.0 * sigma) {
-                    val = g - sigma + (1.0 + highlights) * (c + sigma);
-                } else if (c > 0.0) {
-                    float t = clamp(c / (2.0 * sigma), 0.0, 1.0);
-                    float t2 = t * t;
-                    float mt = 1.0 - t;
-                    val = g + sigma * 2.0 * mt * t + t2 * (sigma + sigma * (1.0 + shadows));
+                float detailGain = 1.0 + clarity * 0.75;
+                float sc = c * detailGain;
+
+                if (sc > 0.0) {
+                    sc *= (1.0 + highlights * 0.60);
                 } else {
-                    float t = clamp(-c / (2.0 * sigma), 0.0, 1.0);
-                    float t2 = t * t;
-                    float mt = 1.0 - t;
-                    val = g - sigma * 2.0 * mt * t + t2 * (-sigma - sigma * (1.0 + highlights));
+                    sc *= (1.0 - shadows * 0.60);
                 }
-                val += clarity * c * exp(-c * c / max(2.0 * sigma * sigma / 3.0, 0.001));
-                return val;
+
+                float midWeight = exp(-abs(x - sigma) / max(sigma, 0.1));
+                float val = g + sc * (0.65 + 0.35 * midWeight);
+                return max(val, 0.0001);
             }
 
             float to_lin_1(float s) {
@@ -829,9 +830,9 @@ public static class DevelopRenderer
                             float recG = L - H * 0.16666667 - C / 3.4641016;
                             float recB = L + H * 0.33333333;
 
-                            if (lin.r >= clipThresh) lin.r = max(lin.r, recR);
-                            if (lin.g >= clipThresh) lin.g = max(lin.g, recG);
-                            if (lin.b >= clipThresh) lin.b = max(lin.b, recB);
+                            if (lin.r >= clipThresh) lin.r = recR;
+                            if (lin.g >= clipThresh) lin.g = recG;
+                            if (lin.b >= clipThresh) lin.b = recB;
                         } else {
                             // Opposed mode: ref: highlight reconstruction (opposed)
                             float3 u0 = cbrt_pos3(lin);
@@ -871,11 +872,22 @@ public static class DevelopRenderer
                                 cntChroma.b > 0.5 ? sumChroma.b / cntChroma.b : 0.0
                             );
 
-                            if (lin.r >= clipThresh) lin.r = max(lin.r, ref0.r + chroma.r);
-                            if (lin.g >= clipThresh) lin.g = max(lin.g, ref0.g + chroma.g);
-                            if (lin.b >= clipThresh) lin.b = max(lin.b, ref0.b + chroma.b);
+                            if (lin.r >= clipThresh) lin.r = ref0.r + chroma.r;
+                            if (lin.g >= clipThresh) lin.g = ref0.g + chroma.g;
+                            if (lin.b >= clipThresh) lin.b = ref0.b + chroma.b;
+                        }
+
+                        // Smooth highlight rolloff: compress excess into visible highlights
+                        float maxCh = max(lin.r, max(lin.g, lin.b));
+                        if (maxCh > clipThresh) {
+                            float over = maxCh - clipThresh;
+                            float headroom = max(1.0 - clipThresh, 0.08);
+                            float compressed = clipThresh + headroom * (1.0 - exp(-over / headroom));
+                            lin *= compressed / maxCh;
                         }
                     }
+                } else {
+                    lin = min(lin, float3(u_hlThreshold));
                 }
 
                 // Color reconstruction (step 2): ref: color reconstruction
@@ -919,11 +931,12 @@ public static class DevelopRenderer
                 }
 
                 // Local contrast (step 8): ref: bilateral filter
-                if (abs(u_localDetail) > 0.001) {
+                if (abs(u_localDetail) > 0.001 || abs(u_localHighlights) > 0.001 || abs(u_localShadows) > 0.001 || abs(u_localMidtones - 0.5) > 0.01) {
                     float lum = max(luma2020(processed), 0.0001);
                     float g = lum;
-                    float2 d1 = float2(1.5, 0.0);
-                    float2 d2 = float2(0.0, 1.5);
+                    float scale = max(min(u_srcSize.x, u_srcSize.y) / 64.0, 2.0);
+                    float2 d1 = float2(scale * 1.5, 0.0);
+                    float2 d2 = float2(0.0, scale * 1.5);
                     float3 s1 = sample(u_image, clamp(srcCoord + d1, float2(0.5), u_srcSize - float2(0.5))).rgb;
                     float3 s2 = sample(u_image, clamp(srcCoord - d1, float2(0.5), u_srcSize - float2(0.5))).rgb;
                     float3 s3 = sample(u_image, clamp(srcCoord + d2, float2(0.5), u_srcSize - float2(0.5))).rgb;
@@ -946,8 +959,8 @@ public static class DevelopRenderer
                     g = (lum + l1 * w1 + l2 * w2 + l3 * w3 + l4 * w4) / sumW;
 
                     if (u_localFast < 0.5) {
-                        float2 d3 = float2(3.5, 0.0);
-                        float2 d4 = float2(0.0, 3.5);
+                        float2 d3 = float2(scale * 3.5, 0.0);
+                        float2 d4 = float2(0.0, scale * 3.5);
                         float3 s5 = sample(u_image, clamp(srcCoord + d3, float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float3 s6 = sample(u_image, clamp(srcCoord - d3, float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float3 s7 = sample(u_image, clamp(srcCoord + d4, float2(0.5), u_srcSize - float2(0.5))).rgb;
@@ -1049,11 +1062,22 @@ public static class DevelopRenderer
 
                     float blurL = sumL / sumW_L;
                     float3 blurC = sumC / sumW_C;
-                    float kL = (u_denoiseFast > 0.5) ? u_denoiseLuma * 0.5 : u_denoiseLuma;
-                    float kC = (u_denoiseFast > 0.5) ? u_denoiseChroma * 0.5 : u_denoiseChroma;
+                    float kL = (u_denoiseFast > 0.5) ? u_denoiseLuma * 0.80 : u_denoiseLuma;
+                    float kC = (u_denoiseFast > 0.5) ? u_denoiseChroma * 0.90 : u_denoiseChroma;
                     float finalL = (u_denoiseLuma > 0.001) ? mix(lc, blurL, kL) : lc;
                     float3 finalC = (u_denoiseChroma > 0.001) ? mix(cc, blurC, kC) : cc;
                     processed = max(float3(finalL) + finalC, 0.0);
+                }
+
+                if (u_noise > 0.005) {
+                    float lum = luma2020(processed);
+                    float midCurve = sin(clamp(lum, 0.0, 1.0) * 3.14159265);
+                    float2 pCoord = srcCoord;
+                    float n1 = fract(sin(dot(pCoord, float2(12.9898, 78.233))) * 43758.5453) * 2.0 - 1.0;
+                    float n2 = fract(sin(dot(floor(pCoord * 0.5), float2(39.346, 11.135))) * 23421.631) * 2.0 - 1.0;
+                    float rawGrain = n1 * 0.70 + n2 * 0.30;
+                    float grain = rawGrain * u_noise * 0.12 * (0.35 + 0.65 * midCurve);
+                    processed = max(processed + float3(grain), 0.0);
                 }
 
                 float3 disp = to_srgb(tone_curve(processed));

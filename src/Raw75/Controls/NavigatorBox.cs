@@ -8,7 +8,7 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>Mini contain-fit preview plus Fit / Fill / 1:1 mode buttons.</summary>
+/// <summary>Mini contain-fit preview plus Fit / Fill / 1:1 mode buttons with shadows and depth.</summary>
 public class NavigatorBox : VisualElement
 {
     private readonly Preview _preview;
@@ -33,8 +33,8 @@ public class NavigatorBox : VisualElement
 
     public void SetMode(string mode)
     {
-        _fit.Toggled = mode == "Fit";
-        _fill.Toggled = mode == "Fill";
+        _fit.Toggled = mode == "Fit" || mode == "🔍 Fit";
+        _fill.Toggled = mode == "Fill" || mode == "🔲 Fill";
         _oneToOne.Toggled = mode == "1:1";
     }
     public event Action<float, float>? PreviewClicked;
@@ -45,21 +45,22 @@ public class NavigatorBox : VisualElement
         Overflow = OverflowMode.Clip;
         Style = new ElementStyle
         {
-            BackColor = Theme.Panel,
+            BackColor = Theme.Section,
             Border = new BorderStyle
             {
                 Width = 1,
                 Color = Theme.Hairline,
                 Roundness = Theme.Radius
-            }
+            },
+            Shadow = new ShadowStyle(0, 2.5f, 3, 3, new SKColor(0, 0, 0, 75))
         };
 
         _preview = new Preview();
         _preview.ClickedNorm += (nx, ny) => PreviewClicked?.Invoke(nx, ny);
 
-        _fit = MakeMode("Fit");
-        _fill = MakeMode("Fill");
-        _oneToOne = MakeMode("1:1");
+        _fit = MakeMode("🔍 Fit", "Fit");
+        _fill = MakeMode("🔲 Fill", "Fill");
+        _oneToOne = MakeMode("1:1", "1:1");
         SetMode("Fit");
 
         AddChild(_preview);
@@ -68,10 +69,21 @@ public class NavigatorBox : VisualElement
         AddChild(_oneToOne);
     }
 
+    private IconButton MakeMode(string caption, string tag)
+    {
+        var b = new IconButton(caption);
+        b.Clicked += () =>
+        {
+            SetMode(tag);
+            ModePicked?.Invoke(tag);
+        };
+        return b;
+    }
+
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : Theme.LeftW);
-        float h = 140f;
+        float h = 148f;
         if (maxHeight > 0) h = Math.Min(h, maxHeight);
         return new SKSize(w, h);
     }
@@ -83,14 +95,14 @@ public class NavigatorBox : VisualElement
         float w = Math.Max(1f, Transform.Width);
         float h = Math.Max(1f, Transform.Height);
         float btnH = Theme.ToolH;
-        float previewH = Math.Max(24f, h - btnH - 6f);
+        float previewH = Math.Max(24f, h - btnH - 12f);
 
-        _preview.Transform.SetAbsoluteFrame(originX + 4, originY + 4, w - 8, previewH - 4);
+        _preview.Transform.SetAbsoluteFrame(originX + 6, originY + 6, w - 12, previewH - 6);
 
-        float btnY = originY + h - btnH - 4;
-        float inner = Math.Max(1f, w - 12);
+        float btnY = originY + h - btnH - 6;
+        float inner = Math.Max(1f, w - 16);
         float btnW = (inner - 8) / 3f;
-        float x = originX + 4;
+        float x = originX + 6;
         _fit.Transform.SetAbsoluteFrame(x, btnY, btnW, btnH);
         x += btnW + 4;
         _fill.Transform.SetAbsoluteFrame(x, btnY, btnW, btnH);
@@ -98,67 +110,68 @@ public class NavigatorBox : VisualElement
         _oneToOne.Transform.SetAbsoluteFrame(x, btnY, btnW, btnH);
     }
 
-    private IconButton MakeMode(string caption)
-    {
-        var btn = new IconButton(caption);
-        btn.Clicked += () => ModePicked?.Invoke(caption);
-        return btn;
-    }
-
     private sealed class Preview : VisualElement
     {
-        public SKImage? Image { get; set; }
+        public SKImage? Image;
         public event Action<float, float>? ClickedNorm;
-        private SKRect _dest;
 
         public Preview()
         {
-            Name = "NavigatorPreview";
-            Overflow = OverflowMode.Clip;
-            Cursor = StandardCursor.Hand;
-            Style = new ElementStyle { BackColor = Theme.PhotoWell };
-
+            Name = "NavigatorBox_Preview";
+            Style = new ElementStyle
+            {
+                BackColor = Theme.Well,
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.HairlineSubtle,
+                    Roundness = Theme.RadiusSm
+                }
+            };
+            Cursor = StandardCursor.Crosshair;
             Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
-                if (Image == null || Image.Handle == IntPtr.Zero) return;
-                if (_dest.Width <= 0 || _dest.Height <= 0) return;
-
                 var local = PointToClient(args.Global.X, args.Global.Y);
-                if (local.X < _dest.Left || local.X > _dest.Right ||
-                    local.Y < _dest.Top || local.Y > _dest.Bottom)
-                    return;
-
-                float nx = (local.X - _dest.Left) / _dest.Width;
-                float ny = (local.Y - _dest.Top) / _dest.Height;
-                ClickedNorm?.Invoke(Math.Clamp(nx, 0f, 1f), Math.Clamp(ny, 0f, 1f));
+                float w = Transform.Computed.Width;
+                float h = Transform.Computed.Height;
+                if (w > 0 && h > 0)
+                    ClickedNorm?.Invoke(local.X / w, local.Y / h);
                 args.Handled = true;
             };
         }
 
         protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
         {
-            float w = Transform.Computed.Width;
-            float h = Transform.Computed.Height;
-            if (Image == null || Image.Handle == IntPtr.Zero || w <= 1 || h <= 1)
-            {
-                _dest = default;
-                return;
-            }
-
-            _dest = Contain(w, h, Image.Width, Image.Height);
-            cmds.Add(new DrawSkImageCommand(Image, _dest));
+            cmds.Add(new DrawCallbackCommand(DrawThumb));
         }
 
-        private static SKRect Contain(float boxW, float boxH, int imgW, int imgH)
+        private void DrawThumb(SKCanvas canvas)
         {
-            if (imgW <= 0 || imgH <= 0) return new SKRect(0, 0, boxW, boxH);
-            float scale = Math.Min(boxW / imgW, boxH / imgH);
-            float dw = imgW * scale;
-            float dh = imgH * scale;
-            float x = (boxW - dw) * 0.5f;
-            float y = (boxH - dh) * 0.5f;
-            return new SKRect(x, y, x + dw, y + dh);
+            if (Image == null) return;
+            float w = Transform.Computed.Width;
+            float h = Transform.Computed.Height;
+            if (w < 4 || h < 4) return;
+
+            float iw = Image.Width;
+            float ih = Image.Height;
+            float scale = Math.Min(w / iw, h / ih);
+            float dw = iw * scale;
+            float dh = ih * scale;
+            float dx = (w - dw) * 0.5f;
+            float dy = (h - dh) * 0.5f;
+
+            using var paint = new SKPaint { FilterQuality = SKFilterQuality.Low, IsAntialias = true };
+            canvas.DrawImage(Image, new SKRect(dx, dy, dx + dw, dy + dh), paint);
+
+            using var frame = new SKPaint
+            {
+                Color = Theme.HairlineSubtle,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 1f,
+                IsAntialias = true
+            };
+            canvas.DrawRect(new SKRect(dx, dy, dx + dw, dy + dh), frame);
         }
     }
 }

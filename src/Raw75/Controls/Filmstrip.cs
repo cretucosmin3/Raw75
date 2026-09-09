@@ -98,22 +98,25 @@ public class Filmstrip : VisualElement
         private readonly ThumbWell _thumb;
         private readonly VisualElement _caption;
         private readonly VisualElement _close;
+        private bool _active;
 
         public Cell(Filmstrip owner, int index, PhotoDocument doc, bool active)
         {
             _owner = owner;
             _index = index;
+            _active = active;
             Name = $"FilmstripCell_{index}";
             Cursor = StandardCursor.Hand;
             Style = new ElementStyle
             {
-                BackColor = active ? Theme.Selected : SKColors.Transparent,
+                BackColor = active ? Theme.Selected : Theme.Section,
                 Border = new BorderStyle
                 {
-                    Width = 1,
+                    Width = active ? 1.5f : 1f,
                     Color = active ? Theme.Accent : Theme.Hairline,
                     Roundness = Theme.RadiusSm
-                }
+                },
+                Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60))
             };
 
             _thumb = new ThumbWell(doc.Preview ?? doc.Thumb)
@@ -132,7 +135,7 @@ public class Filmstrip : VisualElement
                     BackColor = SKColors.Transparent,
                     Text = new TextStyle
                     {
-                        Color = Theme.TextDim,
+                        Color = active ? Theme.Accent : Theme.TextDim,
                         Size = 10,
                         Weight = 400,
                         Alignment = TextAlign.Center,
@@ -147,8 +150,8 @@ public class Filmstrip : VisualElement
                 Text = "×",
                 Style = new ElementStyle
                 {
-                    BackColor = new SKColor(0, 0, 0, 140),
-                    Border = new BorderStyle { Width = 0, Roundness = 2 },
+                    BackColor = new SKColor(0, 0, 0, 160),
+                    Border = new BorderStyle { Width = 1, Color = Theme.HairlineSubtle, Roundness = 6 },
                     Text = new TextStyle
                     {
                         Color = Theme.Text,
@@ -160,6 +163,16 @@ public class Filmstrip : VisualElement
                 }
             };
             _close.Cursor = StandardCursor.Hand;
+            _close.Events.OnMouseEnter += _ =>
+            {
+                _close.Style.BackColor = new SKColor(220, 50, 40, 220);
+                _close.InvalidatePaint();
+            };
+            _close.Events.OnMouseLeave += _ =>
+            {
+                _close.Style.BackColor = new SKColor(0, 0, 0, 160);
+                _close.InvalidatePaint();
+            };
             _close.Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
@@ -171,6 +184,27 @@ public class Filmstrip : VisualElement
             AddChild(_caption);
             AddChild(_close);
 
+            Events.OnMouseEnter += _ =>
+            {
+                if (!_active)
+                {
+                    Style.BackColor = Theme.Hover;
+                    Style.Border.Color = Theme.HairlineStrong;
+                    _caption.Style.Text.Color = Theme.Text;
+                    InvalidatePaint();
+                }
+            };
+            Events.OnMouseLeave += _ =>
+            {
+                if (!_active)
+                {
+                    Style.BackColor = Theme.Section;
+                    Style.Border.Color = Theme.Hairline;
+                    _caption.Style.Text.Color = Theme.TextDim;
+                    InvalidatePaint();
+                }
+            };
+
             Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
@@ -181,8 +215,12 @@ public class Filmstrip : VisualElement
 
         public void SetActive(bool active)
         {
-            Style.BackColor = active ? Theme.Selected : SKColors.Transparent;
+            _active = active;
+            Style.BackColor = active ? Theme.Selected : Theme.Section;
+            Style.Border.Width = active ? 1.5f : 1f;
             Style.Border.Color = active ? Theme.Accent : Theme.Hairline;
+            Style.Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
+            _caption.Style.Text.Color = active ? Theme.Accent : Theme.TextDim;
             InvalidatePaint();
         }
 
@@ -207,7 +245,16 @@ public class Filmstrip : VisualElement
         public ThumbWell(SKImage? image)
         {
             _image = image;
-            Style = new ElementStyle { BackColor = Theme.PhotoWell };
+            Style = new ElementStyle
+            {
+                BackColor = Theme.Well,
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.HairlineSubtle,
+                    Roundness = 2
+                }
+            };
             Overflow = OverflowMode.Clip;
         }
 
