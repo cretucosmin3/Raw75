@@ -53,6 +53,12 @@ Short version: LibRaw once, GPU after that. Proxy for sliders, tiles at 1:1, sam
 dotnet run --project src/Raw75/Raw75.csproj
 ```
 
+Self-contained Linux + Windows (Release, ReadyToRun) into `publish/`:
+
+```bash
+./publish.sh
+```
+
 Needs .NET 10. Blossom lives next to this repo (`../Blossom`).
 
 ## License

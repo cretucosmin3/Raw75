@@ -48,5 +48,20 @@
     <Copy Condition="Exists('$(_LibRawWin)')" SourceFiles="$(_LibRawWin)" DestinationFiles="$(OutputPath)raw_r.dll" SkipUnchangedFiles="true" />
     <Copy Condition="Exists('$(_LibRawWin)')" SourceFiles="$(_LibRawWin)" DestinationFiles="$(OutputPath)libraw.dll" SkipUnchangedFiles="true" />
   </Target>
+
+  <Target Name="AliasLibRawNativePublish" AfterTargets="Publish">
+    <PropertyGroup>
+      <_Pub>$(PublishDir)</_Pub>
+      <_LibRawLinux>$(_Pub)runtimes\linux-x64\native\libraw_r.so.23</_LibRawLinux>
+      <_LibRawWin>$(_Pub)runtimes\win-x64\native\raw_r.dll</_LibRawWin>
+    </PropertyGroup>
+    <Copy Condition="Exists('$(_LibRawLinux)')" SourceFiles="$(_LibRawLinux)" DestinationFiles="$(_Pub)libraw_r.so.23" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(_LibRawLinux)')" SourceFiles="$(_LibRawLinux)" DestinationFiles="$(_Pub)libraw.so" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(_Pub)runtimes\linux-x64\native\libjpeg.so.8')" SourceFiles="$(_Pub)runtimes\linux-x64\native\libjpeg.so.8;$(_Pub)runtimes\linux-x64\native\libgomp.so.1;$(_Pub)runtimes\linux-x64\native\liblcms2.so" DestinationFolder="$(_Pub)" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(_LibRawWin)')" SourceFiles="$(_LibRawWin)" DestinationFiles="$(_Pub)raw_r.dll" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(_LibRawWin)')" SourceFiles="$(_LibRawWin)" DestinationFiles="$(_Pub)libraw.dll" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
+
+
 

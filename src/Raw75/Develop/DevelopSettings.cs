@@ -3,6 +3,21 @@ using System.Text.Json.Serialization;
 
 namespace Raw75.Develop;
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ToneMode
+{
+    Sigmoid = 0,
+    Filmic = 1
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum HighlightMode
+{
+    Off = 0,
+    Opposed = 1,
+    LCh = 2
+}
+
 /// <summary>
 /// All develop parameters. Cloneable. JSON = preset shape.
 /// Normalized slider ranges.
@@ -23,6 +38,23 @@ public sealed class DevelopSettings
     public float Saturation { get; set; }  // -100..100
 
     public bool MatchGray { get; set; }
+
+    // --- Tone (display transform) ---
+    public ToneMode ToneMode { get; set; } = ToneMode.Sigmoid;
+    public float SigmoidContrast { get; set; } = 1.5f; // 0.1..10, default 1.5
+    public float SigmoidSkew { get; set; } = 0.0f;     // -1..1, default 0.0
+
+    // --- Reconstruction ---
+    public HighlightMode ReconstructionMode { get; set; } = HighlightMode.Off;
+    public float HighlightThreshold { get; set; } = 1.0f;         // clip relative to white
+    public float ColorReconstructionAmount { get; set; } = 0.0f;  // 0..100
+    public float ColorReconstructionSpatial { get; set; } = 0.0f; // 0..100
+
+    // --- Local contrast ---
+    public float LocalContrastDetail { get; set; } = 0.0f;     // -1..4, 0 = off
+    public float LocalContrastHighlights { get; set; } = 0.0f; // -100..100
+    public float LocalContrastShadows { get; set; } = 0.0f;    // -100..100
+    public float LocalContrastMidtones { get; set; } = 50.0f;  // 0..100
 
     // Reds, Oranges, Yellows, Greens, Aquas, Blues
     public HslBand[] Hsl { get; set; } = CreateHsl();
@@ -76,6 +108,17 @@ public sealed class DevelopSettings
         Vibrance = src.Vibrance;
         Saturation = src.Saturation;
         MatchGray = src.MatchGray;
+        ToneMode = src.ToneMode;
+        SigmoidContrast = src.SigmoidContrast;
+        SigmoidSkew = src.SigmoidSkew;
+        ReconstructionMode = src.ReconstructionMode;
+        HighlightThreshold = src.HighlightThreshold;
+        ColorReconstructionAmount = src.ColorReconstructionAmount;
+        ColorReconstructionSpatial = src.ColorReconstructionSpatial;
+        LocalContrastDetail = src.LocalContrastDetail;
+        LocalContrastHighlights = src.LocalContrastHighlights;
+        LocalContrastShadows = src.LocalContrastShadows;
+        LocalContrastMidtones = src.LocalContrastMidtones;
         Sharpen = src.Sharpen;
         DenoiseLuma = src.DenoiseLuma;
         DenoiseChroma = src.DenoiseChroma;
@@ -102,6 +145,12 @@ public sealed class DevelopSettings
             && Whites == o.Whites && Blacks == o.Blacks
             && Vibrance == o.Vibrance && Saturation == o.Saturation
             && MatchGray == o.MatchGray
+            && ToneMode == o.ToneMode
+            && SigmoidContrast == o.SigmoidContrast && SigmoidSkew == o.SigmoidSkew
+            && ReconstructionMode == o.ReconstructionMode && HighlightThreshold == o.HighlightThreshold
+            && ColorReconstructionAmount == o.ColorReconstructionAmount && ColorReconstructionSpatial == o.ColorReconstructionSpatial
+            && LocalContrastDetail == o.LocalContrastDetail && LocalContrastHighlights == o.LocalContrastHighlights
+            && LocalContrastShadows == o.LocalContrastShadows && LocalContrastMidtones == o.LocalContrastMidtones
             && Sharpen == o.Sharpen && DenoiseLuma == o.DenoiseLuma && DenoiseChroma == o.DenoiseChroma
             && LutPath == o.LutPath && LutAmount == o.LutAmount
             && CropX == o.CropX && CropY == o.CropY && CropW == o.CropW && CropH == o.CropH

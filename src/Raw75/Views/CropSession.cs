@@ -95,51 +95,110 @@ internal sealed class CropSession
         _origH = H;
     }
 
-    public void ApplyAspect(float pixelAspect, int imgW, int imgH)
+    public void ApplyAspect(float pixelAspect, int fw, int fh)
     {
         Aspect = pixelAspect;
-        if (pixelAspect < 1e-4f || imgW < 1 || imgH < 1)
+        if (pixelAspect < 1e-4f || fw < 1 || fh < 1)
             return;
 
         float cx = X + W * 0.5f;
         float cy = Y + H * 0.5f;
-        float normWH = pixelAspect * imgH / imgW;
+        float normWH = pixelAspect * fh / (float)fw;
         float w, h;
-        if (normWH >= 1f)
+        if (W / Math.Max(H, 1e-6f) > normWH)
         {
-            w = 1f;
-            h = 1f / normWH;
+            w = H * normWH;
+            h = H;
         }
         else
         {
-            h = 1f;
-            w = normWH;
+            w = W;
+            h = W / normWH;
         }
+
+        if (w > 1f) { w = 1f; h = 1f / normWH; }
+        if (h > 1f) { h = 1f; w = normWH; }
 
         X = Math.Clamp(cx - w * 0.5f, 0f, 1f - w);
         Y = Math.Clamp(cy - h * 0.5f, 0f, 1f - h);
-        W = w;
-        H = h;
+        W = Math.Max(MinNorm, w);
+        H = Math.Max(MinNorm, h);
         Clamp();
     }
 
-    public bool UpdateDrag(float lx, float ly, SKRect imageDest, int imgW, int imgH)
+    public bool UpdateDrag(
+        float lx, float ly, SKRect imageDest, int fw, int fh,
+        int rot = 0, float straightenDeg = 0f, bool flipH = false, bool flipV = false)
     {
         if (Active == CropHandle.None || imageDest.Width < 1f || imageDest.Height < 1f)
             return false;
 
         float dx = (lx - _downX) / imageDest.Width;
         float dy = (ly - _downY) / imageDest.Height;
-        float x = _origX, y = _origY, w = _origW, h = _origH;
+
+        if (Active == CropHandle.Move)
+        {
+            float w = _origW;
+            float h = _origH;
+            float targetX = Math.Clamp(_origX + dx, 0f, 1f - w);
+            float targetY = Math.Clamp(_origY + dy, 0f, 1f - h);
+
+            if (RectFits(targetX, targetY, w, h, rot, straightenDeg, flipH, flipV, fw, fh))
+            {
+                if (targetX == X && targetY == Y)
+                    return false;
+                X = targetX;
+                Y = targetY;
+                return true;
+            }
+
+            bool xFits = RectFits(targetX, Y, w, h, rot, straightenDeg, flipH, flipV, fw, fh);
+            bool yFits = RectFits(X, targetY, w, h, rot, straightenDeg, flipH, flipV, fw, fh);
+
+            if (xFits && !yFits)
+            {
+                if (targetX == X) return false;
+                X = targetX;
+                return true;
+            }
+            if (yFits && !xFits)
+            {
+                if (targetY == Y) return false;
+                Y = targetY;
+                return true;
+            }
+
+            float low = 0f;
+            float high = 1f;
+            for (int i = 0; i < 8; i++)
+            {
+                float mid = (low + high) * 0.5f;
+                float testX = Math.Clamp(_origX + dx * mid, 0f, 1f - w);
+                float testY = Math.Clamp(_origY + dy * mid, 0f, 1f - h);
+                if (RectFits(testX, testY, w, h, rot, straightenDeg, flipH, flipV, fw, fh))
+                    low = mid;
+                else
+                    high = mid;
+            }
+
+            float bestX = Math.Clamp(_origX + dx * low, 0f, 1f - w);
+            float bestY = Math.Clamp(_origY + dy * low, 0f, 1f - h);
+            if (bestX == X && bestY == Y)
+                return false;
+
+            X = bestX;
+            Y = bestY;
+            return true;
+        }
+
+        // Resize handles
+        float x = _origX;
+        float y = _origY;
         float x2 = _origX + _origW;
         float y2 = _origY + _origH;
 
         switch (Active)
         {
-            case CropHandle.Move:
-                x = _origX + dx;
-                y = _origY + dy;
-                break;
             case CropHandle.N:
                 y = _origY + dy;
                 break;
@@ -170,67 +229,170 @@ internal sealed class CropSession
                 break;
         }
 
-        if (Active != CropHandle.Move)
+        if (Active is CropHandle.W or CropHandle.NW or CropHandle.SW)
         {
             if (x > x2 - MinNorm) x = x2 - MinNorm;
-            if (y > y2 - MinNorm) y = y2 - MinNorm;
-            w = x2 - x;
-            h = y2 - y;
-            if (Aspect > 1e-4f && imgW > 0 && imgH > 0)
-                ConstrainAspect(ref x, ref y, ref w, ref h, imgW, imgH);
+        }
+        else if (Active is CropHandle.E or CropHandle.NE or CropHandle.SE)
+        {
+            if (x2 < x + MinNorm) x2 = x + MinNorm;
         }
 
-        x = Math.Clamp(x, 0f, 1f);
-        y = Math.Clamp(y, 0f, 1f);
-        w = Math.Clamp(w, MinNorm, 1f - x);
-        h = Math.Clamp(h, MinNorm, 1f - y);
-        x = Math.Clamp(x, 0f, 1f - w);
-        y = Math.Clamp(y, 0f, 1f - h);
+        if (Active is CropHandle.N or CropHandle.NW or CropHandle.NE)
+        {
+            if (y > y2 - MinNorm) y = y2 - MinNorm;
+        }
+        else if (Active is CropHandle.S or CropHandle.SW or CropHandle.SE)
+        {
+            if (y2 < y + MinNorm) y2 = y + MinNorm;
+        }
 
-        if (x == X && y == Y && w == W && h == H)
+        float rw = x2 - x;
+        float rh = y2 - y;
+
+        if (Aspect > 1e-4f && fw > 0 && fh > 0)
+        {
+            float normWH = Aspect * fh / (float)fw;
+            switch (Active)
+            {
+                case CropHandle.N:
+                case CropHandle.S:
+                    rw = Math.Max(MinNorm, rh * normWH);
+                    x = _origX + _origW * 0.5f - rw * 0.5f;
+                    break;
+                case CropHandle.E:
+                case CropHandle.W:
+                    rh = Math.Max(MinNorm, rw / normWH);
+                    y = _origY + _origH * 0.5f - rh * 0.5f;
+                    break;
+                case CropHandle.SE:
+                {
+                    float targetW = Math.Max(MinNorm, _origW + dx);
+                    float targetH = Math.Max(MinNorm, _origH + dy);
+                    if (targetW / normWH > targetH)
+                        rh = targetW / normWH;
+                    else
+                        rw = targetH * normWH;
+                    x = _origX;
+                    y = _origY;
+                    break;
+                }
+                case CropHandle.SW:
+                {
+                    float targetW = Math.Max(MinNorm, _origW - dx);
+                    float targetH = Math.Max(MinNorm, _origH + dy);
+                    if (targetW / normWH > targetH)
+                        rh = targetW / normWH;
+                    else
+                        rw = targetH * normWH;
+                    x = (_origX + _origW) - rw;
+                    y = _origY;
+                    break;
+                }
+                case CropHandle.NE:
+                {
+                    float targetW = Math.Max(MinNorm, _origW + dx);
+                    float targetH = Math.Max(MinNorm, _origH - dy);
+                    if (targetW / normWH > targetH)
+                        rh = targetW / normWH;
+                    else
+                        rw = targetH * normWH;
+                    x = _origX;
+                    y = (_origY + _origH) - rh;
+                    break;
+                }
+                case CropHandle.NW:
+                {
+                    float targetW = Math.Max(MinNorm, _origW - dx);
+                    float targetH = Math.Max(MinNorm, _origH - dy);
+                    if (targetW / normWH > targetH)
+                        rh = targetW / normWH;
+                    else
+                        rw = targetH * normWH;
+                    x = (_origX + _origW) - rw;
+                    y = (_origY + _origH) - rh;
+                    break;
+                }
+            }
+        }
+
+        x = Math.Clamp(x, 0f, 1f - MinNorm);
+        y = Math.Clamp(y, 0f, 1f - MinNorm);
+        rw = Math.Clamp(rw, MinNorm, 1f - x);
+        rh = Math.Clamp(rh, MinNorm, 1f - y);
+
+        if (RectFits(x, y, rw, rh, rot, straightenDeg, flipH, flipV, fw, fh))
+        {
+            if (x == X && y == Y && rw == W && rh == H)
+                return false;
+            X = x;
+            Y = y;
+            W = rw;
+            H = rh;
+            return true;
+        }
+
+        float rLow = 0f;
+        float rHigh = 1f;
+        for (int i = 0; i < 10; i++)
+        {
+            float mid = (rLow + rHigh) * 0.5f;
+            float testX = _origX + (x - _origX) * mid;
+            float testY = _origY + (y - _origY) * mid;
+            float testW = _origW + (rw - _origW) * mid;
+            float testH = _origH + (rh - _origH) * mid;
+            if (RectFits(testX, testY, testW, testH, rot, straightenDeg, flipH, flipV, fw, fh))
+                rLow = mid;
+            else
+                rHigh = mid;
+        }
+
+        float finalX = _origX + (x - _origX) * rLow;
+        float finalY = _origY + (y - _origY) * rLow;
+        float finalW = _origW + (rw - _origW) * rLow;
+        float finalH = _origH + (rh - _origH) * rLow;
+
+        if (finalX == X && finalY == Y && finalW == W && finalH == H)
             return false;
 
-        X = x;
-        Y = y;
-        W = w;
-        H = h;
+        X = finalX;
+        Y = finalY;
+        W = finalW;
+        H = finalH;
         return true;
     }
 
-    private void ConstrainAspect(ref float x, ref float y, ref float w, ref float h, int imgW, int imgH)
-    {
-        float normWH = Aspect * imgH / (float)imgW;
-        if (normWH < 1e-4f)
-            return;
+    public void EndDrag() => Active = CropHandle.None;
 
-        float x2 = x + w;
-        float y2 = y + h;
-        switch (Active)
+    public void RotateCrop(int dir)
+    {
+        if (dir == 1) // 90 CW
         {
-            case CropHandle.N:
-            case CropHandle.S:
-                w = h * normWH;
-                x = _origX + _origW * 0.5f - w * 0.5f;
-                break;
-            case CropHandle.E:
-            case CropHandle.W:
-                h = w / normWH;
-                y = _origY + _origH * 0.5f - h * 0.5f;
-                break;
-            default:
-                if (w / Math.Max(h, 1e-6f) > normWH)
-                    w = h * normWH;
-                else
-                    h = w / normWH;
-                if (Active == CropHandle.NE || Active == CropHandle.SE)
-                    x = x2 - w;
-                if (Active == CropHandle.NW || Active == CropHandle.NE)
-                    y = y2 - h;
-                break;
+            float ox = X, oy = Y, ow = W, oh = H;
+            X = Math.Clamp(1f - (oy + oh), 0f, 1f);
+            Y = Math.Clamp(ox, 0f, 1f);
+            W = Math.Clamp(oh, MinNorm, 1f);
+            H = Math.Clamp(ow, MinNorm, 1f);
         }
+        else if (dir == -1) // 90 CCW
+        {
+            float ox = X, oy = Y, ow = W, oh = H;
+            X = Math.Clamp(oy, 0f, 1f);
+            Y = Math.Clamp(1f - (ox + ow), 0f, 1f);
+            W = Math.Clamp(oh, MinNorm, 1f);
+            H = Math.Clamp(ow, MinNorm, 1f);
+        }
+        if (Aspect > 1e-4f)
+            Aspect = 1f / Aspect;
     }
 
-    public void EndDrag() => Active = CropHandle.None;
+    public void FlipCrop(bool h)
+    {
+        if (h)
+            X = Math.Clamp(1f - (X + W), 0f, 1f);
+        else
+            Y = Math.Clamp(1f - (Y + H), 0f, 1f);
+    }
 
     public void Draw(SKCanvas canvas, SKRect imageDest, SKRect pane, float straightenDeg)
     {
@@ -295,23 +457,20 @@ internal sealed class CropSession
             canvas.DrawLine(crop.Left, y, crop.Right, y, line);
         }
 
-        if (Math.Abs(straightenDeg) < 0.05f)
-            return;
-
-        canvas.Save();
-        canvas.RotateDegrees(straightenDeg, crop.MidX, crop.MidY);
-        line.Color = new SKColor(255, 255, 255, 40);
-        float span = Math.Max(crop.Width, crop.Height) * 1.6f;
-        int n = 12;
-        for (int i = 0; i <= n; i++)
+        if (Math.Abs(straightenDeg) > 0.05f)
         {
-            float t = i / (float)n;
-            float x = crop.MidX - span * 0.5f + span * t;
-            float y = crop.MidY - span * 0.5f + span * t;
-            canvas.DrawLine(x, crop.MidY - span, x, crop.MidY + span, line);
-            canvas.DrawLine(crop.MidX - span, y, crop.MidX + span, y, line);
+            line.Color = new SKColor(255, 255, 255, 35);
+            int n = 8;
+            for (int i = 1; i < n; i++)
+            {
+                if (i % (n / 3) == 0) continue;
+                float t = i / (float)n;
+                float x = crop.Left + crop.Width * t;
+                float y = crop.Top + crop.Height * t;
+                canvas.DrawLine(x, crop.Top, x, crop.Bottom, line);
+                canvas.DrawLine(crop.Left, y, crop.Right, y, line);
+            }
         }
-        canvas.Restore();
     }
 
     private static void DrawHandle(SKCanvas canvas, float cx, float cy, SKPaint paint)
@@ -320,59 +479,100 @@ internal sealed class CropSession
         canvas.DrawRect(new SKRect(cx - h, cy - h, cx + h, cy + h), paint);
     }
 
-    public bool ClampInside(int rot, float straightenDeg, bool flipH, bool flipV)
+    public bool ClampInside(int rot, float straightenDeg, bool flipH, bool flipV, int fw, int fh)
     {
-        if (Fits(rot, straightenDeg, flipH, flipV))
+        if (Fits(rot, straightenDeg, flipH, flipV, fw, fh))
             return true;
-        for (int i = 0; i < 24; i++)
+
+        float cx = X + W * 0.5f;
+        float cy = Y + H * 0.5f;
+
+        if (!RectFits(cx - MinNorm * 0.5f, cy - MinNorm * 0.5f, MinNorm, MinNorm, rot, straightenDeg, flipH, flipV, fw, fh))
         {
-            float cx = X + W * 0.5f;
-            float cy = Y + H * 0.5f;
-            W = Math.Max(MinNorm, W * 0.92f);
-            H = Math.Max(MinNorm, H * 0.92f);
-            X = cx - W * 0.5f;
-            Y = cy - H * 0.5f;
-            Clamp();
-            if (Fits(rot, straightenDeg, flipH, flipV))
-                return true;
+            for (int step = 0; step < 16; step++)
+            {
+                if (RectFits(cx - MinNorm * 0.5f, cy - MinNorm * 0.5f, MinNorm, MinNorm, rot, straightenDeg, flipH, flipV, fw, fh))
+                    break;
+                cx = cx * 0.85f + 0.5f * 0.15f;
+                cy = cy * 0.85f + 0.5f * 0.15f;
+            }
         }
-        return Fits(rot, straightenDeg, flipH, flipV);
+
+        float low = 0.001f;
+        float high = 1.0f;
+        float origW = W;
+        float origH = H;
+
+        for (int iter = 0; iter < 16; iter++)
+        {
+            float mid = (low + high) * 0.5f;
+            float testW = Math.Max(MinNorm, origW * mid);
+            float testH = Math.Max(MinNorm, origH * mid);
+            float testX = cx - testW * 0.5f;
+            float testY = cy - testH * 0.5f;
+            if (RectFits(testX, testY, testW, testH, rot, straightenDeg, flipH, flipV, fw, fh))
+                low = mid;
+            else
+                high = mid;
+        }
+
+        W = Math.Max(MinNorm, origW * low);
+        H = Math.Max(MinNorm, origH * low);
+        X = cx - W * 0.5f;
+        Y = cy - H * 0.5f;
+        Clamp();
+        return Fits(rot, straightenDeg, flipH, flipV, fw, fh);
     }
 
-    public bool Fits(int rot, float straightenDeg, bool flipH, bool flipV)
+    public static bool RectFits(
+        float x, float y, float w, float h,
+        int rot, float straightenDeg, bool flipH, bool flipV, int fw, int fh)
     {
-        float[] xs = { X, X + W, X, X + W };
-        float[] ys = { Y, Y, Y + H, Y + H };
+        if (x < -0.0001f || y < -0.0001f || x + w > 1.0001f || y + h > 1.0001f)
+            return false;
+
+        float[] xs = { x, x + w, x, x + w };
+        float[] ys = { y, y, y + h, y + h };
         for (int i = 0; i < 4; i++)
         {
-            MapDisplayToSource(xs[i], ys[i], rot, straightenDeg, flipH, flipV, out float sx, out float sy);
+            MapDisplayToSource(xs[i], ys[i], rot, straightenDeg, flipH, flipV, fw, fh, out float sx, out float sy);
             if (sx < -0.001f || sx > 1.001f || sy < -0.001f || sy > 1.001f)
                 return false;
         }
         return true;
     }
 
+    public bool Fits(int rot, float straightenDeg, bool flipH, bool flipV, int fw, int fh) =>
+        RectFits(X, Y, W, H, rot, straightenDeg, flipH, flipV, fw, fh);
+
     public static void MapDisplayToSource(
-        float u, float v, int rot, float deg, bool flipH, bool flipV,
+        float u, float v, int rot, float deg, bool flipH, bool flipV, int fw, int fh,
         out float sx, out float sy)
     {
-        float p = u, q = v;
-        rot &= 3;
-        if (rot == 1) { p = v; q = 1f - u; }
-        else if (rot == 2) { p = 1f - u; q = 1f - v; }
-        else if (rot == 3) { p = 1f - v; q = u; }
-        if (flipH) p = 1f - p;
-        if (flipV) q = 1f - q;
-        if (Math.Abs(deg) > 0.05f)
+        float p = u;
+        float q = v;
+
+        if (Math.Abs(deg) > 0.001f && fw > 0 && fh > 0)
         {
-            float a = deg * (MathF.PI / 180f);
+            float a = deg * 0.01745329251f;
             float c = MathF.Cos(a);
             float s = MathF.Sin(a);
-            float dx = p - 0.5f;
-            float dy = q - 0.5f;
-            p = dx * c - dy * s + 0.5f;
-            q = dx * s + dy * c + 0.5f;
+            float qx = p - 0.5f;
+            float qy = q - 0.5f;
+            float invAspect = fh / (float)fw;
+            float aspect = fw / (float)fh;
+            p = qx * c - qy * invAspect * s + 0.5f;
+            q = qx * aspect * s + qy * c + 0.5f;
         }
+
+        rot &= 3;
+        if (rot == 1) { float t = p; p = q; q = 1f - t; }
+        else if (rot == 2) { p = 1f - p; q = 1f - q; }
+        else if (rot == 3) { float t = p; p = 1f - q; q = t; }
+
+        if (flipH) p = 1f - p;
+        if (flipV) q = 1f - q;
+
         sx = p;
         sy = q;
     }

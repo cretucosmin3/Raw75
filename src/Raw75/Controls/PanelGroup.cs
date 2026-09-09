@@ -14,6 +14,8 @@ public class PanelGroup : VisualElement
     private bool _expanded = true;
     private string _title;
 
+    public event Action<bool>? ExpandedChanged;
+
     public bool Expanded
     {
         get => _expanded;
@@ -22,6 +24,7 @@ public class PanelGroup : VisualElement
             if (_expanded == value) return;
             _expanded = value;
             ApplyExpanded();
+            ExpandedChanged?.Invoke(_expanded);
         }
     }
 

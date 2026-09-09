@@ -123,6 +123,8 @@ public sealed class PhotoPane : VisualElement
     private bool _cropTool;
     private float _savedCropX, _savedCropY, _savedCropW = 1f, _savedCropH = 1f;
     private float _savedStraighten;
+    private float _rotateDragStart;
+    private int _savedRotate90;
     private readonly List<(SKRect Rect, string Id)> _cropHits = new();
     private string? _cropHoverId;
 
@@ -191,6 +193,19 @@ public sealed class PhotoPane : VisualElement
         {
             if (Math.Abs(_straightenPreview - value) < 1e-4f) return;
             _straightenPreview = value;
+            if (_settings != null)
+                _settings.Straighten = value;
+            if (_cropTool)
+            {
+                GetFrameSize(out int fw, out int fh);
+                _crop.ClampInside(
+                    _settings?.Rotate90 ?? 0, _straightenPreview,
+                    _settings?.FlipH ?? false, _settings?.FlipV ?? false,
+                    fw, fh);
+                CropChanged?.Invoke();
+            }
+            _look.Invalidate();
+            _tileLook.Invalidate();
             InvalidatePaint();
         }
     }
@@ -238,14 +253,35 @@ public sealed class PhotoPane : VisualElement
         InvalidatePaint();
     }
 
+    /// <summary>Fit + crop from the document before the first paint of a newly selected photo.</summary>
+    public void PrepareBind(DevelopSettings? settings)
+    {
+        _freeZoom = false;
+        ZoomMode = ZoomMode.Fit;
+        _crop.EndDrag();
+        ApplyCropFromSettings(settings);
+    }
+
+    public void ApplyCropFromSettings(DevelopSettings? s)
+    {
+        if (s == null)
+            return;
+        _crop.X = s.CropX;
+        _crop.Y = s.CropY;
+        _crop.W = s.CropW > 0.001f ? s.CropW : 1f;
+        _crop.H = s.CropH > 0.001f ? s.CropH : 1f;
+        _crop.Clamp();
+        _straightenPreview = s.Straighten;
+    }
+
+    public void RefreshGeometry() => SyncViewToSource(force: true);
+
     public void SetNativeSize(int width, int height)
     {
         if (width == _nativeW && height == _nativeH)
             return;
         _nativeW = Math.Max(0, width);
         _nativeH = Math.Max(0, height);
-        if (_source != null)
-            SyncViewToSource();
         InvalidatePaint();
     }
 
@@ -295,7 +331,8 @@ public sealed class PhotoPane : VisualElement
         if (dest.Width <= texX * 1.02f)
             return false;
 
-        sourceAabb = DevelopGeom.VisibleSourceAabb(dest, vis, _settings);
+        GetFrameSize(out int fw, out int fh);
+        sourceAabb = DevelopGeom.VisibleSourceAabb(dest, vis, _settings, fw, fh);
         if (sourceAabb.Width < 1e-5f || sourceAabb.Height < 1e-5f)
             return false;
         screenW = Math.Max(1, (int)MathF.Ceiling(vis.Width));
@@ -466,12 +503,15 @@ public sealed class PhotoPane : VisualElement
 
         if (gpuLook || (blit != null && blit.Handle != IntPtr.Zero))
         {
+            GetContainSize(out int iw, out int ih);
             var dest = ImageDest;
-            if (dest.Width < 1f || dest.Height < 1f)
-                dest = Contain(w, h, ViewW, ViewH);
-
-            if (!_freeZoom && ZoomMode == ZoomMode.Fit)
-                dest = Contain(w, h, ViewW, ViewH);
+            if (iw > 0 && ih > 0)
+            {
+                if (!_freeZoom && ZoomMode == ZoomMode.Fit)
+                    dest = Contain(w, h, iw, ih);
+                else if (dest.Width < 1f || dest.Height < 1f)
+                    dest = Contain(w, h, iw, ih);
+            }
 
             var pane = new SKRect(0, 0, w, h);
             if (dest.IntersectsWith(pane) && dest.Width > 0.5f && dest.Height > 0.5f)
@@ -556,21 +596,22 @@ public sealed class PhotoPane : VisualElement
         float cw = vsX * uw;
         float ch = vsY * uh;
 
+        GetFrameSize(out int fw, out int fh);
         if (!_look.Draw(canvas, vis, vis, _source, _settings, _lookFast, applyCrop: true,
-                0f, 0f, 1f, 1f, cx, cy, cw, ch))
+                0f, 0f, 1f, 1f, cx, cy, cw, ch, fw, fh))
             canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
 
         if (_tile == null || _tile.Handle == IntPtr.Zero || _tileW < 1e-5f || _tileH < 1e-5f)
             return;
 
         var tileSrc = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
-        var tileDest = DevelopGeom.SourceAabbToDest(tileSrc, dest, _settings);
+        var tileDest = DevelopGeom.SourceAabbToDest(tileSrc, dest, _settings, fw, fh);
         tileDest.Intersect(vis);
         if (tileDest.Width < 1f || tileDest.Height < 1f)
             return;
 
         _tileLook.Draw(canvas, vis, tileDest, _tile, _settings, _lookFast, applyCrop: true,
-            _tileX, _tileY, _tileW, _tileH, cx, cy, cw, ch);
+            _tileX, _tileY, _tileW, _tileH, cx, cy, cw, ch, fw, fh);
     }
 
     private void DrawOverlay(SKCanvas canvas)
@@ -664,7 +705,7 @@ public sealed class PhotoPane : VisualElement
             if (handle != CropHandle.None)
             {
                 if (handle == CropHandle.Rotate)
-                    _savedStraighten = StraightenPreview;
+                    _rotateDragStart = StraightenPreview;
                 _crop.BeginDrag(handle, e.Relative.X, e.Relative.Y);
             }
         }
@@ -695,28 +736,27 @@ public sealed class PhotoPane : VisualElement
         if (_cropTool && _crop.Active != CropHandle.None)
         {
             GetFrameSize(out int fw, out int fh);
+            int rot = _settings?.Rotate90 ?? 0;
+            bool flipH = _settings?.FlipH ?? false;
+            bool flipV = _settings?.FlipV ?? false;
+
             if (_crop.Active == CropHandle.Rotate)
             {
                 var box = _crop.DestOnImage(ImageDest);
                 float a0 = MathF.Atan2(_downLocal.Y - box.MidY, _downLocal.X - box.MidX);
                 float a1 = MathF.Atan2(e.Relative.Y - box.MidY, e.Relative.X - box.MidX);
-                float deg = _savedStraighten + (a1 - a0) * (180f / MathF.PI);
+                float deg = _rotateDragStart + (a1 - a0) * (180f / MathF.PI);
                 StraightenPreview = Math.Clamp(deg, -45f, 45f);
                 if (_settings != null)
                     _settings.Straighten = StraightenPreview;
-                _crop.ClampInside(
-                    _settings?.Rotate90 ?? 0, StraightenPreview,
-                    _settings?.FlipH ?? false, _settings?.FlipV ?? false);
+                _crop.ClampInside(rot, StraightenPreview, flipH, flipV, fw, fh);
                 _look.Invalidate();
                 _tileLook.Invalidate();
                 InvalidatePaint();
                 CropChanged?.Invoke();
             }
-            else if (_crop.UpdateDrag(e.Relative.X, e.Relative.Y, ImageDest, fw, fh))
+            else if (_crop.UpdateDrag(e.Relative.X, e.Relative.Y, ImageDest, fw, fh, rot, StraightenPreview, flipH, flipV))
             {
-                _crop.ClampInside(
-                    _settings?.Rotate90 ?? 0, StraightenPreview,
-                    _settings?.FlipH ?? false, _settings?.FlipV ?? false);
                 InvalidatePaint();
                 CropChanged?.Invoke();
             }
@@ -841,16 +881,29 @@ public sealed class PhotoPane : VisualElement
             SyncViewport(w, h);
     }
 
+    private void GetContainSize(out int imgW, out int imgH)
+    {
+        imgW = ViewW;
+        imgH = ViewH;
+        if (imgW > 0 && imgH > 0)
+            return;
+        imgW = _source?.Width ?? 0;
+        imgH = _source?.Height ?? 0;
+        if (imgW > 0 && imgH > 0)
+            return;
+        imgW = _developed?.Width ?? 0;
+        imgH = _developed?.Height ?? 0;
+    }
+
     private void SyncViewport(float w, float h)
     {
-        if (!HasPhoto || ViewW <= 0 || ViewH <= 0)
+        GetContainSize(out int imgW, out int imgH);
+        if (!HasPhoto || imgW <= 0 || imgH <= 0)
         {
-            ImageDest = new SKRect(0, 0, w, h);
+            // Empty well only — never stretch a photo to the pane.
+            ImageDest = SKRect.Empty;
             return;
         }
-
-        int imgW = ViewW;
-        int imgH = ViewH;
 
         if (!_freeZoom)
         {
@@ -983,7 +1036,9 @@ public sealed class PhotoPane : VisualElement
         _savedCropY = _crop.Y;
         _savedCropW = _crop.W > 0.001f ? _crop.W : 1f;
         _savedCropH = _crop.H > 0.001f ? _crop.H : 1f;
-        _savedStraighten = StraightenPreview;
+        _savedStraighten = _settings?.Straighten ?? StraightenPreview;
+        _savedRotate90 = _settings?.Rotate90 ?? 0;
+        StraightenPreview = _savedStraighten;
         if (_crop.W < 0.001f || _crop.H < 0.001f)
             _crop.ResetFull();
         _cropTool = true;
@@ -1019,7 +1074,10 @@ public sealed class PhotoPane : VisualElement
         _crop.H = _savedCropH;
         StraightenPreview = _savedStraighten;
         if (_settings != null)
+        {
             _settings.Straighten = _savedStraighten;
+            _settings.Rotate90 = _savedRotate90;
+        }
         _cropTool = false;
         _crop.EndDrag();
         _freeZoom = false;
@@ -1030,15 +1088,23 @@ public sealed class PhotoPane : VisualElement
         return true;
     }
 
-    public void NotifyOrientation()
+    public void NotifyOrientation(int dir = 0, bool flipH = false, bool flipV = false)
     {
+        if (dir != 0)
+            _crop.RotateCrop(dir);
+        if (flipH)
+            _crop.FlipCrop(h: true);
+        if (flipV)
+            _crop.FlipCrop(h: false);
         _freeZoom = false;
         ZoomMode = ZoomMode.Fit;
         _look.Invalidate();
         _tileLook.Invalidate();
+        GetFrameSize(out int fw, out int fh);
         _crop.ClampInside(
             _settings?.Rotate90 ?? 0, StraightenPreview,
-            _settings?.FlipH ?? false, _settings?.FlipV ?? false);
+            _settings?.FlipH ?? false, _settings?.FlipV ?? false,
+            fw, fh);
         SyncViewToSource(force: true);
         InvalidatePaint();
     }
@@ -1069,8 +1135,8 @@ public sealed class PhotoPane : VisualElement
 
     private void GetFrameSize(out int fw, out int fh)
     {
-        int sw = _nativeW > 0 ? _nativeW : (_source?.Width ?? _viewW);
-        int sh = _nativeH > 0 ? _nativeH : (_source?.Height ?? _viewH);
+        int sw = _source?.Width ?? (_developed?.Width ?? (_viewW > 0 ? _viewW : 1));
+        int sh = _source?.Height ?? (_developed?.Height ?? (_viewH > 0 ? _viewH : 1));
         int rot = _settings != null ? _settings.Rotate90 & 3 : 0;
         fw = (rot & 1) != 0 ? sh : sw;
         fh = (rot & 1) != 0 ? sw : sh;
@@ -1104,7 +1170,7 @@ public sealed class PhotoPane : VisualElement
             _freeZoom = false;
             ZoomMode = ZoomMode.Fit;
         }
-        else if (oldW == 0 || force)
+        else if (oldW == 0)
         {
             _freeZoom = false;
             ZoomMode = ZoomMode.Fit;
@@ -1186,18 +1252,23 @@ public sealed class PhotoPane : VisualElement
                     break;
                 case "orig":
                     _crop.ApplyAspect(fw / (float)fh, fw, fh);
+                    _crop.ClampInside(_settings?.Rotate90 ?? 0, StraightenPreview, _settings?.FlipH ?? false, _settings?.FlipV ?? false, fw, fh);
                     break;
                 case "1:1":
                     _crop.ApplyAspect(1f, fw, fh);
+                    _crop.ClampInside(_settings?.Rotate90 ?? 0, StraightenPreview, _settings?.FlipH ?? false, _settings?.FlipV ?? false, fw, fh);
                     break;
                 case "4:3":
-                    _crop.ApplyAspect(4f / 3f, fw, fh);
+                    _crop.ApplyAspect(fw < fh ? 3f / 4f : 4f / 3f, fw, fh);
+                    _crop.ClampInside(_settings?.Rotate90 ?? 0, StraightenPreview, _settings?.FlipH ?? false, _settings?.FlipV ?? false, fw, fh);
                     break;
                 case "3:2":
-                    _crop.ApplyAspect(3f / 2f, fw, fh);
+                    _crop.ApplyAspect(fw < fh ? 2f / 3f : 3f / 2f, fw, fh);
+                    _crop.ClampInside(_settings?.Rotate90 ?? 0, StraightenPreview, _settings?.FlipH ?? false, _settings?.FlipV ?? false, fw, fh);
                     break;
                 case "16:9":
-                    _crop.ApplyAspect(16f / 9f, fw, fh);
+                    _crop.ApplyAspect(fw < fh ? 9f / 16f : 16f / 9f, fw, fh);
+                    _crop.ClampInside(_settings?.Rotate90 ?? 0, StraightenPreview, _settings?.FlipH ?? false, _settings?.FlipV ?? false, fw, fh);
                     break;
                 case "rotl":
                     Rotate90Clicked?.Invoke(-1);
@@ -1248,6 +1319,8 @@ public sealed class PhotoPane : VisualElement
     private void RaiseCropChanged()
     {
         _crop.Clamp();
+        if (!_cropTool)
+            SyncViewToSource(force: true);
         InvalidatePaint();
         CropChanged?.Invoke();
     }

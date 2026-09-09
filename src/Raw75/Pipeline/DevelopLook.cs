@@ -23,10 +23,11 @@ internal sealed class DevelopLook : IDisposable
     private bool _dirty = true;
     private bool _cachedFast;
     private bool _cachedCrop;
-    private int _cachedDw;
-    private int _cachedDh;
+    private float _cachedDx, _cachedDy;
+    private float _cachedDw, _cachedDh;
     private float _cachedTx, _cachedTy, _cachedTw = 1f, _cachedTh = 1f;
     private float _cachedCx, _cachedCy, _cachedCw = 1f, _cachedCh = 1f;
+    private int _cachedFw, _cachedFh;
 
     public bool Failed { get; private set; }
 
@@ -47,7 +48,9 @@ internal sealed class DevelopLook : IDisposable
         float viewCropX = float.NaN,
         float viewCropY = float.NaN,
         float viewCropW = float.NaN,
-        float viewCropH = float.NaN)
+        float viewCropH = float.NaN,
+        int frameW = 0,
+        int frameH = 0)
     {
         if (Failed || canvas == null || source == null || source.Handle == IntPtr.Zero)
             return false;
@@ -63,15 +66,19 @@ internal sealed class DevelopLook : IDisposable
 
         try
         {
-            int dw = Math.Max(1, (int)MathF.Round(dest.Width));
-            int dh = Math.Max(1, (int)MathF.Round(dest.Height));
+            float dx = dest.Left;
+            float dy = dest.Top;
+            float dw = Math.Max(1f, dest.Width);
+            float dh = Math.Max(1f, dest.Height);
             bool needShader = _dirty || _fx == null || _paint.Shader == null
                 || _cachedFast != fast || _cachedCrop != applyCrop
-                || _cachedDw != dw || _cachedDh != dh
+                || Math.Abs(_cachedDx - dx) > 0.01f || Math.Abs(_cachedDy - dy) > 0.01f
+                || Math.Abs(_cachedDw - dw) > 0.01f || Math.Abs(_cachedDh - dh) > 0.01f
                 || _cachedTx != tileX || _cachedTy != tileY
                 || _cachedTw != tileW || _cachedTh != tileH
                 || _cachedCx != viewCropX || _cachedCy != viewCropY
                 || _cachedCw != viewCropW || _cachedCh != viewCropH
+                || _cachedFw != frameW || _cachedFh != frameH
                 || !ReferenceEquals(_source, source);
 
             if (needShader)
@@ -88,12 +95,13 @@ internal sealed class DevelopLook : IDisposable
                     || source.ColorType == SKColorType.RgbaF32;
                 DevelopRenderer.BindUniforms(
                     uniforms, settings, source.Width, source.Height,
-                    dw, dh,
+                    dx, dy, dw, dh,
                     split: 0f, before: false, lutSize, lutAmount,
                     fast: fast, applyCrop: applyCrop, srcLinear: srcLinear,
                     tileX: tileX, tileY: tileY, tileW: tileW, tileH: tileH,
                     viewCropX: viewCropX, viewCropY: viewCropY,
-                    viewCropW: viewCropW, viewCropH: viewCropH);
+                    viewCropW: viewCropW, viewCropH: viewCropH,
+                    frameW: frameW, frameH: frameH);
 
                 var children = new SKRuntimeEffectChildren(effect);
                 children.Add("u_image", _img);
@@ -116,6 +124,8 @@ internal sealed class DevelopLook : IDisposable
                 _dirty = false;
                 _cachedFast = fast;
                 _cachedCrop = applyCrop;
+                _cachedDx = dx;
+                _cachedDy = dy;
                 _cachedDw = dw;
                 _cachedDh = dh;
                 _cachedTx = tileX;
@@ -126,12 +136,13 @@ internal sealed class DevelopLook : IDisposable
                 _cachedCy = viewCropY;
                 _cachedCw = viewCropW;
                 _cachedCh = viewCropH;
+                _cachedFw = frameW;
+                _cachedFh = frameH;
             }
 
             canvas.Save();
-            canvas.ClipRect(clip, SKClipOperation.Intersect, false);
-            canvas.Translate(dest.Left, dest.Top);
-            canvas.DrawRect(new SKRect(0, 0, dest.Width, dest.Height), _paint);
+            canvas.ClipRect(clip);
+            canvas.DrawRect(dest, _paint);
             canvas.Restore();
 
             if (!_loggedOk)

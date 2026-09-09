@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using Raw75.Imaging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
@@ -14,38 +15,58 @@ using SkiaSharp;
 namespace Raw75.Io;
 
 /// <summary>
-/// Encode a display-referred image (GPU readback already done) to JPEG/PNG/WebP/TIFF.
-/// Safe to call from a background thread.
+/// Encode a display-referred image to JPEG/PNG/WebP/TIFF.
+/// Safe to call from a background thread. Does not reimplement the look.
 /// </summary>
 public static class Exporter
 {
-    public static void Export(SKBitmap bitmap, string path, string format, int jpegQuality, int longEdge)
+    public static (int Width, int Height) Export(SKBitmap bitmap, string path, string format, int jpegQuality, int longEdge)
     {
         ArgumentNullException.ThrowIfNull(bitmap);
         using SKImage image = SKImage.FromBitmap(bitmap)
             ?? throw new InvalidOperationException("Could not wrap bitmap for export.");
-        Export(image, path, format, jpegQuality, longEdge);
+        return Export(image, path, format, jpegQuality, longEdge);
     }
 
-    public static void Export(SKImage image, string path, string format, int jpegQuality, int longEdge)
+    public static (int Width, int Height) Export(SKImage image, string path, string format, int jpegQuality, int longEdge)
     {
         ArgumentNullException.ThrowIfNull(image);
+        using Image<Rgba32> img = ToImageSharp(image);
+        return Write(img, path, format, jpegQuality, longEdge);
+    }
+
+    internal static (int Width, int Height) Export(RasterBuffer buf, string path, string format, int jpegQuality, int longEdge)
+    {
+        if (!buf.HasPixels || buf.Rgba == null || buf.Width < 1 || buf.Height < 1)
+            throw new InvalidOperationException("Export image has no pixels.");
+        using Image<Rgba32> img = Image.LoadPixelData<Rgba32>(buf.Rgba, buf.Width, buf.Height);
+        return Write(img, path, format, jpegQuality, longEdge);
+    }
+
+    private static (int Width, int Height) Write(
+        Image<Rgba32> img, string path, string format, int jpegQuality, int longEdge)
+    {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Export path is empty.", nameof(path));
 
-        using Image<Rgba32> img = ToImageSharp(image);
-
+        // Never upscale a proxy or a smaller native. Long-edge is a downscale cap only.
         if (longEdge > 0)
         {
             int w = img.Width;
             int h = img.Height;
             int max = Math.Max(w, h);
-            if (max > 0 && max != longEdge)
+            if (max > longEdge)
             {
                 float scale = longEdge / (float)max;
                 int nw = Math.Max(1, (int)Math.Round(w * scale));
                 int nh = Math.Max(1, (int)Math.Round(h * scale));
-                img.Mutate(x => x.Resize(nw, nh));
+                img.Mutate(x => x.Resize(new ResizeOptions
+                {
+                    Size = new Size(nw, nh),
+                    Sampler = KnownResamplers.Lanczos3,
+                    Mode = ResizeMode.Stretch,
+                    PremultiplyAlpha = false
+                }));
             }
         }
 
@@ -69,9 +90,15 @@ public static class Exporter
                 img.Save(path, new TiffEncoder { Compression = TiffCompression.Lzw });
                 break;
             default:
-                img.Save(path, new JpegEncoder { Quality = q });
+                img.Save(path, new JpegEncoder
+                {
+                    Quality = q,
+                    ColorType = q >= 90 ? JpegColorType.YCbCrRatio444 : JpegColorType.YCbCrRatio422
+                });
                 break;
         }
+
+        return (img.Width, img.Height);
     }
 
     private static string NormalizeFormat(string format, string path)

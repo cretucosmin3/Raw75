@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Blossom;
 using Blossom.Core;
@@ -42,6 +43,30 @@ public sealed class WorkspaceView : View
     private SliderRow _temp = null!, _tint = null!, _ev = null!, _con = null!, _hi = null!, _sh = null!;
     private SliderRow _wh = null!, _bk = null!, _vib = null!, _sat = null!;
     private SliderRow _sharp = null!, _dnY = null!, _dnC = null!, _straight = null!;
+
+    // Tone
+    private PanelGroup _toneGroup = null!;
+    private IconButton _btnToneSigmoid = null!;
+    private IconButton _btnToneFilmic = null!;
+    private SliderRow _sigContrast = null!;
+    private SliderRow _sigSkew = null!;
+
+    // Reconstruction
+    private PanelGroup _reconGroup = null!;
+    private IconButton _btnReconOff = null!;
+    private IconButton _btnReconOpposed = null!;
+    private IconButton _btnReconLCh = null!;
+    private SliderRow _reconThreshold = null!;
+    private SliderRow _reconColor = null!;
+    private SliderRow _reconSpatial = null!;
+
+    // Local contrast
+    private PanelGroup _localGroup = null!;
+    private SliderRow _localDetail = null!;
+    private SliderRow _localHighlights = null!;
+    private SliderRow _localShadows = null!;
+    private SliderRow _localMidtones = null!;
+
     private readonly SliderRow[] _hslH = new SliderRow[6];
     private readonly SliderRow[] _hslS = new SliderRow[6];
     private readonly SliderRow[] _hslL = new SliderRow[6];
@@ -169,7 +194,13 @@ public sealed class WorkspaceView : View
             RequestViewport(d);
         };
         _photo.Rotate90Clicked += Rotate;
-        _photo.CropChanged += () => { /* overlay only until OK / Enter */ };
+        _photo.CropChanged += () =>
+        {
+            if (_sync) return;
+            _sync = true;
+            _straight.Value = _photo.StraightenPreview;
+            _sync = false;
+        };
         AddElement(_photo);
 
         var tools = Bar("Tools", Theme.PanelAlt, photoX, photoY + photoH, photoW, tool,
@@ -186,12 +217,19 @@ public sealed class WorkspaceView : View
             {
                 d.Undo.Push(d.Settings);
                 CopyCropInto(d);
+                _straight.Value = d.Settings.Straighten;
+                WorkspaceStore.SaveSettings(d);
             }
             PushLook(fast: false, settle: true);
         };
         _photo.CropCancelled += () =>
         {
             _btnCrop.Toggled = false;
+            var d = _session.Active;
+            if (d != null)
+            {
+                _straight.Value = d.Settings.Straighten;
+            }
             PushLook(fast: false, settle: true);
         };
         _btnBefore = Tool("Before", tx, ty); tx += 68;
@@ -254,13 +292,13 @@ public sealed class WorkspaceView : View
         _tint = BindSlider(basic, "Tint", -100, 100, "0", (s, v) => s.Tint = v, s => s.Tint);
         _ev = BindSlider(basic, "Exposure", -5, 5, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
         _con = BindSlider(basic, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
-        _hi = BindSlider(basic, "Highlights", -100, 100, "0", (s, v) => s.Highlights = v, s => s.Highlights);
-        _sh = BindSlider(basic, "Shadows", -100, 100, "0", (s, v) => s.Shadows = v, s => s.Shadows);
+        _hi = BindSlider(basic, "Hi recovery", -100, 100, "0", (s, v) => s.Highlights = v, s => s.Highlights);
+        _sh = BindSlider(basic, "Shadow recovery", -100, 100, "0", (s, v) => s.Shadows = v, s => s.Shadows);
         _wh = BindSlider(basic, "Whites", -100, 100, "0", (s, v) => s.Whites = v, s => s.Whites);
         _bk = BindSlider(basic, "Blacks", -100, 100, "0", (s, v) => s.Blacks = v, s => s.Blacks);
         _vib = BindSlider(basic, "Vibrance", -100, 100, "0", (s, v) => s.Vibrance = v, s => s.Vibrance);
         _sat = BindSlider(basic, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
-        _matchGray = new IconButton("Match gray");
+        _matchGray = new IconButton("Match mid-gray");
         _matchGray.Clicked += () =>
         {
             var d = _session.Active;
@@ -271,6 +309,64 @@ public sealed class WorkspaceView : View
             PushLook(fast: false, settle: true);
         };
         basic.AddBody(_matchGray);
+
+        _toneGroup = new PanelGroup("Tone");
+        _btnToneSigmoid = new IconButton("Sigmoid");
+        _btnToneFilmic = new IconButton("Filmic");
+        _btnToneSigmoid.Clicked += () => SetToneMode(ToneMode.Sigmoid);
+        _btnToneFilmic.Clicked += () => SetToneMode(ToneMode.Filmic);
+        _toneGroup.AddBody(new ModeChipRow([_btnToneSigmoid, _btnToneFilmic]));
+        _sigContrast = BindSlider(_toneGroup, "Tone Contrast", 0.1f, 10.0f, "0.00",
+            (s, v) => s.SigmoidContrast = v, s => s.SigmoidContrast, 1.5f);
+        _sigSkew = BindSlider(_toneGroup, "Skew", -1.0f, 1.0f, "0.00",
+            (s, v) => s.SigmoidSkew = v, s => s.SigmoidSkew, 0.0f);
+        _toneGroup.ExpandedChanged += exp =>
+        {
+            if (exp && _session.Active != null)
+                UpdateToneModeUi(_session.Active.Settings);
+        };
+
+        _reconGroup = new PanelGroup("Reconstruction");
+        _btnReconOff = new IconButton("Off");
+        _btnReconOpposed = new IconButton("Opposed");
+        _btnReconLCh = new IconButton("LCh");
+        _btnReconOff.Clicked += () => SetReconMode(HighlightMode.Off);
+        _btnReconOpposed.Clicked += () => SetReconMode(HighlightMode.Opposed);
+        _btnReconLCh.Clicked += () => SetReconMode(HighlightMode.LCh);
+        _reconGroup.AddBody(new ModeChipRow([_btnReconOff, _btnReconOpposed, _btnReconLCh]));
+        _reconThreshold = BindSlider(_reconGroup, "Threshold", 0.5f, 2.0f, "0.00",
+            (s, v) => s.HighlightThreshold = v, s => s.HighlightThreshold, 1.0f);
+        _reconColor = BindSlider(_reconGroup, "Color amount", 0f, 100f, "0",
+            (s, v) => s.ColorReconstructionAmount = v, s => s.ColorReconstructionAmount, 0f);
+        _reconSpatial = BindSlider(_reconGroup, "Spatial", 0f, 100f, "0",
+            (s, v) => s.ColorReconstructionSpatial = v, s => s.ColorReconstructionSpatial, 0f);
+        _reconGroup.ExpandedChanged += exp =>
+        {
+            if (exp && _session.Active != null)
+                UpdateReconModeUi(_session.Active.Settings);
+        };
+
+        _localGroup = new PanelGroup("Local contrast");
+        _localDetail = BindSlider(_localGroup, "Detail", -1.0f, 4.0f, "0.00",
+            (s, v) =>
+            {
+                s.LocalContrastDetail = v;
+                UpdateLocalContrastUi(s);
+            }, s => s.LocalContrastDetail, 0.0f);
+        _localHighlights = BindSlider(_localGroup, "Highlights", -100f, 100f, "0",
+            (s, v) => s.LocalContrastHighlights = v, s => s.LocalContrastHighlights, 0f);
+        _localShadows = BindSlider(_localGroup, "Shadows", -100f, 100f, "0",
+            (s, v) => s.LocalContrastShadows = v, s => s.LocalContrastShadows, 0f);
+        _localMidtones = BindSlider(_localGroup, "Midtone range", 0f, 100f, "0",
+            (s, v) => s.LocalContrastMidtones = v, s => s.LocalContrastMidtones, 50f);
+        _localGroup.ExpandedChanged += exp =>
+        {
+            if (exp && _session.Active != null)
+                UpdateLocalContrastUi(_session.Active.Settings);
+        };
+
+        UpdateReconModeUi(new DevelopSettings());
+        UpdateLocalContrastUi(new DevelopSettings());
 
         var hsl = new PanelGroup("HSL");
         for (int i = 0; i < 6; i++)
@@ -300,15 +396,70 @@ public sealed class WorkspaceView : View
         }, s => s.Straighten);
 
         host.AddBody(basic);
+        host.AddBody(_toneGroup);
+        host.AddBody(_reconGroup);
+        host.AddBody(_localGroup);
         host.AddBody(hsl);
         host.AddBody(detail);
         host.AddBody(xform);
     }
 
+    private void SetToneMode(ToneMode mode)
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.ToneMode = mode;
+        UpdateToneModeUi(d.Settings);
+        PushLook(fast: false, settle: true);
+    }
+
+    private void UpdateToneModeUi(DevelopSettings s)
+    {
+        bool isSigmoid = s.ToneMode == ToneMode.Sigmoid;
+        _btnToneSigmoid.Toggled = isSigmoid;
+        _btnToneFilmic.Toggled = !isSigmoid;
+        _sigContrast.Visible = isSigmoid;
+        _sigSkew.Visible = isSigmoid;
+        _toneGroup.InvalidateLayout();
+    }
+
+    private void SetReconMode(HighlightMode mode)
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.ReconstructionMode = mode;
+        UpdateReconModeUi(d.Settings);
+        PushLook(fast: false, settle: true);
+    }
+
+    private void UpdateReconModeUi(DevelopSettings s)
+    {
+        bool active = s.ReconstructionMode != HighlightMode.Off;
+        _btnReconOff.Toggled = s.ReconstructionMode == HighlightMode.Off;
+        _btnReconOpposed.Toggled = s.ReconstructionMode == HighlightMode.Opposed;
+        _btnReconLCh.Toggled = s.ReconstructionMode == HighlightMode.LCh;
+        _reconColor.Visible = active;
+        _reconSpatial.Visible = active;
+        _reconGroup.InvalidateLayout();
+    }
+
+    private void UpdateLocalContrastUi(DevelopSettings s)
+    {
+        bool active = Math.Abs(s.LocalContrastDetail) > 0.001f;
+        _localHighlights.Visible = active;
+        _localShadows.Visible = active;
+        _localMidtones.Visible = active;
+        _localGroup.InvalidateLayout();
+    }
+
     private SliderRow BindSlider(PanelGroup group, string label, float min, float max, string fmt,
-        Action<DevelopSettings, float> set, Func<DevelopSettings, float> get)
+        Action<DevelopSettings, float> set, Func<DevelopSettings, float> get, float def = 0f)
     {
         var row = new SliderRow(label, min, max, fmt);
+        row.DefaultValue = def;
+        row.Value = def;
         row.Changed += v =>
         {
             if (_sync) return;
@@ -341,7 +492,8 @@ public sealed class WorkspaceView : View
         d.Settings.CropY = _photo.CropY;
         d.Settings.CropW = _photo.CropW;
         d.Settings.CropH = _photo.CropH;
-        d.Settings.Straighten = _straight.Value;
+        d.Settings.Straighten = _photo.StraightenPreview;
+        _straight.Value = _photo.StraightenPreview;
     }
 
     private void RefreshSession()
@@ -370,10 +522,6 @@ public sealed class WorkspaceView : View
         _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
         PullSliders(d);
         _matchGray.Toggled = d.Settings.MatchGray;
-        _photo.CropX = d.Settings.CropX;
-        _photo.CropY = d.Settings.CropY;
-        _photo.CropW = d.Settings.CropW > 0.001f ? d.Settings.CropW : 1f;
-        _photo.CropH = d.Settings.CropH > 0.001f ? d.Settings.CropH : 1f;
         UpdateZoomLabel();
     }
 
@@ -407,12 +555,14 @@ public sealed class WorkspaceView : View
     /// </summary>
     private void BindPhoto(PhotoDocument d)
     {
+        _photo.PrepareBind(d.Settings);
+        _photo.SetNativeSize(d.NativeWidth, d.NativeHeight);
         SKImage? working = d.Proxy;
         if (working != null && working.Handle != IntPtr.Zero)
         {
-            _photo.SetNativeSize(d.NativeWidth, d.NativeHeight);
             _photo.SetLook(working, d.Settings, fast: false);
             _photo.SetDeveloped(d.Display, owns: false);
+            _photo.RefreshGeometry();
             if (d.ViewportTile != null)
                 _photo.SetViewportTile(d.ViewportTile, d.TileX, d.TileY, d.TileW, d.TileH);
             else
@@ -421,9 +571,9 @@ public sealed class WorkspaceView : View
             return;
         }
 
-        _photo.SetNativeSize(d.NativeWidth, d.NativeHeight);
         _photo.SetLook(null, d.Settings, fast: false);
         _photo.SetDeveloped(d.Look ?? d.Preview ?? d.Display ?? d.Thumb, owns: false);
+        _photo.RefreshGeometry();
     }
 
     private void PullSliders(PhotoDocument d)
@@ -440,6 +590,18 @@ public sealed class WorkspaceView : View
         _bk.Value = s.Blacks;
         _vib.Value = s.Vibrance;
         _sat.Value = s.Saturation;
+        _sigContrast.Value = s.SigmoidContrast;
+        _sigSkew.Value = s.SigmoidSkew;
+        UpdateToneModeUi(s);
+        _reconThreshold.Value = s.HighlightThreshold;
+        _reconColor.Value = s.ColorReconstructionAmount;
+        _reconSpatial.Value = s.ColorReconstructionSpatial;
+        UpdateReconModeUi(s);
+        _localDetail.Value = s.LocalContrastDetail;
+        _localHighlights.Value = s.LocalContrastHighlights;
+        _localShadows.Value = s.LocalContrastShadows;
+        _localMidtones.Value = s.LocalContrastMidtones;
+        UpdateLocalContrastUi(s);
         _sharp.Value = s.Sharpen;
         _dnY.Value = s.DenoiseLuma;
         _dnC.Value = s.DenoiseChroma;
@@ -535,7 +697,7 @@ public sealed class WorkspaceView : View
         if (d == null) return;
         d.Undo.Push(d.Settings);
         d.Settings.Rotate90 = (d.Settings.Rotate90 + dir) & 3;
-        _photo.NotifyOrientation();
+        _photo.NotifyOrientation(dir);
         WorkspaceStore.SaveSettings(d);
         PushLook(fast: false, settle: true);
     }
@@ -580,7 +742,7 @@ public sealed class WorkspaceView : View
         d.Undo.Push(d.Settings);
         if (h) d.Settings.FlipH = !d.Settings.FlipH;
         else d.Settings.FlipV = !d.Settings.FlipV;
-        _photo.NotifyOrientation();
+        _photo.NotifyOrientation(flipH: h, flipV: !h);
         WorkspaceStore.SaveSettings(d);
         PushLook(fast: false, settle: true);
     }
@@ -747,30 +909,59 @@ public sealed class WorkspaceView : View
         _settings.Open(_session, _photo);
     }
 
+    private int _exporting;
+
     private void StartExport()
     {
         var d = _session.Active;
         if (d == null) { SetStatus("Nothing to export."); return; }
-        _export.Open(Path.ChangeExtension(d.Name, ".jpg"));
+        _export.Open(Path.ChangeExtension(d.Name, ".jpg"), d.NativeWidth, d.NativeHeight);
     }
 
     private void OnExportConfirmed(ExportRequest req)
     {
         var d = _session.Active;
-        if (d?.Display == null) return;
+        if (d == null) { SetStatus("Nothing to export."); return; }
+        if (Interlocked.CompareExchange(ref _exporting, 1, 0) != 0)
+        {
+            SetStatus("Export already running.");
+            return;
+        }
+
         string? dest = FileDialogs.SavePhoto(Path.ChangeExtension(d.Path, Ext(req.Format)));
-        if (dest == null) return;
-        var img = d.Display;
+        if (dest == null)
+        {
+            Volatile.Write(ref _exporting, 0);
+            return;
+        }
+
+        var settings = d.Settings.Clone();
+        string srcPath = d.Path;
+        RasterBuffer hiRes = d.HiResRgba;
+        _photo.Busy = true;
+        SetStatus("Exporting full resolution…");
         Task.Run(() =>
         {
             try
             {
-                Exporter.Export(img, dest, req.Format, req.Quality, req.LongEdge);
-                Browser.Post(() => SetStatus("Exported " + Path.GetFileName(dest)));
+                var size = DevelopEngine.WriteExport(
+                    srcPath, settings, hiRes, dest, req.Format, req.Quality, req.LongEdge,
+                    msg => Browser.Post(() => SetStatus(msg)));
+                Browser.Post(() => SetStatus(
+                    $"Exported {size.Width}×{size.Height}  {Path.GetFileName(dest)}"));
             }
             catch (Exception ex)
             {
                 Browser.Post(() => SetStatus("Export failed: " + ex.Message));
+            }
+            finally
+            {
+                Volatile.Write(ref _exporting, 0);
+                Browser.Post(() =>
+                {
+                    if (_photo != null)
+                        _photo.Busy = false;
+                });
             }
         });
     }
@@ -961,5 +1152,40 @@ internal sealed class RightColumn : ScrollContainer
         }
         SetContentSize(Transform.Width, Math.Max(y + inset, Transform.Computed.Height));
         base.LayoutChildren();
+    }
+}
+
+internal sealed class ModeChipRow : VisualElement
+{
+    private readonly IconButton[] _buttons;
+    private readonly float _gap;
+
+    public ModeChipRow(IconButton[] buttons, float gap = 6f)
+    {
+        _buttons = buttons;
+        _gap = gap;
+        Transform.Height = Theme.ToolH;
+        foreach (var b in buttons)
+            AddChild(b);
+    }
+
+    public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
+    {
+        float w = maxWidth > 0 ? maxWidth : Theme.RightW;
+        return new SKSize(w, Theme.ToolH);
+    }
+
+    protected override void LayoutChildren()
+    {
+        float ox = Transform.Computed.X;
+        float oy = Transform.Computed.Y;
+        float w = Math.Max(1f, Transform.Width);
+        float h = Math.Max(1f, Transform.Height);
+        int n = _buttons.Length;
+        float cellW = n > 0 ? (w - _gap * (n - 1)) / n : w;
+        for (int i = 0; i < n; i++)
+        {
+            _buttons[i].Transform.SetAbsoluteFrame(ox + i * (cellW + _gap), oy, cellW, h);
+        }
     }
 }

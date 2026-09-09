@@ -23,16 +23,20 @@ public static class DevelopRenderer
     {
         if (source == null)
             return null;
+        s ??= new DevelopSettings();
         int w = source.Width;
         int h = source.Height;
-        int rot = s != null ? s.Rotate90 & 3 : 0;
-        if ((rot & 1) != 0)
+        int rot = s.Rotate90 & 3;
+        int fw = (rot & 1) != 0 ? h : w;
+        int fh = (rot & 1) != 0 ? w : h;
+        int outW = fw;
+        int outH = fh;
+        if (s.HasCrop)
         {
-            int t = w;
-            w = h;
-            h = t;
+            outW = Math.Max(1, (int)Math.Round(fw * s.CropW));
+            outH = Math.Max(1, (int)Math.Round(fh * s.CropH));
         }
-        return Apply(source, s ?? new DevelopSettings(), w, h, 0f, false);
+        return Apply(source, s, outW, outH, 0f, false);
     }
 
     public static SKImage? Apply(SKImage source, DevelopSettings s, int outW, int outH)
@@ -79,7 +83,7 @@ public static class DevelopRenderer
             lock (Gate)
             {
                 var uniforms = new SKRuntimeEffectUniforms(effect);
-                BindUniforms(uniforms, s, source.Width, source.Height, outW, outH, split, before, lutSize, lutAmount);
+                BindUniforms(uniforms, s, source.Width, source.Height, 0f, 0f, outW, outH, split, before, lutSize, lutAmount);
 
                 var children = new SKRuntimeEffectChildren(effect);
                 children.Add("u_image", imgShader);
@@ -184,8 +188,10 @@ public static class DevelopRenderer
         DevelopSettings s,
         int srcW,
         int srcH,
-        int dstW,
-        int dstH,
+        float dstX,
+        float dstY,
+        float dstW,
+        float dstH,
         float split,
         bool before,
         float lutSize,
@@ -200,10 +206,17 @@ public static class DevelopRenderer
         float viewCropX = float.NaN,
         float viewCropY = float.NaN,
         float viewCropW = float.NaN,
-        float viewCropH = float.NaN)
+        float viewCropH = float.NaN,
+        int frameW = 0,
+        int frameH = 0)
     {
-        Set(u, "u_resolution", new[] { (float)dstW, (float)dstH });
+        Set(u, "u_destOrigin", new[] { dstX, dstY });
+        Set(u, "u_destSize", new[] { dstW, dstH });
         Set(u, "u_srcSize", new[] { (float)srcW, (float)srcH });
+        int rot = s.Rotate90 & 3;
+        int fw = frameW > 0 ? frameW : ((rot & 1) != 0 ? srcH : srcW);
+        int fh = frameH > 0 ? frameH : ((rot & 1) != 0 ? srcW : srcH);
+        Set(u, "u_frameSize", new[] { (float)fw, (float)fh });
         if (tileW < 1e-5f) tileW = 1f;
         if (tileH < 1e-5f) tileH = 1f;
         Set(u, "u_tileOrigin", new[] { tileX, tileY });
@@ -226,8 +239,9 @@ public static class DevelopRenderer
             Set(u, "u_hsl" + i, new[] { band.Hue / 100f, band.Sat / 100f, band.Luma / 100f, 0f });
         }
         Set(u, "u_sharpen", s.Sharpen / 150f);
-        Set(u, "u_denoiseLuma", fast ? 0f : s.DenoiseLuma / 100f);
-        Set(u, "u_denoiseChroma", fast ? 0f : s.DenoiseChroma / 100f);
+        Set(u, "u_denoiseFast", fast ? 1f : 0f);
+        Set(u, "u_denoiseLuma", s.DenoiseLuma / 100f);
+        Set(u, "u_denoiseChroma", s.DenoiseChroma / 100f);
         float cx, cy, cw, ch;
         if (!float.IsNaN(viewCropW) && viewCropW > 0.0001f && viewCropH > 0.0001f)
         {
@@ -261,6 +275,30 @@ public static class DevelopRenderer
         Set(u, "u_lutAmount", lutAmount);
         Set(u, "u_hasLut", lutAmount > 0.001f && lutSize > 1.5f ? 1f : 0f);
         Set(u, "u_srcLinear", srcLinear ? 1f : 0f);
+        Set(u, "u_toneMode", s.ToneMode == ToneMode.Filmic ? 1f : 0f);
+        SigmoidParams sig = SigmoidParams.Compute(s.SigmoidContrast, s.SigmoidSkew);
+        Set(u, "u_sigMagnitude", sig.Magnitude);
+        Set(u, "u_sigPaperExp", sig.PaperExp);
+        Set(u, "u_sigFilmFog", sig.FilmFog);
+        Set(u, "u_sigFilmPower", sig.FilmPower);
+        Set(u, "u_sigPaperPower", sig.PaperPower);
+        float reconMode = s.ReconstructionMode switch
+        {
+            HighlightMode.Opposed => 1f,
+            HighlightMode.LCh => 2f,
+            _ => 0f
+        };
+        Set(u, "u_reconMode", reconMode);
+        Set(u, "u_hlThreshold", s.HighlightThreshold);
+        Set(u, "u_reconFast", fast ? 1f : 0f);
+        Set(u, "u_reconColorAmount", s.ColorReconstructionAmount / 100f);
+        Set(u, "u_reconColorSpatial", s.ColorReconstructionSpatial);
+
+        Set(u, "u_localDetail", s.LocalContrastDetail);
+        Set(u, "u_localHighlights", s.LocalContrastHighlights / 100f);
+        Set(u, "u_localShadows", s.LocalContrastShadows / 100f);
+        Set(u, "u_localMidtones", s.LocalContrastMidtones / 100f);
+        Set(u, "u_localFast", fast ? 1f : 0f);
     }
 
     private static void Set(SKRuntimeEffectUniforms u, string name, float value)
@@ -373,8 +411,10 @@ public static class DevelopRenderer
             uniform shader u_image;
             uniform shader u_lut;
             uniform shader u_mask;
-            uniform float2 u_resolution;
+            uniform float2 u_destOrigin;
+            uniform float2 u_destSize;
             uniform float2 u_srcSize;
+            uniform float2 u_frameSize;
             uniform float2 u_tileOrigin;
             uniform float2 u_tileSize;
             uniform float u_temp;
@@ -397,6 +437,7 @@ public static class DevelopRenderer
             uniform float u_sharpen;
             uniform float u_denoiseLuma;
             uniform float u_denoiseChroma;
+            uniform float u_denoiseFast;
             uniform float4 u_crop;
             uniform float u_straighten;
             uniform float u_rot;
@@ -408,6 +449,45 @@ public static class DevelopRenderer
             uniform float u_lutAmount;
             uniform float u_hasLut;
             uniform float u_srcLinear;
+            uniform float u_toneMode;
+            uniform float u_sigMagnitude;
+            uniform float u_sigPaperExp;
+            uniform float u_sigFilmFog;
+            uniform float u_sigFilmPower;
+            uniform float u_sigPaperPower;
+            uniform float u_reconMode;
+            uniform float u_hlThreshold;
+            uniform float u_reconFast;
+            uniform float u_reconColorAmount;
+            uniform float u_reconColorSpatial;
+            uniform float u_localDetail;
+            uniform float u_localHighlights;
+            uniform float u_localShadows;
+            uniform float u_localMidtones;
+            uniform float u_localFast;
+
+            // ref: local laplacian
+            float curve_scalar(float x, float g, float sigma, float shadows, float highlights, float clarity) {
+                float c = x - g;
+                float val;
+                if (c > 2.0 * sigma) {
+                    val = g + sigma + (1.0 + shadows) * (c - sigma);
+                } else if (c < -2.0 * sigma) {
+                    val = g - sigma + (1.0 + highlights) * (c + sigma);
+                } else if (c > 0.0) {
+                    float t = clamp(c / (2.0 * sigma), 0.0, 1.0);
+                    float t2 = t * t;
+                    float mt = 1.0 - t;
+                    val = g + sigma * 2.0 * mt * t + t2 * (sigma + sigma * (1.0 + shadows));
+                } else {
+                    float t = clamp(-c / (2.0 * sigma), 0.0, 1.0);
+                    float t2 = t * t;
+                    float mt = 1.0 - t;
+                    val = g - sigma * 2.0 * mt * t + t2 * (-sigma - sigma * (1.0 + highlights));
+                }
+                val += clarity * c * exp(-c * c / max(2.0 * sigma * sigma / 3.0, 0.001));
+                return val;
+            }
 
             float to_lin_1(float s) {
                 s = clamp(s, 0.0, 1.0);
@@ -499,27 +579,29 @@ public static class DevelopRenderer
             }
 
             float2 apply_geom(float2 uv) {
-                float rot = u_rot;
                 float2 p = uv;
+                if (abs(u_straighten) > 0.001) {
+                    float a = u_straighten * 0.01745329251;
+                    float c = cos(a);
+                    float sn = sin(a);
+                    float2 q = p - float2(0.5);
+                    float invAspect = u_frameSize.y / u_frameSize.x;
+                    float aspect = u_frameSize.x / u_frameSize.y;
+                    p = float2(q.x * c - q.y * invAspect * sn, q.x * aspect * sn + q.y * c) + float2(0.5);
+                }
+                float rot = u_rot;
                 if (rot > 0.5 && rot < 1.5) {
-                    p = float2(uv.y, 1.0 - uv.x);
+                    p = float2(p.y, 1.0 - p.x);
                 } else if (rot >= 1.5 && rot < 2.5) {
-                    p = float2(1.0 - uv.x, 1.0 - uv.y);
+                    p = float2(1.0 - p.x, 1.0 - p.y);
                 } else if (rot >= 2.5) {
-                    p = float2(1.0 - uv.y, uv.x);
+                    p = float2(1.0 - p.y, p.x);
                 }
                 if (u_flipH > 0.5) {
                     p.x = 1.0 - p.x;
                 }
                 if (u_flipV > 0.5) {
                     p.y = 1.0 - p.y;
-                }
-                if (abs(u_straighten) > 0.001) {
-                    float a = u_straighten * 0.01745329251;
-                    float2 q = p - float2(0.5);
-                    float c = cos(a);
-                    float sn = sin(a);
-                    p = float2(q.x * c - q.y * sn, q.x * sn + q.y * c) + float2(0.5);
                 }
                 return p;
             }
@@ -557,6 +639,41 @@ public static class DevelopRenderer
 
             float3 filmic(float3 x) {
                 return float3(filmic1(x.r), filmic1(x.g), filmic1(x.b));
+            }
+
+            // ref: sigmoid tone curve
+            float sigmoid1(float x) {
+                float clamped = max(x, 0.0);
+                float film_response = pow(u_sigFilmFog + clamped, u_sigFilmPower);
+                float paper_response = u_sigMagnitude * pow(film_response / (u_sigPaperExp + film_response), u_sigPaperPower);
+                return paper_response;
+            }
+
+            float3 sigmoid_rgb(float3 x) {
+                return float3(sigmoid1(x.r), sigmoid1(x.g), sigmoid1(x.b));
+            }
+
+            float3 tone_curve(float3 x) {
+                if (u_toneMode > 0.5) {
+                    return filmic(x);
+                }
+                return sigmoid_rgb(x);
+            }
+
+            float cbrt_pos(float x) {
+                return pow(max(x, 0.0), 0.33333333);
+            }
+
+            float3 cbrt_pos3(float3 v) {
+                return float3(cbrt_pos(v.r), cbrt_pos(v.g), cbrt_pos(v.b));
+            }
+
+            // ref: highlight reconstruction (opposed)
+            float3 opposed_ref(float3 u) {
+                float opp_r = 0.5 * (u.g + u.b);
+                float opp_g = 0.5 * (u.r + u.b);
+                float opp_b = 0.5 * (u.r + u.g);
+                return float3(opp_r * opp_r * opp_r, opp_g * opp_g * opp_g, opp_b * opp_b * opp_b);
             }
 
             float3 apply_look(float3 col) {
@@ -625,8 +742,13 @@ public static class DevelopRenderer
                 return max(col, 0.0);
             }
 
+            float3 fetch_look(float2 coord, float lookAmt) {
+                float3 s = sample(u_image, clamp(coord, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                return lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s, 0.0) : to_lin(s)) : (u_srcLinear > 0.5 ? max(s, 0.0) : to_lin(s));
+            }
+
             half4 main(float2 fragCoord) {
-                float2 uv = fragCoord / u_resolution;
+                float2 uv = (fragCoord - u_destOrigin) / u_destSize;
                 if (u_split > 0.001) {
                     if (abs(uv.x - u_split) < 0.002) {
                         return half4(1.0, 1.0, 1.0, 1.0);
@@ -639,6 +761,9 @@ public static class DevelopRenderer
                 }
                 uv = crop.xy + uv * crop.zw;
                 float2 srcUv = apply_geom(uv);
+                if (srcUv.x < -0.001 || srcUv.x > 1.001 || srcUv.y < -0.001 || srcUv.y > 1.001) {
+                    return half4(0.0, 0.0, 0.0, 1.0);
+                }
                 float2 t0 = u_tileOrigin;
                 float2 ts = u_tileSize;
                 if (ts.x < 0.00001) ts.x = 1.0;
@@ -657,18 +782,135 @@ public static class DevelopRenderer
 
                 float3 lin = u_srcLinear > 0.5 ? max(orig.rgb, 0.0) : to_lin(orig.rgb);
 
-                if (u_denoiseLuma > 0.001 || u_denoiseChroma > 0.001) {
-                    float3 acc = lin;
-                    acc += to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb);
-                    acc += to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb);
-                    acc += to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb);
-                    acc += to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb);
-                    acc *= 0.2;
-                    float lc = luma2020(lin);
-                    float lb = luma2020(acc);
-                    float3 cc = lin - lc;
-                    float3 cb = acc - lb;
-                    lin = float3(mix(lc, lb, u_denoiseLuma)) + mix(cc, cb, u_denoiseChroma);
+                // Highlight reconstruction (step 2)
+                // ref: highlight reconstruction (opposed & LCh)
+                if (u_reconMode < 0.5) {
+                    lin = min(lin, u_hlThreshold);
+                } else if (u_reconFast < 0.5) {
+                    float clipThresh = u_hlThreshold * 0.987;
+                    if (lin.r >= clipThresh || lin.g >= clipThresh || lin.b >= clipThresh) {
+                        float2 c0 = clamp(srcCoord + float2(-1.0, 0.0), float2(0.5), u_srcSize - float2(0.5));
+                        float2 c1 = clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5));
+                        float2 c2 = clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5));
+                        float2 c3 = clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5));
+                        float3 n0 = u_srcLinear > 0.5 ? max(sample(u_image, c0).rgb, 0.0) : to_lin(sample(u_image, c0).rgb);
+                        float3 n1 = u_srcLinear > 0.5 ? max(sample(u_image, c1).rgb, 0.0) : to_lin(sample(u_image, c1).rgb);
+                        float3 n2 = u_srcLinear > 0.5 ? max(sample(u_image, c2).rgb, 0.0) : to_lin(sample(u_image, c2).rgb);
+                        float3 n3 = u_srcLinear > 0.5 ? max(sample(u_image, c3).rgb, 0.0) : to_lin(sample(u_image, c3).rgb);
+
+                        if (u_reconMode > 1.5) {
+                            // LCh mode: ref: highlight reconstruction (LCh)
+                            float3 mean = (lin + n0 + n1 + n2 + n3) * 0.2;
+                            float3 rgbMax = max(lin, max(max(n0, n1), max(n2, n3)));
+
+                            float Ro = min(mean.r, clipThresh);
+                            float Go = min(mean.g, clipThresh);
+                            float Bo = min(mean.b, clipThresh);
+
+                            float R = rgbMax.r;
+                            float G = rgbMax.g;
+                            float B = rgbMax.b;
+
+                            float L = (R + G + B) * 0.33333333;
+                            float C = 1.7320508 * (R - G);
+                            float H = 2.0 * B - G - R;
+
+                            float Co = 1.7320508 * (Ro - Go);
+                            float Ho = 2.0 * Bo - Go - Ro;
+
+                            float ch2 = C * C + H * H;
+                            if (ch2 > 1e-6) {
+                                float ratio = sqrt((Co * Co + Ho * Ho) / ch2);
+                                C *= ratio;
+                                H *= ratio;
+                            }
+
+                            float recR = L - H * 0.16666667 + C / 3.4641016;
+                            float recG = L - H * 0.16666667 - C / 3.4641016;
+                            float recB = L + H * 0.33333333;
+
+                            if (lin.r >= clipThresh) lin.r = max(lin.r, recR);
+                            if (lin.g >= clipThresh) lin.g = max(lin.g, recG);
+                            if (lin.b >= clipThresh) lin.b = max(lin.b, recB);
+                        } else {
+                            // Opposed mode: ref: highlight reconstruction (opposed)
+                            float3 u0 = cbrt_pos3(lin);
+                            float3 ref0 = opposed_ref(u0);
+
+                            float3 sumChroma = float3(0.0);
+                            float3 cntChroma = float3(0.0);
+                            float loThresh = 0.2 * clipThresh;
+
+                            float3 nu0 = cbrt_pos3(n0);
+                            float3 nr0 = opposed_ref(nu0);
+                            if (n0.r > loThresh && n0.r < clipThresh) { sumChroma.r += n0.r - nr0.r; cntChroma.r += 1.0; }
+                            if (n0.g > loThresh && n0.g < clipThresh) { sumChroma.g += n0.g - nr0.g; cntChroma.g += 1.0; }
+                            if (n0.b > loThresh && n0.b < clipThresh) { sumChroma.b += n0.b - nr0.b; cntChroma.b += 1.0; }
+
+                            float3 nu1 = cbrt_pos3(n1);
+                            float3 nr1 = opposed_ref(nu1);
+                            if (n1.r > loThresh && n1.r < clipThresh) { sumChroma.r += n1.r - nr1.r; cntChroma.r += 1.0; }
+                            if (n1.g > loThresh && n1.g < clipThresh) { sumChroma.g += n1.g - nr1.g; cntChroma.g += 1.0; }
+                            if (n1.b > loThresh && n1.b < clipThresh) { sumChroma.b += n1.b - nr1.b; cntChroma.b += 1.0; }
+
+                            float3 nu2 = cbrt_pos3(n2);
+                            float3 nr2 = opposed_ref(nu2);
+                            if (n2.r > loThresh && n2.r < clipThresh) { sumChroma.r += n2.r - nr2.r; cntChroma.r += 1.0; }
+                            if (n2.g > loThresh && n2.g < clipThresh) { sumChroma.g += n2.g - nr2.g; cntChroma.g += 1.0; }
+                            if (n2.b > loThresh && n2.b < clipThresh) { sumChroma.b += n2.b - nr2.b; cntChroma.b += 1.0; }
+
+                            float3 nu3 = cbrt_pos3(n3);
+                            float3 nr3 = opposed_ref(nu3);
+                            if (n3.r > loThresh && n3.r < clipThresh) { sumChroma.r += n3.r - nr3.r; cntChroma.r += 1.0; }
+                            if (n3.g > loThresh && n3.g < clipThresh) { sumChroma.g += n3.g - nr3.g; cntChroma.g += 1.0; }
+                            if (n3.b > loThresh && n3.b < clipThresh) { sumChroma.b += n3.b - nr3.b; cntChroma.b += 1.0; }
+
+                            float3 chroma = float3(
+                                cntChroma.r > 0.5 ? sumChroma.r / cntChroma.r : 0.0,
+                                cntChroma.g > 0.5 ? sumChroma.g / cntChroma.g : 0.0,
+                                cntChroma.b > 0.5 ? sumChroma.b / cntChroma.b : 0.0
+                            );
+
+                            if (lin.r >= clipThresh) lin.r = max(lin.r, ref0.r + chroma.r);
+                            if (lin.g >= clipThresh) lin.g = max(lin.g, ref0.g + chroma.g);
+                            if (lin.b >= clipThresh) lin.b = max(lin.b, ref0.b + chroma.b);
+                        }
+                    }
+                }
+
+                // Color reconstruction (step 2): ref: color reconstruction
+                if (u_reconColorAmount > 0.001) {
+                    float clipThresh = u_hlThreshold * 0.987;
+                    if (lin.r >= clipThresh || lin.g >= clipThresh || lin.b >= clipThresh) {
+                        float rad = max(1.0, u_reconColorSpatial * 0.15);
+                        float3 sumCol = float3(0.0);
+                        float sumW = 0.0;
+                        float2 off1 = float2(rad, 0.0);
+                        float2 off2 = float2(-rad, 0.0);
+                        float2 off3 = float2(0.0, rad);
+                        float2 off4 = float2(0.0, -rad);
+
+                        float3 sn1 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn2 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn3 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn4 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb);
+
+                        float w1 = (sn1.r < clipThresh && sn1.g < clipThresh && sn1.b < clipThresh) ? (max(max(sn1.r, sn1.g), sn1.b) - min(min(sn1.r, sn1.g), sn1.b) + 0.01) : 0.0;
+                        float w2 = (sn2.r < clipThresh && sn2.g < clipThresh && sn2.b < clipThresh) ? (max(max(sn2.r, sn2.g), sn2.b) - min(min(sn2.r, sn2.g), sn2.b) + 0.01) : 0.0;
+                        float w3 = (sn3.r < clipThresh && sn3.g < clipThresh && sn3.b < clipThresh) ? (max(max(sn3.r, sn3.g), sn3.b) - min(min(sn3.r, sn3.g), sn3.b) + 0.01) : 0.0;
+                        float w4 = (sn4.r < clipThresh && sn4.g < clipThresh && sn4.b < clipThresh) ? (max(max(sn4.r, sn4.g), sn4.b) - min(min(sn4.r, sn4.g), sn4.b) + 0.01) : 0.0;
+
+                        sumCol += sn1 * w1 + sn2 * w2 + sn3 * w3 + sn4 * w4;
+                        sumW += w1 + w2 + w3 + w4;
+
+                        if (sumW > 0.001) {
+                            float3 avgCol = sumCol / sumW;
+                            float lCur = luma2020(lin);
+                            float lAvg = max(luma2020(avgCol), 0.001);
+                            float3 scaledChroma = avgCol * (lCur / lAvg);
+                            lin = mix(lin, scaledChroma, clamp(u_reconColorAmount, 0.0, 1.0));
+                        }
+                    }
                 }
 
                 float3 processed = lin;
@@ -676,15 +918,153 @@ public static class DevelopRenderer
                     processed = apply_look(lin);
                 }
 
-                float3 disp = to_srgb(filmic(processed));
+                // Local contrast (step 8): ref: bilateral filter
+                if (abs(u_localDetail) > 0.001) {
+                    float lum = max(luma2020(processed), 0.0001);
+                    float g = lum;
+                    float2 d1 = float2(1.5, 0.0);
+                    float2 d2 = float2(0.0, 1.5);
+                    float3 s1 = sample(u_image, clamp(srcCoord + d1, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 s2 = sample(u_image, clamp(srcCoord - d1, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 s3 = sample(u_image, clamp(srcCoord + d2, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 s4 = sample(u_image, clamp(srcCoord - d2, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 p1 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s1, 0.0) : to_lin(s1)) : (u_srcLinear > 0.5 ? max(s1, 0.0) : to_lin(s1));
+                    float3 p2 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s2, 0.0) : to_lin(s2)) : (u_srcLinear > 0.5 ? max(s2, 0.0) : to_lin(s2));
+                    float3 p3 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s3, 0.0) : to_lin(s3)) : (u_srcLinear > 0.5 ? max(s3, 0.0) : to_lin(s3));
+                    float3 p4 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s4, 0.0) : to_lin(s4)) : (u_srcLinear > 0.5 ? max(s4, 0.0) : to_lin(s4));
+                    float l1 = luma2020(p1);
+                    float l2 = luma2020(p2);
+                    float l3 = luma2020(p3);
+                    float l4 = luma2020(p4);
+
+                    float rangeSigma = 0.35;
+                    float w1 = exp(-abs(l1 - lum) / rangeSigma);
+                    float w2 = exp(-abs(l2 - lum) / rangeSigma);
+                    float w3 = exp(-abs(l3 - lum) / rangeSigma);
+                    float w4 = exp(-abs(l4 - lum) / rangeSigma);
+                    float sumW = 1.0 + w1 + w2 + w3 + w4;
+                    g = (lum + l1 * w1 + l2 * w2 + l3 * w3 + l4 * w4) / sumW;
+
+                    if (u_localFast < 0.5) {
+                        float2 d3 = float2(3.5, 0.0);
+                        float2 d4 = float2(0.0, 3.5);
+                        float3 s5 = sample(u_image, clamp(srcCoord + d3, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 s6 = sample(u_image, clamp(srcCoord - d3, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 s7 = sample(u_image, clamp(srcCoord + d4, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 s8 = sample(u_image, clamp(srcCoord - d4, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p5 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s5, 0.0) : to_lin(s5)) : (u_srcLinear > 0.5 ? max(s5, 0.0) : to_lin(s5));
+                        float3 p6 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s6, 0.0) : to_lin(s6)) : (u_srcLinear > 0.5 ? max(s6, 0.0) : to_lin(s6));
+                        float3 p7 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s7, 0.0) : to_lin(s7)) : (u_srcLinear > 0.5 ? max(s7, 0.0) : to_lin(s7));
+                        float3 p8 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s8, 0.0) : to_lin(s8)) : (u_srcLinear > 0.5 ? max(s8, 0.0) : to_lin(s8));
+                        float l5 = luma2020(p5);
+                        float l6 = luma2020(p6);
+                        float l7 = luma2020(p7);
+                        float l8 = luma2020(p8);
+                        float w5 = 0.5 * exp(-abs(l5 - lum) / rangeSigma);
+                        float w6 = 0.5 * exp(-abs(l6 - lum) / rangeSigma);
+                        float w7 = 0.5 * exp(-abs(l7 - lum) / rangeSigma);
+                        float w8 = 0.5 * exp(-abs(l8 - lum) / rangeSigma);
+                        g = (g * sumW + l5 * w5 + l6 * w6 + l7 * w7 + l8 * w8) / (sumW + w5 + w6 + w7 + w8);
+                    }
+
+                    float sigma = max(u_localMidtones, 0.05);
+                    float newLum = curve_scalar(lum, g, sigma, u_localShadows, u_localHighlights, u_localDetail);
+                    processed *= max(newLum, 0.0) / lum;
+                }
+
+                // Denoise (step 9)
+                if (u_denoiseLuma > 0.001 || u_denoiseChroma > 0.001) {
+                    float lc = luma2020(processed);
+                    float3 cc = processed - lc;
+                    float rangeSigma = 0.08 + 0.25 * u_denoiseLuma;
+                    float sumL = lc;
+                    float sumW_L = 1.0;
+                    float3 sumC = cc;
+                    float sumW_C = 1.0;
+
+                    // Inner 4 taps (radius 2)
+                    {
+                        float3 p = fetch_look(srcCoord + float2(-2.0, 0.0), lookAmt);
+                        float l = luma2020(p);
+                        float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
+                        sumL += l * wl; sumW_L += wl;
+                        sumC += (p - l) * 0.8; sumW_C += 0.8;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord + float2(2.0, 0.0), lookAmt);
+                        float l = luma2020(p);
+                        float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
+                        sumL += l * wl; sumW_L += wl;
+                        sumC += (p - l) * 0.8; sumW_C += 0.8;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord + float2(0.0, -2.0), lookAmt);
+                        float l = luma2020(p);
+                        float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
+                        sumL += l * wl; sumW_L += wl;
+                        sumC += (p - l) * 0.8; sumW_C += 0.8;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord + float2(0.0, 2.0), lookAmt);
+                        float l = luma2020(p);
+                        float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
+                        sumL += l * wl; sumW_L += wl;
+                        sumC += (p - l) * 0.8; sumW_C += 0.8;
+                    }
+
+                    if (u_denoiseFast < 0.5) {
+                        // Ring 1 (radius 1 & 1.41)
+                        { float3 p = fetch_look(srcCoord + float2(-1.0, 0.0), lookAmt); float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+                        { float3 p = fetch_look(srcCoord + float2(1.0, 0.0), lookAmt); float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+                        { float3 p = fetch_look(srcCoord + float2(0.0, -1.0), lookAmt); float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+                        { float3 p = fetch_look(srcCoord + float2(0.0, 1.0), lookAmt); float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+
+                        { float3 p = fetch_look(srcCoord + float2(-1.0, -1.0), lookAmt); float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+                        { float3 p = fetch_look(srcCoord + float2(1.0, -1.0), lookAmt); float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+                        { float3 p = fetch_look(srcCoord + float2(-1.0, 1.0), lookAmt); float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+                        { float3 p = fetch_look(srcCoord + float2(1.0, 1.0), lookAmt); float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+
+                        // Ring 2 (radius 2.83 & 3)
+                        { float3 p = fetch_look(srcCoord + float2(-2.0, -2.0), lookAmt); float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+                        { float3 p = fetch_look(srcCoord + float2(2.0, -2.0), lookAmt); float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+                        { float3 p = fetch_look(srcCoord + float2(-2.0, 2.0), lookAmt); float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+                        { float3 p = fetch_look(srcCoord + float2(2.0, 2.0), lookAmt); float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+
+                        { float3 p = fetch_look(srcCoord + float2(-3.0, 0.0), lookAmt); float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+                        { float3 p = fetch_look(srcCoord + float2(3.0, 0.0), lookAmt); float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+                        { float3 p = fetch_look(srcCoord + float2(0.0, -3.0), lookAmt); float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+                        { float3 p = fetch_look(srcCoord + float2(0.0, 3.0), lookAmt); float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+
+                        // Ring 3 (radius 4 & 4.24)
+                        { float3 p = fetch_look(srcCoord + float2(-4.0, 0.0), lookAmt); float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+                        { float3 p = fetch_look(srcCoord + float2(4.0, 0.0), lookAmt); float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+                        { float3 p = fetch_look(srcCoord + float2(0.0, -4.0), lookAmt); float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+                        { float3 p = fetch_look(srcCoord + float2(0.0, 4.0), lookAmt); float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+
+                        { float3 p = fetch_look(srcCoord + float2(-3.0, -3.0), lookAmt); float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                        { float3 p = fetch_look(srcCoord + float2(3.0, -3.0), lookAmt); float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                        { float3 p = fetch_look(srcCoord + float2(-3.0, 3.0), lookAmt); float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                        { float3 p = fetch_look(srcCoord + float2(3.0, 3.0), lookAmt); float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                    }
+
+                    float blurL = sumL / sumW_L;
+                    float3 blurC = sumC / sumW_C;
+                    float kL = (u_denoiseFast > 0.5) ? u_denoiseLuma * 0.5 : u_denoiseLuma;
+                    float kC = (u_denoiseFast > 0.5) ? u_denoiseChroma * 0.5 : u_denoiseChroma;
+                    float finalL = (u_denoiseLuma > 0.001) ? mix(lc, blurL, kL) : lc;
+                    float3 finalC = (u_denoiseChroma > 0.001) ? mix(cc, blurC, kC) : cc;
+                    processed = max(float3(finalL) + finalC, 0.0);
+                }
+
+                float3 disp = to_srgb(tone_curve(processed));
                 if (u_sharpen > 0.001) {
                     float3 o0 = u_srcLinear > 0.5 ? orig.rgb : to_lin(orig.rgb);
-                    float3 d0 = to_srgb(filmic(o0));
+                    float3 d0 = to_srgb(tone_curve(o0));
                     float3 acc = float3(0.0);
-                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, -1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb)));
-                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, 1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb)));
-                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb)));
-                    acc += to_srgb(filmic(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb)));
+                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, -1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb)));
+                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, 1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb)));
+                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb)));
+                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb)));
                     acc *= 0.25;
                     disp += (d0 - acc) * u_sharpen * 2.4;
                 }

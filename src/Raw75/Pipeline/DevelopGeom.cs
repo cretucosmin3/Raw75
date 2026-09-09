@@ -7,7 +7,7 @@ namespace Raw75.Pipeline;
 /// <summary>Matches the SKSL apply_geom + crop mapping (dest UV → source UV).</summary>
 internal static class DevelopGeom
 {
-    public static SKRect VisibleSourceAabb(SKRect dest, SKRect vis, DevelopSettings? s)
+    public static SKRect VisibleSourceAabb(SKRect dest, SKRect vis, DevelopSettings? s, int fw = 0, int fh = 0)
     {
         if (dest.Width < 1f || dest.Height < 1f)
             return SKRect.Empty;
@@ -40,7 +40,7 @@ internal static class DevelopGeom
         {
             float cu = cx + corners[i].u * cw;
             float cv = cy + corners[i].v * ch;
-            MapSource(cu, cv, s, out float sx, out float sy);
+            MapSource(cu, cv, s, fw, fh, out float sx, out float sy);
             if (sx < minX) minX = sx;
             if (sy < minY) minY = sy;
             if (sx > maxX) maxX = sx;
@@ -56,91 +56,105 @@ internal static class DevelopGeom
         return new SKRect(minX, minY, maxX, maxY);
     }
 
-    public static void MapSource(float u, float v, DevelopSettings? s, out float sx, out float sy)
+    public static void MapSource(float u, float v, DevelopSettings? s, out float sx, out float sy) =>
+        MapSource(u, v, s, 0, 0, out sx, out sy);
+
+    public static void MapSource(float u, float v, DevelopSettings? s, int fw, int fh, out float sx, out float sy)
     {
-        float rot = s != null ? s.Rotate90 & 3 : 0;
         float x = u;
         float y = v;
+
+        if (s != null && Math.Abs(s.Straighten) > 0.001f && fw > 0 && fh > 0)
+        {
+            float a = s.Straighten * 0.01745329251f;
+            float c = MathF.Cos(a);
+            float sn = MathF.Sin(a);
+            float qx = x - 0.5f;
+            float qy = y - 0.5f;
+            float invAspect = fh / (float)fw;
+            float aspect = fw / (float)fh;
+            x = qx * c - qy * invAspect * sn + 0.5f;
+            y = qx * aspect * sn + qy * c + 0.5f;
+        }
+
+        int rot = s != null ? s.Rotate90 & 3 : 0;
         if (rot == 1)
         {
-            x = v;
-            y = 1f - u;
+            float t = x;
+            x = y;
+            y = 1f - t;
         }
         else if (rot == 2)
         {
-            x = 1f - u;
-            y = 1f - v;
+            x = 1f - x;
+            y = 1f - y;
         }
         else if (rot == 3)
         {
-            x = 1f - v;
-            y = u;
+            float t = x;
+            x = 1f - y;
+            y = t;
         }
 
         if (s != null && s.FlipH)
             x = 1f - x;
         if (s != null && s.FlipV)
             y = 1f - y;
-
-        if (s != null && Math.Abs(s.Straighten) > 0.001f)
-        {
-            float a = s.Straighten * 0.01745329251f;
-            float qx = x - 0.5f;
-            float qy = y - 0.5f;
-            float c = MathF.Cos(a);
-            float sn = MathF.Sin(a);
-            x = qx * c - qy * sn + 0.5f;
-            y = qx * sn + qy * c + 0.5f;
-        }
 
         sx = x;
         sy = y;
     }
 
-    public static void InverseMap(float sx, float sy, DevelopSettings? s, out float u, out float v)
+    public static void InverseMap(float sx, float sy, DevelopSettings? s, out float u, out float v) =>
+        InverseMap(sx, sy, s, 0, 0, out u, out v);
+
+    public static void InverseMap(float sx, float sy, DevelopSettings? s, int fw, int fh, out float u, out float v)
     {
         float x = sx;
         float y = sy;
-        if (s != null && Math.Abs(s.Straighten) > 0.001f)
-        {
-            float a = -s.Straighten * 0.01745329251f;
-            float qx = x - 0.5f;
-            float qy = y - 0.5f;
-            float c = MathF.Cos(a);
-            float sn = MathF.Sin(a);
-            x = qx * c - qy * sn + 0.5f;
-            y = qx * sn + qy * c + 0.5f;
-        }
 
-        if (s != null && s.FlipH)
-            x = 1f - x;
         if (s != null && s.FlipV)
             y = 1f - y;
+        if (s != null && s.FlipH)
+            x = 1f - x;
 
         int rot = s != null ? s.Rotate90 & 3 : 0;
         if (rot == 1)
         {
-            u = 1f - y;
-            v = x;
+            float t = x;
+            x = 1f - y;
+            y = t;
         }
         else if (rot == 2)
         {
-            u = 1f - x;
-            v = 1f - y;
+            x = 1f - x;
+            y = 1f - y;
         }
         else if (rot == 3)
         {
-            u = y;
-            v = 1f - x;
+            float t = x;
+            x = y;
+            y = 1f - t;
         }
-        else
+
+        if (s != null && Math.Abs(s.Straighten) > 0.001f && fw > 0 && fh > 0)
         {
-            u = x;
-            v = y;
+            float a = s.Straighten * 0.01745329251f;
+            float c = MathF.Cos(a);
+            float sn = MathF.Sin(a);
+            float qx = x - 0.5f;
+            float qy = y - 0.5f;
+            float invAspect = fh / (float)fw;
+            float aspect = fw / (float)fh;
+            x = qx * c + qy * invAspect * sn + 0.5f;
+            y = -qx * aspect * sn + qy * c + 0.5f;
         }
+
+        u = x;
+        v = y;
     }
 
-    public static SKRect SourceAabbToDest(SKRect source, SKRect dest, DevelopSettings? s)
+    public static SKRect SourceAabbToDest(SKRect source, SKRect dest, DevelopSettings? s, int fw = 0, int fh = 0)
     {
         if (dest.Width < 1f || dest.Height < 1f || source.Width < 1e-6f || source.Height < 1e-6f)
             return SKRect.Empty;
@@ -162,7 +176,7 @@ internal static class DevelopGeom
         ];
         for (int i = 0; i < 4; i++)
         {
-            InverseMap(corners[i].x, corners[i].y, s, out float u, out float v);
+            InverseMap(corners[i].x, corners[i].y, s, fw, fh, out float u, out float v);
             float dx = dest.Left + (u - cx) / cw * dest.Width;
             float dy = dest.Top + (v - cy) / ch * dest.Height;
             if (dx < minX) minX = dx;
