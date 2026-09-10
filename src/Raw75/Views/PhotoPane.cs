@@ -41,7 +41,35 @@ public sealed class PhotoPane : VisualElement
     private DevelopSettings? _settings;
     private readonly DevelopLook _look = new();
     private readonly DevelopLook _tileLook = new();
+    private readonly DevelopLook _beforeLook = new();
+    private readonly DevelopLook _tileBeforeLook = new();
     private bool _lookFast;
+
+    private void InvalidateAllLooks()
+    {
+        _look.Invalidate();
+        _tileLook.Invalidate();
+        _beforeLook.Invalidate();
+        _tileBeforeLook.Invalidate();
+    }
+
+    private DevelopSettings GetBaselineSettings()
+    {
+        var b = new DevelopSettings();
+        if (_settings != null)
+        {
+            b.Straighten = _settings.Straighten;
+            b.Rotate90 = _settings.Rotate90;
+            b.FlipH = _settings.FlipH;
+            b.FlipV = _settings.FlipV;
+            b.CropX = _settings.CropX;
+            b.CropY = _settings.CropY;
+            b.CropW = _settings.CropW;
+            b.CropH = _settings.CropH;
+            b.ToneMode = _settings.ToneMode;
+        }
+        return b;
+    }
     private bool _showBefore;
     private SKRect _drawDest;
     private SKRect _drawClip;
@@ -55,6 +83,7 @@ public sealed class PhotoPane : VisualElement
     private bool _showingPhoto;
 
     private bool _freeZoom;
+    private float _lastScrollZoom = 1.0f;
     private bool _pointerDown;
     private bool _didDrag;
     private Vector2 _downLocal;
@@ -67,6 +96,12 @@ public sealed class PhotoPane : VisualElement
 
     /// <summary>Named zoom. Wheel zoom is free (<see cref="Zoom"/>) until <see cref="SetZoomMode"/> or a click-toggle.</summary>
     public ZoomMode ZoomMode { get; private set; } = ZoomMode.Fit;
+
+    /// <summary>True if the user is in free-form (wheel / custom) zoom.</summary>
+    public bool IsFreeZoom => _freeZoom;
+
+    /// <summary>Last zoom ratio reached via wheel scroll or 1:1, used for click-to-zoom toggling.</summary>
+    public float LastScrollZoom => _lastScrollZoom;
 
     /// <summary>Screen pixels per image pixel. 1 = 1:1.</summary>
     public float Zoom { get; private set; } = 1f;
@@ -104,6 +139,8 @@ public sealed class PhotoPane : VisualElement
         {
             if (_showBefore == value) return;
             _showBefore = value;
+            _beforeLook.Invalidate();
+            _tileBeforeLook.Invalidate();
             InvalidatePaint();
         }
     }
@@ -148,6 +185,8 @@ public sealed class PhotoPane : VisualElement
         {
             if (_splitBefore == value) return;
             _splitBefore = value;
+            _beforeLook.Invalidate();
+            _tileBeforeLook.Invalidate();
             InvalidatePaint();
         }
     }
@@ -210,8 +249,7 @@ public sealed class PhotoPane : VisualElement
                     fw, fh);
                 CropChanged?.Invoke();
             }
-            _look.Invalidate();
-            _tileLook.Invalidate();
+            InvalidateAllLooks();
             InvalidatePaint();
         }
     }
@@ -251,8 +289,7 @@ public sealed class PhotoPane : VisualElement
         _source = source;
         _settings = settings;
         _lookFast = fast;
-        _look.Invalidate();
-        _tileLook.Invalidate();
+        InvalidateAllLooks();
         if (source != null && source.Handle != IntPtr.Zero)
             SyncViewToSource();
         _showingPhoto = source != null || _developed != null;
@@ -298,8 +335,7 @@ public sealed class PhotoPane : VisualElement
         _tileY = y;
         _tileW = w;
         _tileH = h;
-        _look.Invalidate();
-        _tileLook.Invalidate();
+        InvalidateAllLooks();
         InvalidatePaint();
     }
 
@@ -309,8 +345,7 @@ public sealed class PhotoPane : VisualElement
             return;
         _tile = null;
         _tileW = _tileH = 0;
-        _look.Invalidate();
-        _tileLook.Invalidate();
+        InvalidateAllLooks();
         InvalidatePaint();
     }
 
@@ -429,6 +464,8 @@ public sealed class PhotoPane : VisualElement
     {
         ZoomMode = m;
         _freeZoom = false;
+        if (m == ZoomMode.OneToOne)
+            _lastScrollZoom = 1.0f;
         if ((m == ZoomMode.Fit || m == ZoomMode.Fill) && ViewW > 0)
         {
             PanX = ViewW * 0.5f;
@@ -502,8 +539,7 @@ public sealed class PhotoPane : VisualElement
         if (blit == null || blit.Handle == IntPtr.Zero)
             blit = _source;
 
-        bool gpuLook = !_showBefore
-            && !_look.Failed
+        bool gpuLook = !_look.Failed
             && _source != null
             && _source.Handle != IntPtr.Zero
             && _settings != null;
@@ -531,20 +567,6 @@ public sealed class PhotoPane : VisualElement
                 if (gpuLook)
                 {
                     cmds.Add(new DrawCallbackCommand(DrawGpuLook));
-                }
-                else if (_splitBefore && _before != null && _before.Handle != IntPtr.Zero && blit != null)
-                {
-                    float splitX = w * _splitT;
-                    var left = dest;
-                    left.Intersect(pane);
-                    left.Right = Math.Min(left.Right, splitX);
-                    var right = dest;
-                    right.Intersect(pane);
-                    right.Left = Math.Max(right.Left, splitX);
-                    if (left.Width > 0.5f)
-                        cmds.Add(new DrawSkImageCommand(_before, left, SourceOf(_before, dest, left)));
-                    if (right.Width > 0.5f)
-                        cmds.Add(new DrawSkImageCommand(blit, right, SourceOf(blit, dest, right)));
                 }
                 else if (blit != null)
                 {
@@ -576,34 +598,73 @@ public sealed class PhotoPane : VisualElement
             var right = dest;
             right.Intersect(pane);
             right.Left = Math.Max(right.Left, splitX);
-            SKImage before = _before ?? _source;
-            if (left.Width > 0.5f && before.Handle != IntPtr.Zero)
-                canvas.DrawImage(before, SourceOf(before, dest, left), left);
+
+            DevelopSettings baseSettings = GetBaselineSettings();
+
+            if (left.Width > 0.5f)
+            {
+                GetFrameSize(out int fwB, out int fhB);
+                if (!_beforeLook.Draw(canvas, dest, left, _source, baseSettings, isFast, applyCrop,
+                        0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwB, fhB))
+                    canvas.DrawImage(_source, SourceOf(_source, dest, left), left);
+            }
+
             if (right.Width > 0.5f)
             {
-                if (!_look.Draw(canvas, dest, right, _source, _settings, isFast, applyCrop))
+                GetFrameSize(out int fwA, out int fhA);
+                if (!_look.Draw(canvas, dest, right, _source, _settings, isFast, applyCrop,
+                        0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwA, fhA))
                     canvas.DrawImage(_source, SourceOf(_source, dest, right), right);
             }
+
+            if (_tile != null && _tile.Handle != IntPtr.Zero && _tileW > 1e-5f && _tileH > 1e-5f)
+            {
+                GetFrameSize(out int fw, out int fh);
+                var tileSrc = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
+                var tileDest = DevelopGeom.SourceAabbToDest(tileSrc, dest, _settings, fw, fh);
+
+                var tileLeft = tileDest;
+                tileLeft.Intersect(left);
+                if (tileLeft.Width >= 1f && tileLeft.Height >= 1f)
+                {
+                    _tileBeforeLook.Draw(canvas, dest, tileLeft, _tile, baseSettings, isFast, applyCrop,
+                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh);
+                }
+
+                var tileRight = tileDest;
+                tileRight.Intersect(right);
+                if (tileRight.Width >= 1f && tileRight.Height >= 1f)
+                {
+                    _tileLook.Draw(canvas, dest, tileRight, _tile, _settings, isFast, applyCrop,
+                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh);
+                }
+            }
+
             return;
         }
 
         var vis = _drawClip;
-        GetFrameSize(out int fw, out int fh);
-        if (!_look.Draw(canvas, dest, vis, _source, _settings, isFast, applyCrop: true,
-                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh))
+        GetFrameSize(out int fwSingle, out int fhSingle);
+
+        var activeSettings = _showBefore ? GetBaselineSettings() : _settings;
+        var activeLook = _showBefore ? _beforeLook : _look;
+        var activeTileLook = _showBefore ? _tileBeforeLook : _tileLook;
+
+        if (!activeLook.Draw(canvas, dest, vis, _source, activeSettings, isFast, applyCrop: true,
+                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle))
             canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
 
         if (_tile == null || _tile.Handle == IntPtr.Zero || _tileW < 1e-5f || _tileH < 1e-5f)
             return;
 
-        var tileSrc = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
-        var tileDest = DevelopGeom.SourceAabbToDest(tileSrc, dest, _settings, fw, fh);
-        tileDest.Intersect(vis);
-        if (tileDest.Width < 1f || tileDest.Height < 1f)
+        var tileSrcSingle = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
+        var tileDestSingle = DevelopGeom.SourceAabbToDest(tileSrcSingle, dest, activeSettings, fwSingle, fhSingle);
+        tileDestSingle.Intersect(vis);
+        if (tileDestSingle.Width < 1f || tileDestSingle.Height < 1f)
             return;
 
-        _tileLook.Draw(canvas, dest, tileDest, _tile, _settings, isFast, applyCrop: true,
-            _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh);
+        activeTileLook.Draw(canvas, dest, tileDestSingle, _tile, activeSettings, isFast, applyCrop: true,
+            _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle);
     }
 
     private void DrawOverlay(SKCanvas canvas)
@@ -621,14 +682,60 @@ public sealed class PhotoPane : VisualElement
         if (_splitBefore)
         {
             float x = w * _splitT;
+
+            // Shadow under divider line for contrast against bright highlights
+            using var shadowPaint = new SKPaint
+            {
+                Color = new SKColor(0, 0, 0, 160),
+                IsAntialias = true,
+                StrokeWidth = 4,
+                Style = SKPaintStyle.Stroke
+            };
+            canvas.DrawLine(x, 0, x, h, shadowPaint);
+
             using var wipe = new SKPaint
             {
-                Color = new SKColor(255, 255, 255, 220),
+                Color = new SKColor(255, 255, 255, 230),
                 IsAntialias = true,
                 StrokeWidth = 2,
                 Style = SKPaintStyle.Stroke
             };
             canvas.DrawLine(x, 0, x, h, wipe);
+
+            // Center grab handle pill on the divider
+            float midY = h * 0.5f;
+            using var handleBg = new SKPaint
+            {
+                Color = new SKColor(24, 24, 27, 235),
+                IsAntialias = true,
+                Style = SKPaintStyle.Fill
+            };
+            using var handleBorder = new SKPaint
+            {
+                Color = new SKColor(255, 255, 255, 180),
+                IsAntialias = true,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 1.5f
+            };
+            var pillRect = new SKRoundRect(new SKRect(x - 12, midY - 20, x + 12, midY + 20), 12, 12);
+            canvas.DrawRoundRect(pillRect, handleBg);
+            canvas.DrawRoundRect(pillRect, handleBorder);
+
+            using var textPaint = new SKPaint
+            {
+                Color = Theme.Text,
+                IsAntialias = true,
+                TextSize = 11,
+                TextAlign = SKTextAlign.Center
+            };
+            canvas.DrawText("‹ ›", x, midY + 4, textPaint);
+
+            // Badges: "BEFORE" on left side, "AFTER" on right side
+            DrawSplitBadges(canvas, x, w, h);
+        }
+        else if (_showBefore)
+        {
+            DrawBeforeBadge(canvas, w);
         }
 
         if (_busy)
@@ -665,6 +772,83 @@ public sealed class PhotoPane : VisualElement
         canvas.DrawText(line, 16, h - 16, text);
     }
 
+    private void DrawSplitBadges(SKCanvas canvas, float splitX, float w, float h)
+    {
+        using var badgeBg = new SKPaint
+        {
+            Color = new SKColor(20, 20, 23, 200),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        };
+        using var badgeBorder = new SKPaint
+        {
+            Color = new SKColor(255, 255, 255, 40),
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1
+        };
+        using var badgeText = new SKPaint
+        {
+            Color = Theme.Text,
+            IsAntialias = true,
+            TextSize = 10,
+            FakeBoldText = true,
+            TextAlign = SKTextAlign.Center
+        };
+
+        // Left badge (BEFORE)
+        if (splitX > 75)
+        {
+            float bx = Math.Max(35, splitX - 50);
+            var rect = new SKRoundRect(new SKRect(bx - 32, 16, bx + 32, 38), 4, 4);
+            canvas.DrawRoundRect(rect, badgeBg);
+            canvas.DrawRoundRect(rect, badgeBorder);
+            canvas.DrawText("BEFORE", bx, 31, badgeText);
+        }
+
+        // Right badge (AFTER)
+        if (w - splitX > 75)
+        {
+            float bx = Math.Min(w - 35, splitX + 50);
+            var rect = new SKRoundRect(new SKRect(bx - 32, 16, bx + 32, 38), 4, 4);
+            canvas.DrawRoundRect(rect, badgeBg);
+            canvas.DrawRoundRect(rect, badgeBorder);
+            badgeText.Color = Theme.Accent;
+            canvas.DrawText("AFTER", bx, 31, badgeText);
+        }
+    }
+
+    private void DrawBeforeBadge(SKCanvas canvas, float w)
+    {
+        using var badgeBg = new SKPaint
+        {
+            Color = new SKColor(20, 20, 23, 220),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        };
+        using var badgeBorder = new SKPaint
+        {
+            Color = Theme.Accent,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1.5f
+        };
+        using var badgeText = new SKPaint
+        {
+            Color = Theme.Accent,
+            IsAntialias = true,
+            TextSize = 11,
+            FakeBoldText = true,
+            TextAlign = SKTextAlign.Center
+        };
+
+        float cx = w * 0.5f;
+        var rect = new SKRoundRect(new SKRect(cx - 50, 16, cx + 50, 40), 6, 6);
+        canvas.DrawRoundRect(rect, badgeBg);
+        canvas.DrawRoundRect(rect, badgeBorder);
+        canvas.DrawText("BEFORE", cx, 33, badgeText);
+    }
+
     private void OnPointerDown(object sender, MouseEventArgs e)
     {
         if (e.Button != 0 || !HasPhoto)
@@ -685,7 +869,7 @@ public sealed class PhotoPane : VisualElement
         if (_splitBefore)
         {
             float splitX = Transform.Computed.Width * _splitT;
-            if (Math.Abs(e.Relative.X - splitX) < 10f)
+            if (Math.Abs(e.Relative.X - splitX) < 16f)
             {
                 _splitDrag = true;
                 return;
@@ -745,13 +929,14 @@ public sealed class PhotoPane : VisualElement
                 if (_settings != null)
                     _settings.Straighten = StraightenPreview;
                 _crop.ClampInside(rot, StraightenPreview, flipH, flipV, fw, fh);
-                _look.Invalidate();
-                _tileLook.Invalidate();
+                InvalidateAllLooks();
                 InvalidatePaint();
                 CropChanged?.Invoke();
             }
             else if (_crop.UpdateDrag(e.Relative.X, e.Relative.Y, ImageDest, fw, fh, rot, StraightenPreview, flipH, flipV))
             {
+                _crop.ClampInside(rot, StraightenPreview, flipH, flipV, fw, fh);
+                InvalidateAllLooks();
                 InvalidatePaint();
                 CropChanged?.Invoke();
             }
@@ -778,6 +963,7 @@ public sealed class PhotoPane : VisualElement
         if (e.Button != 0 || !_pointerDown)
             return;
 
+        bool wasSplit = _splitDrag;
         _pointerDown = false;
         _splitDrag = false;
         bool wasCrop = _crop.Active != CropHandle.None;
@@ -794,7 +980,7 @@ public sealed class PhotoPane : VisualElement
                 ViewSettled?.Invoke();
         }
 
-        if (wasDrag || wasCrop || _cropTool || !HasPhoto)
+        if (wasDrag || wasCrop || wasSplit || _cropTool || !HasPhoto)
             return;
 
         ToggleClickZoom(e.Relative);
@@ -831,6 +1017,11 @@ public sealed class PhotoPane : VisualElement
         _isInteracting = true;
         Zoom = next;
         _freeZoom = true;
+        ZoomMode = ZoomMode.OneToOne;
+        float fitZ = GetFitZoom();
+        if (next > fitZ * 1.02f || next >= 1.0f)
+            _lastScrollZoom = next;
+
         PanX = imgX - (lx - w * 0.5f) / Zoom;
         PanY = imgY - (ly - h * 0.5f) / Zoom;
         ClampPan();
@@ -873,9 +1064,20 @@ public sealed class PhotoPane : VisualElement
         InvalidatePaint();
     }
 
-    private void ToggleClickZoom(Vector2 local)
+    /// <summary>
+    /// Toggles between Fit and the memorized zoom scale (either from mouse wheel or 1:1).
+    /// If <paramref name="centerLocal"/> is provided, centers the view on that client point when zooming in.
+    /// </summary>
+    public void ToggleZoom(Vector2? centerLocal = null)
     {
-        if (ZoomMode == ZoomMode.OneToOne && !_freeZoom)
+        if (!HasPhoto)
+            return;
+
+        float fitZ = GetFitZoom();
+        bool isZoomedIn = (ZoomMode != ZoomMode.Fit && !_freeZoom)
+            || (_freeZoom && Zoom > fitZ * 1.05f);
+
+        if (isZoomedIn)
         {
             SetZoomMode(ZoomMode.Fit);
             return;
@@ -887,13 +1089,57 @@ public sealed class PhotoPane : VisualElement
         if (dest.Width < 1f || dest.Height < 1f)
             return;
 
-        float imgX = (local.X - dest.Left) / dest.Width * ViewW;
-        float imgY = (local.Y - dest.Top) / dest.Height * ViewH;
+        float imgX, imgY;
+        if (centerLocal.HasValue)
+        {
+            var local = centerLocal.Value;
+            imgX = (local.X - dest.Left) / dest.Width * ViewW;
+            imgY = (local.Y - dest.Top) / dest.Height * ViewH;
+            imgX = Math.Clamp(imgX, 0f, ViewW);
+            imgY = Math.Clamp(imgY, 0f, ViewH);
+        }
+        else
+        {
+            imgX = PanX > 0f ? PanX : ViewW * 0.5f;
+            imgY = PanY > 0f ? PanY : ViewH * 0.5f;
+        }
+
+        float targetZoom = _lastScrollZoom;
+        if (targetZoom <= fitZ * 1.05f)
+            targetZoom = Math.Max(1.0f, fitZ * 2.0f);
+
+        Zoom = Math.Clamp(targetZoom, MinZoom, MaxZoom);
         ZoomMode = ZoomMode.OneToOne;
-        _freeZoom = false;
-        Zoom = 1f;
+        _freeZoom = Math.Abs(Zoom - 1f) > 1e-4f;
         PanX = imgX;
         PanY = imgY;
+        ClampPan();
+        ImageDest = ComputeDest();
+        InvalidatePaint();
+        ViewChanged?.Invoke();
+        ViewSettled?.Invoke();
+    }
+
+    private void ToggleClickZoom(Vector2 local)
+    {
+        ToggleZoom(local);
+    }
+
+    public float GetFitZoom()
+    {
+        float w = Transform.Computed.Width;
+        float h = Transform.Computed.Height;
+        GetContainSize(out int imgW, out int imgH);
+        if (w <= 1 || h <= 1 || imgW <= 0 || imgH <= 0)
+            return 1.0f;
+        return Math.Min(w / imgW, h / imgH);
+    }
+
+    public void PanToNorm(float nx, float ny)
+    {
+        if (!HasPhoto || ViewW <= 0 || ViewH <= 0) return;
+        PanX = nx * ViewW;
+        PanY = ny * ViewH;
         ClampPan();
         ImageDest = ComputeDest();
         InvalidatePaint();
@@ -1053,7 +1299,7 @@ public sealed class PhotoPane : VisualElement
             PanY = Math.Clamp(PanY, visH * 0.5f, imgH - visH * 0.5f);
     }
 
-    private bool HasPhoto => _source != null || _developed != null;
+    public bool HasPhoto => _source != null || _developed != null;
 
     private int ViewW => _viewW > 0 ? _viewW : _source?.Width ?? _developed?.Width ?? 0;
     private int ViewH => _viewH > 0 ? _viewH : _source?.Height ?? _developed?.Height ?? 0;
@@ -1367,6 +1613,8 @@ public sealed class PhotoPane : VisualElement
         _settings = null;
         _look.Dispose();
         _tileLook.Dispose();
+        _beforeLook.Dispose();
+        _tileBeforeLook.Dispose();
         _viewW = 0;
         _viewH = 0;
         base.Dispose();

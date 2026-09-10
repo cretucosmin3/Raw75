@@ -32,6 +32,8 @@ public sealed class DevelopEngine
     public event Action<PhotoDocument>? HistogramUpdated;
     public event Action<PhotoDocument>? ViewportUpdated;
     public event Action<bool>? BusyChanged;
+    public event Action<int, int>? ThumbProgress;
+    public event Action<PhotoDocument>? ThumbLoaded;
 
     public bool IsBusy => Volatile.Read(ref _busy) > 0;
 
@@ -210,12 +212,26 @@ public sealed class DevelopEngine
 
         Task.Run(() =>
         {
-            int posted = 0;
+            int missing = 0;
+            for (int i = 0; i < copy.Length; i++)
+            {
+                if (!copy[i].IsDisposed && copy[i].Preview == null && copy[i].Thumb == null)
+                    missing++;
+            }
+
+            if (missing == 0)
+            {
+                Browser.Post(() => ThumbProgress?.Invoke(copy.Length, copy.Length));
+                return;
+            }
+
+            int processed = 0;
             for (int i = 0; i < copy.Length; i++)
             {
                 PhotoDocument doc = copy[i];
                 if (doc.IsDisposed || doc.Preview != null || doc.Thumb != null)
                     continue;
+
                 try
                 {
                     RasterBuffer buf;
@@ -225,13 +241,16 @@ public sealed class DevelopEngine
                     {
                         RasterBuffer? raster = RawDecoder.TryDecodeRaster(doc.Path);
                         if (raster == null)
+                        {
+                            int cur = Interlocked.Increment(ref processed);
+                            Browser.Post(() => ThumbProgress?.Invoke(cur, missing));
                             continue;
+                        }
                         buf = raster.Value;
                     }
 
                     buf = RawDecoder.Limit(buf, 160);
-                    int n = Interlocked.Increment(ref posted);
-                    bool flushThis = n % 8 == 0 || i == copy.Length - 1;
+                    int n = Interlocked.Increment(ref processed);
                     PhotoDocument target = doc;
                     RasterBuffer shot = buf;
                     Browser.Post(() =>
@@ -242,7 +261,9 @@ public sealed class DevelopEngine
                         {
                             SKImage image = RawDecoder.Upload(shot, out _);
                             Assign(target, thumb: image);
-                            if (flushThis)
+                            ThumbLoaded?.Invoke(target);
+                            ThumbProgress?.Invoke(n, missing);
+                            if (n % 4 == 0 || n == missing)
                                 Updated?.Invoke(target);
                         }
                         catch (Exception ex)
@@ -254,11 +275,14 @@ public sealed class DevelopEngine
                 catch (Exception ex)
                 {
                     Log.Warning("Thumb " + doc.Name + ": " + ex.Message);
+                    int cur = Interlocked.Increment(ref processed);
+                    Browser.Post(() => ThumbProgress?.Invoke(cur, missing));
                 }
             }
 
             Browser.Post(() =>
             {
+                ThumbProgress?.Invoke(missing, missing);
                 PhotoDocument? current = Volatile.Read(ref _current);
                 if (current != null)
                     Updated?.Invoke(current);
@@ -270,6 +294,7 @@ public sealed class DevelopEngine
     {
         if (doc == null || doc.IsDisposed)
             return;
+        Volatile.Write(ref _current, doc);
         if (sourceAabb.Width < 1e-5f || sourceAabb.Height < 1e-5f)
             return;
 

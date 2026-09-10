@@ -1164,52 +1164,56 @@ internal static class DevelopCpu
         for (int i = 0; i < w * h; i++)
             lums[i] = Math.Max(Luma(look[3 * i], look[3 * i + 1], look[3 * i + 2]), 1e-4f);
 
-        int step = Math.Max(2, Math.Min(w, h) / 48);
-        int s2 = step * 2;
-        int s3 = step * 3;
+        int r = Math.Max(1, Math.Min(w, h) / 250);
+        int r2 = Math.Max(2, r * 2);
 
         for (int y = 0; y < h; y++)
         {
+            int yT = Math.Max(0, y - r);
+            int yB = Math.Min(h - 1, y + r);
+            int yT2 = Math.Max(0, y - r2);
+            int yB2 = Math.Min(h - 1, y + r2);
+
             for (int x = 0; x < w; x++)
             {
+                int xL = Math.Max(0, x - r);
+                int xR = Math.Min(w - 1, x + r);
+                int xL2 = Math.Max(0, x - r2);
+                int xR2 = Math.Min(w - 1, x + r2);
+
                 int idx = y * w + x;
                 float lum = lums[idx];
 
-                float l1 = lums[y * w + Math.Max(0, x - step)];
-                float l2 = lums[y * w + Math.Min(w - 1, x + step)];
-                float l3 = lums[Math.Max(0, y - step) * w + x];
-                float l4 = lums[Math.Min(h - 1, y + step) * w + x];
+                // Tight bilateral edge-stopping range sigma: prevents stark edges from bleeding across boundaries
+                float rangeSigma = Math.Clamp(lum * 0.20f + 0.06f, 0.05f, 0.22f);
+                float invTwoSigmaSq = 0.5f / (rangeSigma * rangeSigma);
 
-                float l5 = lums[y * w + Math.Max(0, x - s2)];
-                float l6 = lums[y * w + Math.Min(w - 1, x + s2)];
-                float l7 = lums[Math.Max(0, y - s2) * w + x];
-                float l8 = lums[Math.Min(h - 1, y + s2) * w + x];
+                float sumL = lum * 1.5f;
+                float sumW = 1.5f;
 
-                float l9 = lums[y * w + Math.Max(0, x - s3)];
-                float l10 = lums[y * w + Math.Min(w - 1, x + s3)];
-                float l11 = lums[Math.Max(0, y - s3) * w + x];
-                float l12 = lums[Math.Min(h - 1, y + s3) * w + x];
+                // Ring 1: 4 diagonal taps
+                float l1 = lums[yT * w + xL];
+                float l2 = lums[yT * w + xR];
+                float l3 = lums[yB * w + xL];
+                float l4 = lums[yB * w + xR];
 
-                float rangeSigma = 0.35f;
-                float w1 = MathF.Exp(-MathF.Abs(l1 - lum) / rangeSigma);
-                float w2 = MathF.Exp(-MathF.Abs(l2 - lum) / rangeSigma);
-                float w3 = MathF.Exp(-MathF.Abs(l3 - lum) / rangeSigma);
-                float w4 = MathF.Exp(-MathF.Abs(l4 - lum) / rangeSigma);
+                float d1 = l1 - lum; float w1 = MathF.Exp(-d1 * d1 * invTwoSigmaSq); sumL += l1 * w1; sumW += w1;
+                float d2 = l2 - lum; float w2 = MathF.Exp(-d2 * d2 * invTwoSigmaSq); sumL += l2 * w2; sumW += w2;
+                float d3 = l3 - lum; float w3 = MathF.Exp(-d3 * d3 * invTwoSigmaSq); sumL += l3 * w3; sumW += w3;
+                float d4 = l4 - lum; float w4 = MathF.Exp(-d4 * d4 * invTwoSigmaSq); sumL += l4 * w4; sumW += w4;
 
-                float w5 = 0.6f * MathF.Exp(-MathF.Abs(l5 - lum) / rangeSigma);
-                float w6 = 0.6f * MathF.Exp(-MathF.Abs(l6 - lum) / rangeSigma);
-                float w7 = 0.6f * MathF.Exp(-MathF.Abs(l7 - lum) / rangeSigma);
-                float w8 = 0.6f * MathF.Exp(-MathF.Abs(l8 - lum) / rangeSigma);
+                // Ring 2: 4 cardinal taps
+                float l5 = lums[y * w + xL2];
+                float l6 = lums[y * w + xR2];
+                float l7 = lums[yT2 * w + x];
+                float l8 = lums[yB2 * w + x];
 
-                float w9 = 0.35f * MathF.Exp(-MathF.Abs(l9 - lum) / rangeSigma);
-                float w10 = 0.35f * MathF.Exp(-MathF.Abs(l10 - lum) / rangeSigma);
-                float w11 = 0.35f * MathF.Exp(-MathF.Abs(l11 - lum) / rangeSigma);
-                float w12 = 0.35f * MathF.Exp(-MathF.Abs(l12 - lum) / rangeSigma);
+                float d5 = l5 - lum; float w5 = 0.7f * MathF.Exp(-d5 * d5 * invTwoSigmaSq); sumL += l5 * w5; sumW += w5;
+                float d6 = l6 - lum; float w6 = 0.7f * MathF.Exp(-d6 * d6 * invTwoSigmaSq); sumL += l6 * w6; sumW += w6;
+                float d7 = l7 - lum; float w7 = 0.7f * MathF.Exp(-d7 * d7 * invTwoSigmaSq); sumL += l7 * w7; sumW += w7;
+                float d8 = l8 - lum; float w8 = 0.7f * MathF.Exp(-d8 * d8 * invTwoSigmaSq); sumL += l8 * w8; sumW += w8;
 
-                float sumW = 1f + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 + w9 + w10 + w11 + w12;
-                float g = (lum + l1 * w1 + l2 * w2 + l3 * w3 + l4 * w4
-                               + l5 * w5 + l6 * w6 + l7 * w7 + l8 * w8
-                               + l9 * w9 + l10 * w10 + l11 * w11 + l12 * w12) / sumW;
+                float g = sumL / sumW;
 
                 float newLum = CurveScalar(lum, g, sigma, shd, hi, detail);
                 float gain = Math.Max(newLum, 0f) / lum;
@@ -1224,17 +1228,23 @@ internal static class DevelopCpu
     private static float CurveScalar(float x, float g, float sigma, float shadows, float highlights, float clarity)
     {
         float c = x - g;
-        float detailGain = 1.0f + clarity * 0.75f;
-        float sc = c * detailGain;
+        if (MathF.Abs(clarity) < 1e-4f && MathF.Abs(highlights) < 1e-4f && MathF.Abs(shadows) < 1e-4f)
+            return x;
 
-        if (sc > 0f)
-            sc *= (1.0f + highlights * 0.60f);
-        else
-            sc *= (1.0f - shadows * 0.60f);
+        float midCenter = Math.Clamp(sigma, 0.05f, 0.95f);
+        float dMid = (x - midCenter) / 0.30f;
+        float midWeight = MathF.Exp(-0.5f * dMid * dMid);
 
-        float midWeight = MathF.Exp(-MathF.Abs(x - sigma) / MathF.Max(sigma, 0.1f));
-        float val = g + sc * (0.65f + 0.35f * midWeight);
-        return MathF.Max(val, 0.0001f);
+        float hlMod = 1.0f + highlights * (x > midCenter ? 0.75f : 0.35f);
+        float shMod = 1.0f - shadows * (x < midCenter ? 0.75f : 0.35f);
+        float toneGain = midWeight * (c > 0f ? hlMod : shMod);
+
+        float detailBoost = c * (clarity * toneGain);
+        float maxDelta = 0.07f + 0.05f * MathF.Max(clarity, 0f);
+        float u = detailBoost / maxDelta;
+        float limitedDelta = maxDelta * (u / MathF.Sqrt(1.0f + u * u));
+
+        return MathF.Max(x + limitedDelta, 0.0001f);
     }
 
     private static float[] GaussReduce(float[] src, int sw, int sh, int dw, int dh)

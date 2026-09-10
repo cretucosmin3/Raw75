@@ -135,6 +135,7 @@ public static class WorkspaceStore
             if (meta.Settings.Hsl == null || meta.Settings.Hsl.Length != 6)
                 meta.Settings.Hsl = DevelopSettings.CreateHsl();
             doc.Settings.CopyFrom(meta.Settings);
+            doc.IsReady = meta.IsReady;
 
             SKImage? preview = LoadJpeg(Path.Combine(dir, "preview.jpg"));
             if (preview != null)
@@ -183,11 +184,39 @@ public static class WorkspaceStore
             Directory.CreateDirectory(dir);
             var meta = Stamp(doc.Path);
             meta.Settings = doc.Settings.Clone();
+            meta.IsReady = doc.IsReady;
             File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(meta, JsonOptions));
         }
         catch (Exception ex)
         {
             Blossom.Log.Warning("Workspace save settings: " + ex.Message);
+        }
+    }
+
+    public static void SaveReadyState(PhotoDocument doc)
+    {
+        ArgumentNullException.ThrowIfNull(doc);
+        try
+        {
+            string dir = EntryDir(doc.Path);
+            string metaPath = Path.Combine(dir, "meta.json");
+            CacheMeta meta;
+            if (File.Exists(metaPath))
+            {
+                meta = JsonSerializer.Deserialize<CacheMeta>(File.ReadAllText(metaPath), JsonOptions) ?? Stamp(doc.Path);
+            }
+            else
+            {
+                Directory.CreateDirectory(dir);
+                meta = Stamp(doc.Path);
+                meta.Settings = doc.Settings.Clone();
+            }
+            meta.IsReady = doc.IsReady;
+            File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, JsonOptions));
+        }
+        catch (Exception ex)
+        {
+            Blossom.Log.Warning("Workspace save ready: " + ex.Message);
         }
     }
 
@@ -200,6 +229,7 @@ public static class WorkspaceStore
             Directory.CreateDirectory(dir);
             var meta = Stamp(doc.Path);
             meta.Settings = settings.Clone();
+            meta.IsReady = doc.IsReady;
             File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(meta, JsonOptions));
             if (previewJpeg is { Length: > 0 })
                 File.WriteAllBytes(Path.Combine(dir, "preview.jpg"), previewJpeg);
@@ -361,6 +391,7 @@ public static class WorkspaceStore
         public long Length { get; set; }
         public DateTime MtimeUtc { get; set; }
         public DevelopSettings? Settings { get; set; }
+        public bool IsReady { get; set; }
     }
 
     private sealed class WorkspacePrefs

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Numerics;
 using Blossom;
 using Blossom.Core;
 using Blossom.Core.Visual;
@@ -40,6 +41,11 @@ public sealed class WorkspaceView : View
     private IconButton _btnSplit = null!;
     private VisualElement _zoomLabel = null!;
     private VisualElement _photoTitleBadge = null!;
+    private GalleryView _gallery = null!;
+    private VisualElement _toolsBar = null!;
+    private IconButton _btnViewerMode = null!;
+    private IconButton _btnGalleryMode = null!;
+    private bool _isGalleryMode;
 
     private PanelGroup _wbGroup = null!;
     private PanelGroup _exposureGroup = null!;
@@ -103,6 +109,17 @@ public sealed class WorkspaceView : View
         _engine.HistogramUpdated += OnHistogram;
         _engine.ViewportUpdated += OnViewportTile;
         _engine.BusyChanged += busy => { if (_photo != null) _photo.Busy = busy; };
+        _engine.ThumbProgress += (done, total) =>
+        {
+            if (done < total)
+                SetStatus($"Loading previews: {done} of {total} ({done * 100 / Math.Max(1, total)}%)");
+            else
+                SetStatus($"Previews ready · {_session.Documents.Count} photos");
+        };
+        _engine.ThumbLoaded += doc =>
+        {
+            if (_isGalleryMode) _gallery.RefreshThumbs();
+        };
         _session.Changed += RefreshSession;
 
         BuildChrome();
@@ -132,21 +149,30 @@ public sealed class WorkspaceView : View
             }
         };
         AddElement(brand);
-        var open = Chip("📂 Open", 118, 10, 84, 28);
+        var open = Chip("Open", 118, 10, 80, 28, iconName: "open");
         open.Transform.Anchor = Anchor.Left | Anchor.Top;
         open.Clicked += OpenFiles;
-        var folder = Chip("📁 Folder", 208, 10, 92, 28);
+        var folder = Chip("Folder", 204, 10, 88, 28, iconName: "folder");
         folder.Transform.Anchor = Anchor.Left | Anchor.Top;
         folder.Clicked += OpenWorkspace;
 
-        _photoTitleBadge = Label("PhotoTitle", "", W * 0.5f - 180, 12, 360, 24, Theme.TextDim, 12, 500);
-        _photoTitleBadge.Style.Text.Alignment = TextAlign.Center;
-        _photoTitleBadge.Transform.Anchor = Anchor.Top;
+        _btnViewerMode = Chip("Viewer", 298, 10, 92, 28, iconName: "viewer");
+        _btnViewerMode.Transform.Anchor = Anchor.Left | Anchor.Top;
+        _btnViewerMode.Toggled = true;
+        _btnViewerMode.Clicked += () => SetViewMode(false);
 
-        var settings = Chip("⚙️ Settings", W - 212, 10, 100, 28);
+        _btnGalleryMode = Chip("Gallery", 396, 10, 92, 28, iconName: "gallery");
+        _btnGalleryMode.Transform.Anchor = Anchor.Left | Anchor.Top;
+        _btnGalleryMode.Clicked += () => SetViewMode(true);
+
+        _photoTitleBadge = Label("PhotoTitle", "", 500, 12, W - 500 - 212, 24, Theme.TextDim, 12, 500);
+        _photoTitleBadge.Style.Text.Alignment = TextAlign.Left;
+        _photoTitleBadge.Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top;
+
+        var settings = Chip("Settings", W - 204, 10, 96, 28, iconName: "settings");
         settings.Transform.Anchor = Anchor.Right | Anchor.Top;
         settings.Clicked += OpenSettings;
-        var exp = Chip("🚀 Export", W - 104, 10, 92, 28, primary: true);
+        var exp = Chip("Export", W - 100, 10, 88, 28, primary: true, iconName: "export");
         exp.Transform.Anchor = Anchor.Right | Anchor.Top;
         exp.Clicked += StartExport;
 
@@ -165,6 +191,17 @@ public sealed class WorkspaceView : View
         {
             _photo.SetZoomMode(m == "Fill" ? ZoomMode.Fill : m == "1:1" ? ZoomMode.OneToOne : ZoomMode.Fit);
             UpdateZoomLabel();
+        };
+        _nav.PreviewClicked += (nx, ny) =>
+        {
+            if (_photo.ZoomMode == ZoomMode.Fit && !_photo.IsFreeZoom)
+            {
+                _photo.ToggleZoom(new Vector2(nx * _photo.Transform.Computed.Width, ny * _photo.Transform.Computed.Height));
+            }
+            else
+            {
+                _photo.PanToNorm(nx, ny);
+            }
         };
         AddElement(_nav);
 
@@ -240,11 +277,47 @@ public sealed class WorkspaceView : View
         };
         AddElement(_photo);
 
-        var tools = Bar("Tools", Theme.PanelAlt, photoX, photoY + photoH, photoW, tool,
+        _gallery = new GalleryView
+        {
+            Transform = new Transform(photoX, photoY, photoW, H - top - st)
+            {
+                Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
+            },
+            Visible = false
+        };
+        _gallery.PhotoSelected += idx => _session.Select(idx);
+        _gallery.PhotoDoubleClicked += idx =>
+        {
+            _session.Select(idx);
+            SetViewMode(false);
+        };
+        _gallery.ReadyToggled += (idx, ready) =>
+        {
+            if (idx >= 0 && idx < _session.Documents.Count)
+            {
+                var doc = _session.Documents[idx];
+                doc.IsReady = ready;
+                _film.SetReady(idx, ready);
+                WorkspaceStore.SaveReadyState(doc);
+                UpdateTitleBadge();
+            }
+        };
+        _gallery.BatchReadyChanged += () =>
+        {
+            for (int i = 0; i < _session.Documents.Count; i++)
+            {
+                _film.SetReady(i, _session.Documents[i].IsReady);
+                WorkspaceStore.SaveReadyState(_session.Documents[i]);
+            }
+            UpdateTitleBadge();
+        };
+        AddElement(_gallery);
+
+        _toolsBar = Bar("Tools", Theme.PanelAlt, photoX, photoY + photoH, photoW, tool,
             Anchor.Left | Anchor.Right | Anchor.Bottom);
         float tx = photoX + 8;
         float ty = photoY + photoH + 2;
-        _btnCrop = Tool("✂️ Crop", tx, ty, 74); tx += 78;
+        _btnCrop = Tool("Crop", tx, ty, 68, iconName: "crop"); tx += 72;
         _btnCrop.Clicked += ToggleCrop;
         _photo.CropCommitted += () =>
         {
@@ -269,9 +342,9 @@ public sealed class WorkspaceView : View
             }
             PushLook(fast: false, settle: true);
         };
-        _btnBefore = Tool("🔲 Before", tx, ty, 82); tx += 86;
+        _btnBefore = Tool("Before", tx, ty, 76, iconName: "before"); tx += 80;
         _btnBefore.Clicked += ToggleBefore;
-        _btnSplit = Tool("🌓 Split", tx, ty, 74); tx += 78;
+        _btnSplit = Tool("Split", tx, ty, 68, iconName: "split"); tx += 72;
         _btnSplit.Clicked += () =>
         {
             _btnSplit.Toggled = !_btnSplit.Toggled;
@@ -279,15 +352,15 @@ public sealed class WorkspaceView : View
             var d = _session.Active;
             _photo.SetBefore(d?.Proxy);
         };
-        var rotL = Tool("⟲ -90°", tx, ty, 70); tx += 74;
+        var rotL = Tool("-90°", tx, ty, 66, iconName: "rotate_left"); tx += 70;
         rotL.Clicked += () => Rotate(-1);
-        var rotR = Tool("⟳ +90°", tx, ty, 70); tx += 74;
+        var rotR = Tool("+90°", tx, ty, 66, iconName: "rotate_right"); tx += 70;
         rotR.Clicked += () => Rotate(1);
-        var flipH = Tool("⇄ Flip H", tx, ty, 78); tx += 82;
+        var flipH = Tool("Flip H", tx, ty, 72, iconName: "flip_h"); tx += 76;
         flipH.Clicked += () => Flip(h: true);
-        var flipV = Tool("⇅ Flip V", tx, ty, 78); tx += 82;
+        var flipV = Tool("Flip V", tx, ty, 72, iconName: "flip_v"); tx += 76;
         flipV.Clicked += () => Flip(h: false);
-        var hdr = Tool("⚡ HDR", tx, ty, 72);
+        var hdr = Tool("HDR", tx, ty, 64, iconName: "hdr");
         hdr.Clicked += MergeHdr;
         _zoomLabel = Label("ZoomPct", "Fit", photoX + photoW - 70, photoY + photoH + 6, 64, 20, Theme.TextDim, 11, 400);
 
@@ -300,6 +373,17 @@ public sealed class WorkspaceView : View
         };
         _film.Selected += i => _session.Select(i);
         _film.CloseRequested += i => _session.Close(i);
+        _film.ReadyToggled += (idx, ready) =>
+        {
+            if (idx >= 0 && idx < _session.Documents.Count)
+            {
+                var doc = _session.Documents[idx];
+                doc.IsReady = ready;
+                _gallery.SetReady(idx, ready);
+                WorkspaceStore.SaveReadyState(doc);
+                UpdateTitleBadge();
+            }
+        };
         AddElement(_film);
 
         _status = Bar("Status", Theme.Filmstrip, 0, H - st, W, st, Anchor.Left | Anchor.Right | Anchor.Bottom);
@@ -325,7 +409,7 @@ public sealed class WorkspaceView : View
     private void BuildRightPanels(RightColumn host)
     {
         // 1. White Balance
-        _wbGroup = new PanelGroup("🌡️ White Balance");
+        _wbGroup = new PanelGroup("White Balance");
         _temp = BindSlider(_wbGroup, "Kelvin", -100, 100, "0", (s, v) => s.Temperature = v, s => s.Temperature);
         _temp.GradientMode = SliderGradientMode.Kelvin;
         _tint = BindSlider(_wbGroup, "Tint", -100, 100, "0", (s, v) => s.Tint = v, s => s.Tint);
@@ -335,7 +419,7 @@ public sealed class WorkspaceView : View
         _wbGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableWhiteBalance = en);
 
         // 2. Exposure
-        _exposureGroup = new PanelGroup("☀️ Exposure");
+        _exposureGroup = new PanelGroup("Exposure");
         _ev = BindSlider(_exposureGroup, "Exposure", -5, 5, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
         _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
@@ -344,7 +428,7 @@ public sealed class WorkspaceView : View
         _exposureGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableExposure = en);
 
         // 3. High Dynamic Range
-        _hdrGroup = new PanelGroup("🏔️ High Dynamic Range");
+        _hdrGroup = new PanelGroup("High Dynamic Range");
         _hi = BindSlider(_hdrGroup, "Highlight", -100, 100, "0", (s, v) => s.Highlights = v, s => s.Highlights);
         _sh = BindSlider(_hdrGroup, "Shadow", -100, 100, "0", (s, v) => s.Shadows = v, s => s.Shadows);
         _wh = BindSlider(_hdrGroup, "Whites", -100, 100, "0", (s, v) => s.Whites = v, s => s.Whites);
@@ -354,7 +438,7 @@ public sealed class WorkspaceView : View
         _hdrGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHdr = en);
 
         // 4. Clarity & Local Contrast
-        _localGroup = new PanelGroup("🔍 Clarity & Local");
+        _localGroup = new PanelGroup("Clarity & Local Contrast");
         _localDetail = BindSlider(_localGroup, "Detail", -1.0f, 4.0f, "0.00",
             (s, v) =>
             {
@@ -376,7 +460,7 @@ public sealed class WorkspaceView : View
         _localGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableLocalContrast = en);
 
         // 5. Tone & Curve
-        _toneGroup = new PanelGroup("📈 Tone & Curve");
+        _toneGroup = new PanelGroup("Tone & Curve");
         _btnToneSigmoid = new IconButton("Sigmoid");
         _btnToneFilmic = new IconButton("Filmic");
         _btnToneSigmoid.Clicked += () => SetToneMode(ToneMode.Sigmoid);
@@ -395,7 +479,7 @@ public sealed class WorkspaceView : View
         _toneGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableTone = en);
 
         // 6. Highlight Reconstruction
-        _reconGroup = new PanelGroup("✨ Reconstruction");
+        _reconGroup = new PanelGroup("Highlight Reconstruction");
         _btnReconOff = new IconButton("Off");
         _btnReconOpposed = new IconButton("Opposed");
         _btnReconLCh = new IconButton("LCh");
@@ -418,7 +502,7 @@ public sealed class WorkspaceView : View
         _reconGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableReconstruction = en);
 
         // 7. Color Editor (HSL)
-        _hslGroup = new PanelGroup("🎨 Color Editor (HSL)");
+        _hslGroup = new PanelGroup("Color Editor (HSL)");
         _hslSelector = new HslBandSelector();
         _hslSelector.BandSelected += OnHslBandSelected;
         _hslGroup.AddBody(_hslSelector);
@@ -433,7 +517,7 @@ public sealed class WorkspaceView : View
         _vib = BindSlider(_hslGroup, "Vibrance", -100, 100, "0",
             (s, v) => s.Vibrance = v, s => s.Vibrance);
 
-        _matchGray = new IconButton("⚖️ Match mid-gray");
+        _matchGray = new IconButton("Match mid-gray", "scale");
         _matchGray.Clicked += () =>
         {
             var d = _session.Active;
@@ -448,7 +532,7 @@ public sealed class WorkspaceView : View
         _hslGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHsl = en);
 
         // 8. Detail & Noise Reduction
-        _detailGroup = new PanelGroup("🔍 Detail & Noise");
+        _detailGroup = new PanelGroup("Detail & Noise Reduction");
         _sharp = BindSlider(_detailGroup, "Sharpen", 0, 150, "0",
             (s, v) => s.Sharpen = v, s => s.Sharpen, 0f);
         _noise = BindSlider(_detailGroup, "Noise", -100, 100, "0",
@@ -462,26 +546,26 @@ public sealed class WorkspaceView : View
         _detailGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableDetail = en);
 
         // 9. Rotation & Geometry
-        _geomGroup = new PanelGroup("📐 Geometry & Crop");
+        _geomGroup = new PanelGroup("Rotation, Flip & Geometry");
         _straight = BindSlider(_geomGroup, "Straighten", -45, 45, "0.0", (s, v) =>
         {
             s.Straighten = v;
             _photo.StraightenPreview = v;
         }, s => s.Straighten);
 
-        var rotL = new IconButton("⟲ Rotate -90°");
+        var rotL = new IconButton("-90°", "rotate_left");
         rotL.Clicked += () => Rotate(-1);
-        var rotR = new IconButton("⟳ Rotate +90°");
+        var rotR = new IconButton("+90°", "rotate_right");
         rotR.Clicked += () => Rotate(1);
         _geomGroup.AddBody(new ModeChipRow([rotL, rotR]));
 
-        var flH = new IconButton("⇄ Flip H");
+        var flH = new IconButton("Flip H", "flip_h");
         flH.Clicked += () => Flip(true);
-        var flV = new IconButton("⇅ Flip V");
+        var flV = new IconButton("Flip V", "flip_v");
         flV.Clicked += () => Flip(false);
         _geomGroup.AddBody(new ModeChipRow([flH, flV]));
 
-        _btnCropGeom = new IconButton("✂️ Crop Tool (C)");
+        _btnCropGeom = new IconButton("Crop Tool (C)", "crop");
         _btnCropGeom.Clicked += ToggleCrop;
         _geomGroup.AddBody(_btnCropGeom);
         _geomGroup.EnableAuto(AutoStraighten, "Auto Straighten");
@@ -611,18 +695,18 @@ public sealed class WorkspaceView : View
     private void RefreshSession()
     {
         _film.Bind(_session.Documents, _session.ActiveIndex);
+        if (_isGalleryMode) _gallery.Bind(_session.Documents, _session.ActiveIndex);
         _filmThumb = _session.Active?.Thumb;
         var d = _session.Active;
+        UpdateTitleBadge();
         if (d == null)
         {
-            if (_photoTitleBadge != null) _photoTitleBadge.Text = "";
             _photo.SetDeveloped(null, owns: false);
             _nav.Image = null;
             SetStatus("Drop a RAW, Open, or pick a Folder.");
             return;
         }
 
-        if (_photoTitleBadge != null) _photoTitleBadge.Text = $"📷  {d.Name}";
         _photo.SetDroppedPath(d.Path);
         WorkspaceStore.HydrateLook(d);
         if (!d.SourceRgba.HasPixels)
@@ -631,12 +715,75 @@ public sealed class WorkspaceView : View
         BindPhoto(d);
         _photo.RestoreView(d);
         _restoringView = false;
+        RequestViewport(d);
         _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
         WorkspaceStore.RememberActive(d.Path);
         _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
         PullSliders(d);
         _matchGray.Toggled = d.Settings.MatchGray;
         UpdateZoomLabel();
+    }
+
+    private void SetViewMode(bool gallery)
+    {
+        _isGalleryMode = gallery;
+        _btnViewerMode.Toggled = !gallery;
+        _btnGalleryMode.Toggled = gallery;
+
+        _gallery.Visible = gallery;
+        _photo.Visible = !gallery;
+        _toolsBar.Visible = !gallery;
+        _film.Visible = !gallery;
+
+        if (gallery)
+        {
+            _gallery.Bind(_session.Documents, _session.ActiveIndex);
+        }
+        else
+        {
+            RefreshSession();
+        }
+
+        UpdateTitleBadge();
+    }
+
+    private void UpdateTitleBadge()
+    {
+        if (_photoTitleBadge == null) return;
+        if (_isGalleryMode)
+        {
+            int total = _session.Documents.Count;
+            int ready = 0;
+            for (int i = 0; i < total; i++)
+                if (_session.Documents[i].IsReady) ready++;
+            _photoTitleBadge.Text = $"Gallery  ·  {total} photos  ({ready} ready)";
+        }
+        else
+        {
+            var d = _session.Active;
+            if (d == null)
+            {
+                _photoTitleBadge.Text = "";
+            }
+            else
+            {
+                string rdy = d.IsReady ? "  ·  Ready" : "";
+                _photoTitleBadge.Text = $"{d.Name}{rdy}";
+            }
+        }
+    }
+
+    private void ToggleReady(bool? force = null)
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.IsReady = force ?? !d.IsReady;
+        int idx = _session.ActiveIndex;
+        _film.SetReady(idx, d.IsReady);
+        _gallery.SetReady(idx, d.IsReady);
+        WorkspaceStore.SaveReadyState(d);
+        UpdateTitleBadge();
+        SetStatus(d.IsReady ? $"Marked ready: {d.Name}" : $"Unmarked: {d.Name}");
     }
 
     private void OnLivePreview(PhotoDocument doc)
@@ -649,14 +796,26 @@ public sealed class WorkspaceView : View
     private void OnDeveloped(PhotoDocument doc)
     {
         _film.Bind(_session.Documents, _session.ActiveIndex);
+        if (_isGalleryMode) _gallery.RefreshThumbs();
         if (!ReferenceEquals(doc, _session.Active))
             return;
 
-        _restoringView = true;
-        BindPhoto(doc);
-        _photo.RestoreView(doc);
-        _restoringView = false;
-        _photo.SetBefore(doc.Proxy);
+        if (doc.Proxy != null && !_photo.HasPhoto)
+        {
+            _restoringView = true;
+            BindPhoto(doc);
+            _photo.RestoreView(doc);
+            _restoringView = false;
+            RequestViewport(doc);
+        }
+        else
+        {
+            _photo.SetDeveloped(doc.Display, owns: false);
+            _photo.SetBefore(doc.Proxy);
+            if (doc.Proxy != null && _photo.HasPhoto)
+                _photo.SetLook(doc.Proxy, doc.Settings, fast: false);
+        }
+
         _nav.Image = doc.Preview ?? doc.Look ?? doc.Display ?? doc.Thumb;
         _histogram.SetBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _filmThumb = doc.Preview ?? doc.Thumb;
@@ -681,7 +840,6 @@ public sealed class WorkspaceView : View
                 _photo.SetViewportTile(d.ViewportTile, d.TileX, d.TileY, d.TileW, d.TileH);
             else
                 _photo.ClearViewportTile();
-            RequestViewport(d);
             return;
         }
 
@@ -1232,6 +1390,7 @@ public sealed class WorkspaceView : View
             _session.Select(idx);
         else
             RefreshSession();
+        _engine.FillMissingThumbs(_session.Documents);
     }
 
     private void OpenSettings()
@@ -1244,56 +1403,137 @@ public sealed class WorkspaceView : View
     private void StartExport()
     {
         var d = _session.Active;
-        if (d == null) { SetStatus("Nothing to export."); return; }
-        _export.Open(Path.ChangeExtension(d.Name, ".jpg"), d.NativeWidth, d.NativeHeight);
+        if (d == null && _session.Documents.Count == 0) { SetStatus("Nothing to export."); return; }
+        int ready = 0;
+        for (int i = 0; i < _session.Documents.Count; i++)
+            if (_session.Documents[i].IsReady) ready++;
+        int total = _session.Documents.Count;
+        string name = d != null ? Path.ChangeExtension(d.Name, ".jpg") : "export.jpg";
+        int w = d?.NativeWidth ?? 0;
+        int h = d?.NativeHeight ?? 0;
+        _export.Open(name, w, h, ready, total);
     }
 
     private void OnExportConfirmed(ExportRequest req)
     {
-        var d = _session.Active;
-        if (d == null) { SetStatus("Nothing to export."); return; }
         if (Interlocked.CompareExchange(ref _exporting, 1, 0) != 0)
         {
             SetStatus("Export already running.");
             return;
         }
 
-        string? dest = FileDialogs.SavePhoto(Path.ChangeExtension(d.Path, Ext(req.Format)));
-        if (dest == null)
+        if (req.Scope == ExportScope.Active)
         {
-            Volatile.Write(ref _exporting, 0);
-            return;
-        }
-
-        var settings = d.Settings.Clone();
-        string srcPath = d.Path;
-        RasterBuffer hiRes = d.HiResRgba;
-        _photo.Busy = true;
-        SetStatus("Exporting full resolution…");
-        Task.Run(() =>
-        {
-            try
-            {
-                var size = DevelopEngine.WriteExport(
-                    srcPath, settings, hiRes, dest, req.Format, req.Quality, req.LongEdge,
-                    msg => Browser.Post(() => SetStatus(msg)));
-                Browser.Post(() => SetStatus(
-                    $"Exported {size.Width}×{size.Height}  {Path.GetFileName(dest)}"));
-            }
-            catch (Exception ex)
-            {
-                Browser.Post(() => SetStatus("Export failed: " + ex.Message));
-            }
-            finally
+            var d = _session.Active;
+            if (d == null)
             {
                 Volatile.Write(ref _exporting, 0);
+                SetStatus("Nothing to export.");
+                return;
+            }
+
+            string? dest = FileDialogs.SavePhoto(Path.ChangeExtension(d.Path, Ext(req.Format)));
+            if (dest == null)
+            {
+                Volatile.Write(ref _exporting, 0);
+                return;
+            }
+
+            var settings = d.Settings.Clone();
+            string srcPath = d.Path;
+            RasterBuffer hiRes = d.HiResRgba;
+            _photo.Busy = true;
+            SetStatus("Exporting full resolution…");
+            Task.Run(() =>
+            {
+                try
+                {
+                    var size = DevelopEngine.WriteExport(
+                        srcPath, settings, hiRes, dest, req.Format, req.Quality, req.LongEdge,
+                        msg => Browser.Post(() => SetStatus(msg)));
+                    Browser.Post(() => SetStatus(
+                        $"Exported {size.Width}×{size.Height}  {Path.GetFileName(dest)}"));
+                }
+                catch (Exception ex)
+                {
+                    Browser.Post(() => SetStatus("Export failed: " + ex.Message));
+                }
+                finally
+                {
+                    Volatile.Write(ref _exporting, 0);
+                    Browser.Post(() =>
+                    {
+                        if (_photo != null)
+                            _photo.Busy = false;
+                    });
+                }
+            });
+        }
+        else
+        {
+            // Batch export: Ready or All
+            var list = new List<PhotoDocument>();
+            for (int i = 0; i < _session.Documents.Count; i++)
+            {
+                var doc = _session.Documents[i];
+                if (req.Scope == ExportScope.Ready && !doc.IsReady)
+                    continue;
+                list.Add(doc);
+            }
+
+            if (list.Count == 0)
+            {
+                Volatile.Write(ref _exporting, 0);
+                SetStatus(req.Scope == ExportScope.Ready
+                    ? "No photos are marked Ready. Check the corner box on photos to mark them ready."
+                    : "No photos in session to export.");
+                return;
+            }
+
+            string? outDir = FileDialogs.OpenFolder();
+            if (string.IsNullOrWhiteSpace(outDir) || !Directory.Exists(outDir))
+            {
+                Volatile.Write(ref _exporting, 0);
+                return;
+            }
+
+            _photo.Busy = true;
+            SetStatus($"Batch exporting {list.Count} photos…");
+            Task.Run(() =>
+            {
+                int done = 0;
+                int failed = 0;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var doc = list[i];
+                    string destName = Path.GetFileNameWithoutExtension(doc.Name) + Ext(req.Format);
+                    string destPath = Path.Combine(outDir, destName);
+                    Browser.Post(() => SetStatus($"Exporting {i + 1} of {list.Count}: {doc.Name}…"));
+
+                    try
+                    {
+                        DevelopEngine.WriteExport(
+                            doc.Path, doc.Settings.Clone(), doc.HiResRgba, destPath,
+                            req.Format, req.Quality, req.LongEdge, null);
+                        done++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        Log.Warning($"Batch export failed for {doc.Name}: {ex.Message}");
+                    }
+                }
+
                 Browser.Post(() =>
                 {
-                    if (_photo != null)
-                        _photo.Busy = false;
+                    Volatile.Write(ref _exporting, 0);
+                    if (_photo != null) _photo.Busy = false;
+                    SetStatus(failed > 0
+                        ? $"Exported {done} photos ({failed} failed) to {Path.GetFileName(outDir)}"
+                        : $"Exported all {done} photos to {Path.GetFileName(outDir)}");
                 });
-            }
-        });
+            });
+        }
     }
 
     private static string Ext(string format) => format.ToUpperInvariant() switch
@@ -1312,6 +1552,20 @@ public sealed class WorkspaceView : View
         if (ctrl && key == Key.Z) { Undo(); return; }
         if (ctrl && key == Key.O) { OpenFiles(); return; }
         if (ctrl && key == Key.E) { StartExport(); return; }
+
+        if (_isGalleryMode)
+        {
+            if (key == Key.Enter || key == Key.E) { SetViewMode(false); return; }
+            if (key == Key.P) { ToggleReady(true); return; }
+            if (key == Key.X) { ToggleReady(false); return; }
+        }
+        else
+        {
+            if (key == Key.G) { SetViewMode(true); return; }
+            if (key == Key.P) { ToggleReady(true); return; }
+            if (key == Key.X) { ToggleReady(false); return; }
+        }
+
         if (_photo.CropTool)
         {
             if (key == Key.Enter || key == Key.KeypadEnter)
@@ -1328,7 +1582,7 @@ public sealed class WorkspaceView : View
         if (key == Key.C) { ToggleCrop(); return; }
         if (key == Key.F) _photo.SetZoomMode(ZoomMode.Fit);
         if (key == Key.Z || key == Key.Space)
-            _photo.SetZoomMode(_photo.ZoomMode == ZoomMode.OneToOne ? ZoomMode.Fit : ZoomMode.OneToOne);
+            _photo.ToggleZoom();
         if (key == Key.BackSlash || key == Key.Slash) ToggleBefore();
         if (key == Key.LeftBracket) Rotate(-1);
         if (key == Key.RightBracket) Rotate(1);
@@ -1360,11 +1614,19 @@ public sealed class WorkspaceView : View
     private void UpdateZoomLabel()
     {
         if (_zoomLabel == null || _photo == null) return;
-        _zoomLabel.Text = _photo.ZoomMode == ZoomMode.Fit ? "Fit" :
-            _photo.ZoomMode == ZoomMode.Fill ? "Fill" :
-            $"{_photo.Zoom * 100:0}%";
-        _nav.SetMode(_photo.ZoomMode == ZoomMode.Fill ? "Fill" :
-            _photo.ZoomMode == ZoomMode.OneToOne ? "1:1" : "Fit");
+        if (_photo.IsFreeZoom)
+        {
+            _zoomLabel.Text = $"{_photo.Zoom * 100:0}%";
+            _nav.SetMode(Math.Abs(_photo.Zoom - 1f) < 0.01f ? "1:1" : "");
+        }
+        else
+        {
+            _zoomLabel.Text = _photo.ZoomMode == ZoomMode.Fit ? "Fit" :
+                _photo.ZoomMode == ZoomMode.Fill ? "Fill" :
+                $"{_photo.Zoom * 100:0}%";
+            _nav.SetMode(_photo.ZoomMode == ZoomMode.Fill ? "Fill" :
+                _photo.ZoomMode == ZoomMode.OneToOne ? "1:1" : "Fit");
+        }
     }
 
     private void SetStatus(string t)
@@ -1398,9 +1660,9 @@ public sealed class WorkspaceView : View
         });
     }
 
-    private IconButton Chip(string caption, float x, float y, float w, float h, bool primary = false)
+    private IconButton Chip(string caption, float x, float y, float w, float h, bool primary = false, string? iconName = null)
     {
-        var e = new IconButton(caption, primary);
+        var e = new IconButton(caption, iconName, primary);
         e.Transform = new Transform(x, y, w, h) { Anchor = Anchor.Top };
         AddElement(e);
         return e;
@@ -1422,9 +1684,9 @@ public sealed class WorkspaceView : View
         return e;
     }
 
-    private IconButton Tool(string caption, float x, float y, float w = 62f)
+    private IconButton Tool(string? caption, float x, float y, float w = 62f, string? iconName = null)
     {
-        var b = new IconButton(caption);
+        var b = new IconButton(caption, iconName);
         b.Transform = new Transform(x, y, w, Theme.ToolH - 4)
         {
             Anchor = Anchor.Left | Anchor.Bottom

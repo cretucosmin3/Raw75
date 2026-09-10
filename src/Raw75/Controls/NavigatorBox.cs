@@ -33,8 +33,8 @@ public class NavigatorBox : VisualElement
 
     public void SetMode(string mode)
     {
-        _fit.Toggled = mode == "Fit" || mode == "🔍 Fit";
-        _fill.Toggled = mode == "Fill" || mode == "🔲 Fill";
+        _fit.Toggled = mode == "Fit";
+        _fill.Toggled = mode == "Fill";
         _oneToOne.Toggled = mode == "1:1";
     }
     public event Action<float, float>? PreviewClicked;
@@ -58,9 +58,9 @@ public class NavigatorBox : VisualElement
         _preview = new Preview();
         _preview.ClickedNorm += (nx, ny) => PreviewClicked?.Invoke(nx, ny);
 
-        _fit = MakeMode("🔍 Fit", "Fit");
-        _fill = MakeMode("🔲 Fill", "Fill");
-        _oneToOne = MakeMode("1:1", "1:1");
+        _fit = MakeMode("Fit", "Fit", "fit");
+        _fill = MakeMode("Fill", "Fill", "fill");
+        _oneToOne = MakeMode("1:1", "1:1", null);
         SetMode("Fit");
 
         AddChild(_preview);
@@ -69,9 +69,9 @@ public class NavigatorBox : VisualElement
         AddChild(_oneToOne);
     }
 
-    private IconButton MakeMode(string caption, string tag)
+    private IconButton MakeMode(string caption, string tag, string? iconName = null)
     {
-        var b = new IconButton(caption);
+        var b = new IconButton(caption, iconName);
         b.Clicked += () =>
         {
             SetMode(tag);

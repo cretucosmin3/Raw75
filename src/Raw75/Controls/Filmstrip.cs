@@ -20,6 +20,13 @@ public class Filmstrip : VisualElement
 
     public event Action<int>? Selected;
     public event Action<int>? CloseRequested;
+    public event Action<int, bool>? ReadyToggled;
+
+    public void SetReady(int index, bool ready)
+    {
+        if (index >= 0 && index < _cells.Count)
+            _cells[index].SetReady(ready);
+    }
 
     public Filmstrip()
     {
@@ -97,14 +104,17 @@ public class Filmstrip : VisualElement
         private readonly int _index;
         private readonly ThumbWell _thumb;
         private readonly VisualElement _caption;
+        private readonly VisualElement _ready;
         private readonly VisualElement _close;
         private bool _active;
+        private bool _isReady;
 
         public Cell(Filmstrip owner, int index, PhotoDocument doc, bool active)
         {
             _owner = owner;
             _index = index;
             _active = active;
+            _isReady = doc.IsReady;
             Name = $"FilmstripCell_{index}";
             Cursor = StandardCursor.Hand;
             Style = new ElementStyle
@@ -113,7 +123,7 @@ public class Filmstrip : VisualElement
                 Border = new BorderStyle
                 {
                     Width = active ? 1.5f : 1f,
-                    Color = active ? Theme.Accent : Theme.Hairline,
+                    Color = active ? Theme.Accent : (_isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline),
                     Roundness = Theme.RadiusSm
                 },
                 Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60))
@@ -142,6 +152,35 @@ public class Filmstrip : VisualElement
                         Padding = 2
                     }
                 }
+            };
+
+            _ready = new VisualElement
+            {
+                Name = $"{Name}_Ready",
+                Cursor = StandardCursor.Hand,
+                BackgroundImageScale = ImageScaleMode.Contain,
+                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                BackgroundImageTintColor = SKColors.White,
+                BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null,
+                Style = new ElementStyle
+                {
+                    BackColor = _isReady ? Theme.Accent : new SKColor(0, 0, 0, 160),
+                    Border = new BorderStyle
+                    {
+                        Width = 1,
+                        Color = _isReady ? Theme.Accent : Theme.HairlineSubtle,
+                        Roundness = 3
+                    }
+                }
+            };
+            _ready.Events.OnClick += (_, args) =>
+            {
+                if (args.Button != (int)MouseButton.Left) return;
+                _isReady = !_isReady;
+                doc.IsReady = _isReady;
+                UpdateReadyStyle();
+                _owner.ReadyToggled?.Invoke(_index, _isReady);
+                args.Handled = true;
             };
 
             _close = new VisualElement
@@ -182,6 +221,7 @@ public class Filmstrip : VisualElement
 
             AddChild(_thumb);
             AddChild(_caption);
+            AddChild(_ready);
             AddChild(_close);
 
             Events.OnMouseEnter += _ =>
@@ -218,10 +258,29 @@ public class Filmstrip : VisualElement
             _active = active;
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 1.5f : 1f;
-            Style.Border.Color = active ? Theme.Accent : Theme.Hairline;
+            Style.Border.Color = active ? Theme.Accent : (_isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline);
             Style.Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
             _caption.Style.Text.Color = active ? Theme.Accent : Theme.TextDim;
             InvalidatePaint();
+        }
+
+        public void SetReady(bool ready)
+        {
+            _isReady = ready;
+            UpdateReadyStyle();
+        }
+
+        private void UpdateReadyStyle()
+        {
+            _ready.BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null;
+            _ready.Style.BackColor = _isReady ? Theme.Accent : new SKColor(0, 0, 0, 160);
+            _ready.Style.Border.Color = _isReady ? Theme.Accent : Theme.HairlineSubtle;
+            _ready.InvalidatePaint();
+            if (!_active)
+            {
+                Style.Border.Color = _isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline;
+                InvalidatePaint();
+            }
         }
 
         protected override void LayoutChildren()
@@ -234,7 +293,8 @@ public class Filmstrip : VisualElement
 
             _thumb.Transform.SetAbsoluteFrame(originX + 4, originY + 4, w - 8, thumbH);
             _caption.Transform.SetAbsoluteFrame(originX + 2, originY + 4 + thumbH, w - 4, NameH);
-            _close.Transform.SetAbsoluteFrame(originX + w - 16, originY + 4, 12, 12);
+            _ready.Transform.SetAbsoluteFrame(originX + 5, originY + 5, 14, 14);
+            _close.Transform.SetAbsoluteFrame(originX + w - 17, originY + 5, 12, 12);
         }
     }
 
