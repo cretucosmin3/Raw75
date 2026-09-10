@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Raw75.Imaging;
 
 namespace Raw75.Develop;
 
@@ -75,6 +76,35 @@ public sealed class Session : IDisposable
         Documents.RemoveAt(index);
         if (ActiveIndex >= Documents.Count)
             ActiveIndex = Documents.Count - 1;
+        Changed?.Invoke();
+    }
+
+    public void ResetAllDocuments()
+    {
+        for (int i = 0; i < Documents.Count; i++)
+        {
+            var doc = Documents[i];
+            doc.Settings.Reset();
+            doc.IsReady = false;
+            doc.Undo.Clear();
+            doc.UnloadWorking();
+
+            if (doc.Preview != null)
+            {
+                GpuRetain.Retire(doc.Preview);
+                doc.Preview = null;
+            }
+            if (doc.Look != null)
+            {
+                GpuRetain.Retire(doc.Look);
+                doc.Look = null;
+            }
+            if (doc.Thumb != null)
+            {
+                GpuRetain.Retire(doc.Thumb);
+                doc.Thumb = null;
+            }
+        }
         Changed?.Invoke();
     }
 

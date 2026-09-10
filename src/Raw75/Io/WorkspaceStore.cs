@@ -335,6 +335,94 @@ public static class WorkspaceStore
         return SKImage.FromBitmap(bmp);
     }
 
+    public static (int Count, long Bytes) GetCacheStats()
+    {
+        int count = 0;
+        long totalBytes = 0;
+
+        void ScanFolder(string dir)
+        {
+            if (!Directory.Exists(dir)) return;
+            try
+            {
+                var dirs = Directory.GetDirectories(dir);
+                count += dirs.Length;
+                foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        var fi = new FileInfo(file);
+                        totalBytes += fi.Length;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        if (!string.IsNullOrEmpty(Root))
+        {
+            ScanFolder(Path.Combine(Root, FolderName, "cache"));
+        }
+
+        string appDataCache = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Raw75",
+            "cache");
+        ScanFolder(appDataCache);
+
+        return (count, totalBytes);
+    }
+
+    /// <summary>
+    /// Deletes all cached previews, looks, and edit metadata from disk.
+    /// Returns the number of cached photo entries deleted.
+    /// </summary>
+    public static int ClearCache()
+    {
+        int count = 0;
+
+        void DeleteFolder(string dir)
+        {
+            if (!Directory.Exists(dir)) return;
+            try
+            {
+                var subDirs = Directory.GetDirectories(dir);
+                count += subDirs.Length;
+                foreach (var sub in subDirs)
+                {
+                    try { Directory.Delete(sub, recursive: true); }
+                    catch (Exception ex) { Blossom.Log.Warning("ClearCache delete dir: " + ex.Message); }
+                }
+
+                var files = Directory.GetFiles(dir);
+                count += files.Length;
+                foreach (var f in files)
+                {
+                    try { File.Delete(f); }
+                    catch (Exception ex) { Blossom.Log.Warning("ClearCache delete file: " + ex.Message); }
+                }
+            }
+            catch (Exception ex)
+            {
+                Blossom.Log.Warning("ClearCache error: " + ex.Message);
+            }
+        }
+
+        if (!string.IsNullOrEmpty(Root))
+        {
+            DeleteFolder(Path.Combine(Root, FolderName, "cache"));
+        }
+
+        string appDataCache = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Raw75",
+            "cache");
+        DeleteFolder(appDataCache);
+
+        return count;
+    }
+
     private static string CacheRoot()
     {
         if (!string.IsNullOrEmpty(Root))

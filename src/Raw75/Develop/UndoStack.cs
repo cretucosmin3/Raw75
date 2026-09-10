@@ -27,6 +27,13 @@ public sealed class UndoStack
         _dragBase = null!;
     }
 
+    public void Clear()
+    {
+        _undo.Clear();
+        _redo.Clear();
+        _dragBase = null!;
+    }
+
     public void Push(DevelopSettings before)
     {
         _undo.Add(before.Clone());
