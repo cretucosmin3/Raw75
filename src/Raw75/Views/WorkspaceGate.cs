@@ -43,10 +43,10 @@ public sealed class WorkspaceGate : VisualElement
                 Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = Theme.Radius }
             }
         };
-        _title = Label("GateTitle", "Open a folder", Theme.Text, 18, 700);
+        _title = Label("GateTitle", "Open a folder", Theme.Text, 20, 700);
         _body = Label("GateBody",
             "Pick the folder that holds your photos. Raw75 will list everything in it and keep previews in .raw75 next to the files.",
-            Theme.TextDim, 13, 400);
+            Theme.TextSecondary, 13.5f, 400);
         _choose = new IconButton("Choose folder", primary: true);
         _choose.Clicked += Pick;
         _last = new IconButton("Open last folder");
@@ -55,7 +55,7 @@ public sealed class WorkspaceGate : VisualElement
             if (!string.IsNullOrEmpty(_lastRoot))
                 FolderPicked?.Invoke(_lastRoot);
         };
-        _lastPath = Label("GateLast", "", Theme.TextDim, 11, 400);
+        _lastPath = Label("GateLast", "", Theme.TextDim, 12, 400);
 
         AddChild(_card);
         _card.AddChild(_title);
@@ -124,16 +124,16 @@ public sealed class WorkspaceGate : VisualElement
         float oy = Transform.Computed.Y;
         float w = Math.Max(1f, Transform.Computed.Width);
         float h = Math.Max(1f, Transform.Computed.Height);
-        const float cw = 460f;
-        const float ch = 248f;
+        const float cw = 500f;
+        const float ch = 264f;
         float x = ox + Math.Max(0, (w - cw) / 2f);
         float y = oy + Math.Max(0, (h - ch) / 2f);
         _card.Transform.SetAbsoluteFrame(x, y, cw, ch);
         _title.Transform.SetAbsoluteFrame(x + 24, y + 22, cw - 48, 28);
         _body.Transform.SetAbsoluteFrame(x + 24, y + 58, cw - 48, 56);
-        _choose.Transform.SetAbsoluteFrame(x + 24, y + 128, 168, 34);
-        _last.Transform.SetAbsoluteFrame(x + 24 + 168 + 10, y + 128, 168, 34);
-        _lastPath.Transform.SetAbsoluteFrame(x + 24, y + 176, cw - 48, 40);
+        _choose.Transform.SetAbsoluteFrame(x + 24, y + 130, 184, 36);
+        _last.Transform.SetAbsoluteFrame(x + 24 + 184 + 12, y + 130, 184, 36);
+        _lastPath.Transform.SetAbsoluteFrame(x + 24, y + 184, cw - 48, 40);
     }
 
     private static VisualElement Label(string name, string text, SKColor color, float size, int weight)

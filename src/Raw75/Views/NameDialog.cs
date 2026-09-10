@@ -48,7 +48,7 @@ public sealed class NameDialog : VisualElement
             IsClickthrough = true,
             Style = new ElementStyle
             {
-                Text = new TextStyle { Color = Theme.Text, Size = 15, Weight = 700, Alignment = TextAlign.Left }
+                Text = new TextStyle { Color = Theme.Text, Size = 17, Weight = 700, Alignment = TextAlign.Left }
             }
         };
         _field = new VisualElement
@@ -58,7 +58,7 @@ public sealed class NameDialog : VisualElement
             {
                 BackColor = Theme.Track,
                 Border = new BorderStyle { Width = 1, Color = Theme.Accent, Roundness = 4 },
-                Text = new TextStyle { Color = Theme.Text, Size = 14, Weight = 500, Alignment = TextAlign.Left, Padding = 8 }
+                Text = new TextStyle { Color = Theme.Text, Size = 15, Weight = 500, Alignment = TextAlign.Left, Padding = 10 }
             }
         };
         _save = new IconButton("Save", primary: true);
@@ -150,15 +150,15 @@ public sealed class NameDialog : VisualElement
         float oy = Transform.Computed.Y;
         float w = Math.Max(1f, Transform.Computed.Width);
         float h = Math.Max(1f, Transform.Computed.Height);
-        const float cw = 420f;
-        const float ch = 168f;
+        const float cw = 440f;
+        const float ch = 180f;
         float x = ox + Math.Max(0, (w - cw) / 2f);
         float y = oy + Math.Max(0, (h - ch) / 2f);
         _card.Transform.SetAbsoluteFrame(x, y, cw, ch);
-        _title.Transform.SetAbsoluteFrame(x + 18, y + 16, cw - 36, 24);
-        _field.Transform.SetAbsoluteFrame(x + 18, y + 52, cw - 36, 36);
-        _save.Transform.SetAbsoluteFrame(x + cw - 18 - 96, y + ch - 48, 96, 32);
-        _cancel.Transform.SetAbsoluteFrame(x + cw - 18 - 96 - 10 - 96, y + ch - 48, 96, 32);
+        _title.Transform.SetAbsoluteFrame(x + 18, y + 16, cw - 36, 26);
+        _field.Transform.SetAbsoluteFrame(x + 18, y + 54, cw - 36, 40);
+        _save.Transform.SetAbsoluteFrame(x + cw - 18 - 100, y + ch - 48, 100, 34);
+        _cancel.Transform.SetAbsoluteFrame(x + cw - 18 - 100 - 10 - 100, y + ch - 48, 100, 34);
     }
 
 }

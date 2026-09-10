@@ -83,7 +83,7 @@ public class NavigatorBox : VisualElement
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : Theme.LeftW);
-        float h = 148f;
+        float h = 168f;
         if (maxHeight > 0) h = Math.Min(h, maxHeight);
         return new SKSize(w, h);
     }

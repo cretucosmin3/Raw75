@@ -29,10 +29,10 @@ public static class Theme
     public static readonly SKColor HairlineStrong = new(255, 255, 255, 52);// Active boundary / focused frame
 
     // Typography
-    public static readonly SKColor Text = new(244, 244, 248);             // Primary high-contrast labels
-    public static readonly SKColor TextSecondary = new(190, 190, 200);     // Module titles, secondary info
-    public static readonly SKColor TextDim = new(140, 140, 152);          // Value readouts, units, hints
-    public static readonly SKColor TextDisabled = new(90, 90, 100);       // Inactive / disabled states
+    public static readonly SKColor Text = new(248, 250, 252);             // Primary high-contrast labels
+    public static readonly SKColor TextSecondary = new(205, 210, 222);     // Module titles, secondary info
+    public static readonly SKColor TextDim = new(165, 170, 184);          // Value readouts, units, hints
+    public static readonly SKColor TextDisabled = new(105, 110, 122);       // Inactive / disabled states
 
     // Accents & Selection
     public static readonly SKColor Accent = new(255, 153, 51);            // Signature Raw75 warm amber
@@ -77,25 +77,25 @@ public static class Theme
     // Geometry & Layout Constants
     public const float Radius = 6f;
     public const float RadiusSm = 4f;
-    public const float TopBarH = 42f;
-    public const float LeftW = 280f;
-    public const float RightW = 324f;
-    public const float FilmH = 96f;
-    public const float ToolH = 28f;
-    public const float StatusH = 22f;
-    public const float GroupHeadH = 28f;
-    public const float Pad = 8f;
+    public const float TopBarH = 48f;
+    public const float LeftW = 310f;
+    public const float RightW = 356f;
+    public const float FilmH = 108f;
+    public const float ToolH = 32f;
+    public const float StatusH = 26f;
+    public const float GroupHeadH = 32f;
+    public const float Pad = 10f;
     public const float SliderGap = 6f;
 
     // Compact Slider Constants
-    public const float RowH = 24f;
-    public const float RowHStacked = 30f;
-    public const float SliderLabelW = 72f;
-    public const float SliderValueW = 42f;
-    public const float TrackH = 10f;
-    public const float FillH = 4f;
-    public const float ThumbW = 8f;
-    public const float ThumbH = 16f;
-    public const float ThumbRadius = 4f;
+    public const float RowH = 28f;
+    public const float RowHStacked = 34f;
+    public const float SliderLabelW = 88f;
+    public const float SliderValueW = 48f;
+    public const float TrackH = 11f;
+    public const float FillH = 5f;
+    public const float ThumbW = 9f;
+    public const float ThumbH = 18f;
+    public const float ThumbRadius = 4.5f;
     public const float InsetX = 2f;
 }

@@ -721,14 +721,26 @@ public sealed class PhotoPane : VisualElement
             canvas.DrawRoundRect(pillRect, handleBg);
             canvas.DrawRoundRect(pillRect, handleBorder);
 
-            using var textPaint = new SKPaint
+            using var arrowPaint = new SKPaint
             {
                 Color = Theme.Text,
                 IsAntialias = true,
-                TextSize = 11,
-                TextAlign = SKTextAlign.Center
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 1.8f,
+                StrokeCap = SKStrokeCap.Round,
+                StrokeJoin = SKStrokeJoin.Round
             };
-            canvas.DrawText("‹ ›", x, midY + 4, textPaint);
+            using var leftPath = new SKPath();
+            leftPath.MoveTo(x - 2.5f, midY - 4.5f);
+            leftPath.LineTo(x - 6.5f, midY);
+            leftPath.LineTo(x - 2.5f, midY + 4.5f);
+            canvas.DrawPath(leftPath, arrowPaint);
+
+            using var rightPath = new SKPath();
+            rightPath.MoveTo(x + 2.5f, midY - 4.5f);
+            rightPath.LineTo(x + 6.5f, midY);
+            rightPath.LineTo(x + 2.5f, midY + 4.5f);
+            canvas.DrawPath(rightPath, arrowPaint);
 
             // Badges: "BEFORE" on left side, "AFTER" on right side
             DrawSplitBadges(canvas, x, w, h);
@@ -764,9 +776,12 @@ public sealed class PhotoPane : VisualElement
 
         using var text = new SKPaint
         {
-            Color = new SKColor(180, 180, 186),
+            Color = Theme.TextSecondary,
             IsAntialias = true,
-            TextSize = 13,
+            SubpixelText = true,
+            LcdRenderText = true,
+            HintingLevel = SKPaintHinting.Normal,
+            TextSize = 14,
             Typeface = SKTypeface.Default
         };
         canvas.DrawText(line, 16, h - 16, text);
@@ -791,7 +806,10 @@ public sealed class PhotoPane : VisualElement
         {
             Color = Theme.Text,
             IsAntialias = true,
-            TextSize = 10,
+            SubpixelText = true,
+            LcdRenderText = true,
+            HintingLevel = SKPaintHinting.Normal,
+            TextSize = 11,
             FakeBoldText = true,
             TextAlign = SKTextAlign.Center
         };
@@ -800,21 +818,21 @@ public sealed class PhotoPane : VisualElement
         if (splitX > 75)
         {
             float bx = Math.Max(35, splitX - 50);
-            var rect = new SKRoundRect(new SKRect(bx - 32, 16, bx + 32, 38), 4, 4);
+            var rect = new SKRoundRect(new SKRect(bx - 36, 16, bx + 36, 40), 4, 4);
             canvas.DrawRoundRect(rect, badgeBg);
             canvas.DrawRoundRect(rect, badgeBorder);
-            canvas.DrawText("BEFORE", bx, 31, badgeText);
+            canvas.DrawText("BEFORE", bx, 32, badgeText);
         }
 
         // Right badge (AFTER)
         if (w - splitX > 75)
         {
             float bx = Math.Min(w - 35, splitX + 50);
-            var rect = new SKRoundRect(new SKRect(bx - 32, 16, bx + 32, 38), 4, 4);
+            var rect = new SKRoundRect(new SKRect(bx - 36, 16, bx + 36, 40), 4, 4);
             canvas.DrawRoundRect(rect, badgeBg);
             canvas.DrawRoundRect(rect, badgeBorder);
             badgeText.Color = Theme.Accent;
-            canvas.DrawText("AFTER", bx, 31, badgeText);
+            canvas.DrawText("AFTER", bx, 32, badgeText);
         }
     }
 
@@ -837,16 +855,19 @@ public sealed class PhotoPane : VisualElement
         {
             Color = Theme.Accent,
             IsAntialias = true,
-            TextSize = 11,
+            SubpixelText = true,
+            LcdRenderText = true,
+            HintingLevel = SKPaintHinting.Normal,
+            TextSize = 12,
             FakeBoldText = true,
             TextAlign = SKTextAlign.Center
         };
 
         float cx = w * 0.5f;
-        var rect = new SKRoundRect(new SKRect(cx - 50, 16, cx + 50, 40), 6, 6);
+        var rect = new SKRoundRect(new SKRect(cx - 52, 16, cx + 52, 42), 6, 6);
         canvas.DrawRoundRect(rect, badgeBg);
         canvas.DrawRoundRect(rect, badgeBorder);
-        canvas.DrawText("BEFORE", cx, 33, badgeText);
+        canvas.DrawText("BEFORE", cx, 34, badgeText);
     }
 
     private void OnPointerDown(object sender, MouseEventArgs e)
@@ -1458,8 +1479,8 @@ public sealed class PhotoPane : VisualElement
     {
         _cropHits.Clear();
         string[] ids = { "free", "orig", "1:1", "4:3", "3:2", "16:9", "rotl", "rotr", "reset", "cancel", "ok" };
-        float w = 76f;
-        float h = 24f;
+        float w = 84f;
+        float h = 28f;
         float gap = 4f;
         float x = pane.Left + 8f;
         float y = pane.Top + 8f;
@@ -1468,7 +1489,10 @@ public sealed class PhotoPane : VisualElement
         {
             Color = Theme.Text,
             IsAntialias = true,
-            TextSize = 11,
+            SubpixelText = true,
+            LcdRenderText = true,
+            HintingLevel = SKPaintHinting.Normal,
+            TextSize = 12,
             Typeface = SKTypeface.Default,
             TextAlign = SKTextAlign.Center
         };

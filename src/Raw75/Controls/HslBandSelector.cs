@@ -67,7 +67,7 @@ public sealed class HslBandSelector : VisualElement
                     Text = new TextStyle
                     {
                         Color = Theme.TextSecondary,
-                        Size = 10,
+                        Size = 12,
                         Weight = 500,
                         Alignment = TextAlign.Center,
                         Padding = 0
@@ -92,7 +92,7 @@ public sealed class HslBandSelector : VisualElement
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : Theme.RightW;
-        return new SKSize(w, 24f);
+        return new SKSize(w, 28f);
     }
 
     protected override void LayoutChildren()
