@@ -464,6 +464,9 @@ public sealed class DevelopEngine
             RasterBuffer? fullRaster = RawDecoder.DecodeRasterFull(doc.Path);
             if (fullRaster != null)
             {
+                doc.Metadata = RawDecoder.ReadMetadata(doc.Path);
+                if (doc.Metadata != null && !string.IsNullOrEmpty(doc.Metadata.CameraName))
+                    doc.Camera = doc.Metadata.CameraName;
                 RasterBuffer proxy = RawDecoder.Limit(fullRaster.Value,
                     RawDecoder.ProxyLongEdge(fullRaster.Value.Width, fullRaster.Value.Height));
                 Publish(doc, gen, proxy, asThumb: true, asProxy: true, kind: "raster",
@@ -483,7 +486,10 @@ public sealed class DevelopEngine
             if (Stale(gen))
                 return;
 
-            RasterBuffer preview = RawDecoder.DecodePreview(doc.Path, out int nw, out int nh);
+            RasterBuffer preview = RawDecoder.DecodePreview(doc.Path, out int nw, out int nh, out var meta);
+            doc.Metadata = meta;
+            if (meta != null && !string.IsNullOrEmpty(meta.CameraName))
+                doc.Camera = meta.CameraName;
             Publish(doc, gen, preview, asThumb: false, asProxy: true, kind: "preview", nativeW: nw, nativeH: nh);
         }
         catch (Exception ex)

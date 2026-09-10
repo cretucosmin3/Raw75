@@ -204,6 +204,53 @@ public sealed class PhotoPane : VisualElement
         }
     }
 
+    public event Action<bool>? ClippingChanged;
+    public event Action<bool>? InfoOverlayChanged;
+
+    private bool _showClipping;
+    public bool ShowClipping
+    {
+        get => _showClipping;
+        set
+        {
+            if (_showClipping == value) return;
+            _showClipping = value;
+            InvalidateAllLooks();
+            InvalidatePaint();
+            ClippingChanged?.Invoke(_showClipping);
+        }
+    }
+
+    public void ToggleClipping() => ShowClipping = !ShowClipping;
+
+    private bool _showInfoOverlay;
+    public bool ShowInfoOverlay
+    {
+        get => _showInfoOverlay;
+        set
+        {
+            if (_showInfoOverlay == value) return;
+            _showInfoOverlay = value;
+            InvalidatePaint();
+            InfoOverlayChanged?.Invoke(_showInfoOverlay);
+        }
+    }
+
+    public void ToggleInfoOverlay() => ShowInfoOverlay = !ShowInfoOverlay;
+
+    private Develop.PhotoMetadata? _metadata;
+    public Develop.PhotoMetadata? Metadata
+    {
+        get => _metadata;
+        set
+        {
+            _metadata = value;
+            InvalidatePaint();
+        }
+    }
+
+    private SKRect _infoCardRect;
+
     public float CropX
     {
         get => _crop.X;
@@ -613,7 +660,7 @@ public sealed class PhotoPane : VisualElement
             {
                 GetFrameSize(out int fwA, out int fhA);
                 if (!_look.Draw(canvas, dest, right, _source, _settings, isFast, applyCrop,
-                        0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwA, fhA))
+                        0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwA, fhA, showClipping: _showClipping))
                     canvas.DrawImage(_source, SourceOf(_source, dest, right), right);
             }
 
@@ -636,7 +683,7 @@ public sealed class PhotoPane : VisualElement
                 if (tileRight.Width >= 1f && tileRight.Height >= 1f)
                 {
                     _tileLook.Draw(canvas, dest, tileRight, _tile, _settings, isFast, applyCrop,
-                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh);
+                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh, showClipping: _showClipping);
                 }
             }
 
@@ -651,7 +698,7 @@ public sealed class PhotoPane : VisualElement
         var activeTileLook = _showBefore ? _tileBeforeLook : _tileLook;
 
         if (!activeLook.Draw(canvas, dest, vis, _source, activeSettings, isFast, applyCrop: true,
-                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle))
+                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping))
             canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
 
         if (_tile == null || _tile.Handle == IntPtr.Zero || _tileW < 1e-5f || _tileH < 1e-5f)
@@ -664,7 +711,7 @@ public sealed class PhotoPane : VisualElement
             return;
 
         activeTileLook.Draw(canvas, dest, tileDestSingle, _tile, activeSettings, isFast, applyCrop: true,
-            _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle);
+            _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping);
     }
 
     private void DrawOverlay(SKCanvas canvas)
@@ -748,6 +795,11 @@ public sealed class PhotoPane : VisualElement
         else if (_showBefore)
         {
             DrawBeforeBadge(canvas, w);
+        }
+
+        if (_showInfoOverlay && HasPhoto && _metadata != null)
+        {
+            DrawInfoOverlay(canvas, pane);
         }
 
         if (_busy)
@@ -870,10 +922,146 @@ public sealed class PhotoPane : VisualElement
         canvas.DrawText("BEFORE", cx, 34, badgeText);
     }
 
+    private void DrawInfoOverlay(SKCanvas canvas, SKRect pane)
+    {
+        if (_metadata == null) return;
+
+        float cardW = 340f;
+        float cardH = 136f;
+        float cardX = pane.Left + 24f;
+        float cardY = pane.Top + 24f;
+        _infoCardRect = new SKRect(cardX, cardY, cardX + cardW, cardY + cardH);
+
+        // Soft drop shadow
+        using var shadow = new SKPaint
+        {
+            Color = new SKColor(0, 0, 0, 120),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        };
+        canvas.DrawRoundRect(new SKRoundRect(new SKRect(cardX, cardY + 3, cardX + cardW, cardY + cardH + 3), 8, 8), shadow);
+
+        // Card background
+        using var bg = new SKPaint
+        {
+            Color = new SKColor(20, 20, 25, 235),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        };
+        var cardR = new SKRoundRect(_infoCardRect, 8, 8);
+        canvas.DrawRoundRect(cardR, bg);
+
+        // Card border
+        using var border = new SKPaint
+        {
+            Color = new SKColor(255, 255, 255, 38),
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1f
+        };
+        canvas.DrawRoundRect(cardR, border);
+
+        float padX = cardX + 16f;
+        float curY = cardY + 22f;
+
+        // Top tag: "PHOTO INFO"
+        using var tagBg = new SKPaint
+        {
+            Color = new SKColor(255, 255, 255, 22),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        };
+        var tagRect = new SKRoundRect(new SKRect(padX, curY - 12, padX + 80, curY + 4), 3, 3);
+        canvas.DrawRoundRect(tagRect, tagBg);
+
+        using var tagText = new SKPaint
+        {
+            Color = Theme.TextSecondary,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true,
+            TextSize = 9.5f,
+            FakeBoldText = true,
+            TextAlign = SKTextAlign.Center
+        };
+        canvas.DrawText("PHOTO INFO", padX + 40, curY - 1, tagText);
+
+        // Date/Time on the right
+        using var dateText = new SKPaint
+        {
+            Color = Theme.TextDim,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true,
+            TextSize = 11f,
+            TextAlign = SKTextAlign.Right
+        };
+        canvas.DrawText(_metadata.FormattedDateTime, cardX + cardW - 16f, curY, dateText);
+
+        // Camera name
+        curY += 26f;
+        using var camText = new SKPaint
+        {
+            Color = Theme.Text,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true,
+            TextSize = 14f,
+            FakeBoldText = true
+        };
+        canvas.DrawText(_metadata.CameraName, padX, curY, camText);
+
+        // Lens name
+        curY += 20f;
+        using var lensText = new SKPaint
+        {
+            Color = Theme.TextSecondary,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true,
+            TextSize = 12f
+        };
+        canvas.DrawText(_metadata.LensName, padX, curY, lensText);
+
+        // Exposure parameter strip (Signature Warm Amber)
+        curY += 24f;
+        using var expText = new SKPaint
+        {
+            Color = Theme.Accent,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true,
+            TextSize = 13f,
+            FakeBoldText = true
+        };
+        canvas.DrawText(_metadata.FormattedExposure, padX, curY, expText);
+
+        // Dimensions and file size
+        curY += 20f;
+        using var dimText = new SKPaint
+        {
+            Color = Theme.TextDim,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true,
+            TextSize = 11f
+        };
+        string dimStr = $"{_metadata.FormattedDimensions}   ·   {_metadata.FormattedFileSize}";
+        canvas.DrawText(dimStr, padX, curY, dimText);
+    }
+
     private void OnPointerDown(object sender, MouseEventArgs e)
     {
         if (e.Button != 0 || !HasPhoto)
             return;
+
+        if (_showInfoOverlay && _infoCardRect.Contains(e.Relative.X, e.Relative.Y))
+        {
+            _showInfoOverlay = false;
+            InvalidatePaint();
+            e.Handled = true;
+            return;
+        }
 
         _pointerDown = true;
         _didDrag = false;

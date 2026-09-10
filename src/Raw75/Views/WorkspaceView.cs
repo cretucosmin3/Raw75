@@ -39,6 +39,11 @@ public sealed class WorkspaceView : View
     private IconButton _btnCrop = null!;
     private IconButton _btnBefore = null!;
     private IconButton _btnSplit = null!;
+    private IconButton _btnClip = null!;
+    private IconButton _btnInfo = null!;
+    private IconButton _btnCopy = null!;
+    private IconButton _btnPaste = null!;
+    private DevelopSettings? _copiedSettings;
     private VisualElement _zoomLabel = null!;
     private VisualElement _photoTitleBadge = null!;
     private GalleryView _gallery = null!;
@@ -275,6 +280,8 @@ public sealed class WorkspaceView : View
             _straight.Value = _photo.StraightenPreview;
             _sync = false;
         };
+        _photo.ClippingChanged += v => { if (_btnClip != null) _btnClip.Toggled = v; };
+        _photo.InfoOverlayChanged += v => { if (_btnInfo != null) _btnInfo.Toggled = v; };
         AddElement(_photo);
 
         _gallery = new GalleryView
@@ -352,6 +359,14 @@ public sealed class WorkspaceView : View
             var d = _session.Active;
             _photo.SetBefore(d?.Proxy);
         };
+        _btnClip = Tool("Clip", tx, ty, 68, iconName: "clipping"); tx += 72;
+        _btnClip.Clicked += ToggleClipping;
+        _btnInfo = Tool("Info", tx, ty, 68, iconName: "info"); tx += 72;
+        _btnInfo.Clicked += ToggleInfoOverlay;
+        _btnCopy = Tool("Copy", tx, ty, 72, iconName: "copy"); tx += 76;
+        _btnCopy.Clicked += CopyAdjustments;
+        _btnPaste = Tool("Paste", tx, ty, 74, iconName: "paste"); tx += 78;
+        _btnPaste.Clicked += PasteAdjustments;
         var rotL = Tool("-90°", tx, ty, 70, iconName: "rotate_left"); tx += 74;
         rotL.Clicked += () => Rotate(-1);
         var rotR = Tool("+90°", tx, ty, 70, iconName: "rotate_right"); tx += 74;
@@ -768,7 +783,15 @@ public sealed class WorkspaceView : View
             else
             {
                 string rdy = d.IsReady ? "  ·  Ready" : "";
-                _photoTitleBadge.Text = $"{d.Name}{rdy}";
+                string metaStr = "";
+                if (d.Metadata != null)
+                {
+                    if (!string.IsNullOrEmpty(d.Metadata.CameraName))
+                        metaStr += $"  ·  {d.Metadata.CameraName}";
+                    if (d.Metadata.ShutterSpeed > 0 || d.Metadata.Aperture > 0)
+                        metaStr += $"  ·  {d.Metadata.FormattedExposure}";
+                }
+                _photoTitleBadge.Text = $"{d.Name}{metaStr}{rdy}";
             }
         }
     }
@@ -800,6 +823,8 @@ public sealed class WorkspaceView : View
         if (!ReferenceEquals(doc, _session.Active))
             return;
 
+        _photo.Metadata = doc.Metadata;
+
         if (doc.Proxy != null && !_photo.HasPhoto)
         {
             _restoringView = true;
@@ -820,6 +845,7 @@ public sealed class WorkspaceView : View
         _histogram.SetBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _filmThumb = doc.Preview ?? doc.Thumb;
         UpdateZoomLabel();
+        UpdateTitleBadge();
     }
 
     /// <summary>
@@ -830,6 +856,7 @@ public sealed class WorkspaceView : View
     {
         _photo.PrepareBind(d.Settings);
         _photo.SetNativeSize(d.NativeWidth, d.NativeHeight);
+        _photo.Metadata = d.Metadata;
         SKImage? working = d.Proxy;
         if (working != null && working.Handle != IntPtr.Zero)
         {
@@ -1548,10 +1575,15 @@ public sealed class WorkspaceView : View
     {
         var key = (Key)code;
         bool ctrl = Events.IsControlDown;
+        if (ctrl && key == Key.C) { CopyAdjustments(); return; }
+        if (ctrl && key == Key.V) { PasteAdjustments(); return; }
         if (ctrl && key == Key.Z && Events.IsShiftDown) { Redo(); return; }
         if (ctrl && key == Key.Z) { Undo(); return; }
         if (ctrl && key == Key.O) { OpenFiles(); return; }
         if (ctrl && key == Key.E) { StartExport(); return; }
+
+        if (key == Key.I) { ToggleInfoOverlay(); return; }
+        if (key == Key.O && !ctrl) { ToggleClipping(); return; }
 
         if (_isGalleryMode)
         {
@@ -1587,6 +1619,66 @@ public sealed class WorkspaceView : View
         if (key == Key.LeftBracket) Rotate(-1);
         if (key == Key.RightBracket) Rotate(1);
         UpdateZoomLabel();
+    }
+
+    private void ToggleClipping()
+    {
+        _photo.ToggleClipping();
+        _btnClip.Toggled = _photo.ShowClipping;
+        SetStatus(_photo.ShowClipping ? "Clipping warnings enabled (Red = Highlights, Blue = Shadows)" : "Clipping warnings disabled");
+    }
+
+    private void ToggleInfoOverlay()
+    {
+        _photo.ToggleInfoOverlay();
+        _btnInfo.Toggled = _photo.ShowInfoOverlay;
+    }
+
+    private void CopyAdjustments()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        _copiedSettings = d.Settings.Clone();
+        SetStatus($"Copied adjustments from {d.Name}");
+    }
+
+    private void PasteAdjustments()
+    {
+        if (_copiedSettings == null)
+        {
+            SetStatus("Clipboard empty. Copy adjustments first (Ctrl+C).");
+            return;
+        }
+        var d = _session.Active;
+        if (d == null) return;
+
+        d.Undo.Push(d.Settings);
+
+        // Retain target photo's geometry (crop/straighten/rotation/flip)
+        float targetCropX = d.Settings.CropX;
+        float targetCropY = d.Settings.CropY;
+        float targetCropW = d.Settings.CropW;
+        float targetCropH = d.Settings.CropH;
+        float targetStraight = d.Settings.Straighten;
+        int targetRot = d.Settings.Rotate90;
+        bool targetFlipH = d.Settings.FlipH;
+        bool targetFlipV = d.Settings.FlipV;
+
+        d.Settings.CopyFrom(_copiedSettings);
+
+        d.Settings.CropX = targetCropX;
+        d.Settings.CropY = targetCropY;
+        d.Settings.CropW = targetCropW;
+        d.Settings.CropH = targetCropH;
+        d.Settings.Straighten = targetStraight;
+        d.Settings.Rotate90 = targetRot;
+        d.Settings.FlipH = targetFlipH;
+        d.Settings.FlipV = targetFlipV;
+
+        PullSliders(d);
+        WorkspaceStore.SaveSettings(d);
+        PushLook(fast: false, settle: true);
+        SetStatus($"Pasted adjustments to {d.Name}");
     }
 
     private void Undo()
