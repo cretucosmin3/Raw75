@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using Raw75.Develop;
 using Raw75.Imaging;
 
@@ -112,9 +113,12 @@ internal static class DevelopCpu
                 // ref: highlight reconstruction (opposed & LCh)
                 if (reconMode == HighlightMode.Off)
                 {
-                    r = MathF.Min(r, hlThreshold);
-                    g = MathF.Min(g, hlThreshold);
-                    b = MathF.Min(b, hlThreshold);
+                    if (hlThreshold < 0.999f)
+                    {
+                        r = MathF.Min(r, hlThreshold);
+                        g = MathF.Min(g, hlThreshold);
+                        b = MathF.Min(b, hlThreshold);
+                    }
                 }
                 else if (doRecon)
                 {
@@ -212,10 +216,7 @@ internal static class DevelopCpu
         // ref: bilateral filter & local laplacian
         if (hasLocalContrast)
         {
-            if (fast)
-                ApplyLocalContrastFast(look, dw, dh, s.LocalContrastDetail, s.LocalContrastMidtones, s.LocalContrastShadows, s.LocalContrastHighlights);
-            else
-                ApplyLocalLaplacianSettle(look, dw, dh, s.LocalContrastDetail, s.LocalContrastMidtones, s.LocalContrastShadows, s.LocalContrastHighlights);
+            ApplyLocalContrast(look, dw, dh, s.LocalContrastDetail, s.LocalContrastMidtones, s.LocalContrastShadows, s.LocalContrastHighlights, fast);
         }
 
         // Denoise (step 9) + Tone curve (step 12)
@@ -384,17 +385,23 @@ internal static class DevelopCpu
         float hi, float shd, float whites, float blacks,
         float vib, float sat, DevelopSettings s)
     {
-        r += 0.15f * temp;
-        b -= 0.15f * temp;
-        g -= 0.15f * tint;
-        if (r < 0) r = 0;
-        if (g < 0) g = 0;
-        if (b < 0) b = 0;
+        // 1. Multiplicative chromatic white balance (preserves black levels and photon ratios)
+        float wbR = MathF.Exp(0.55f * temp + 0.18f * tint);
+        float wbB = MathF.Exp(-0.55f * temp - 0.18f * tint);
+        float wbG = MathF.Exp(-0.35f * tint);
+        r *= wbR;
+        g *= wbG;
+        b *= wbB;
+        if (r < 0f) r = 0f;
+        if (g < 0f) g = 0f;
+        if (b < 0f) b = 0f;
 
+        // 2. Linear Exposure gain
         r *= ev;
         g *= ev;
         b *= ev;
 
+        // 3. Match Gray (target middle gray at 0.18)
         if (s.EnableHsl && s.MatchGray)
         {
             float lum0 = Luma(r, g, b);
@@ -405,44 +412,86 @@ internal static class DevelopCpu
             b *= mg;
         }
 
-        float er = MathF.Log2(1f + r);
-        float eg = MathF.Log2(1f + g);
-        float eb = MathF.Log2(1f + b);
-        float k = 1f + contrast * 0.85f;
-        er = (er - 0.5f) * k + 0.5f;
-        eg = (eg - 0.5f) * k + 0.5f;
-        eb = (eb - 0.5f) * k + 0.5f;
-        r = MathF.Max(MathF.Pow(2f, er) - 1f, 0f);
-        g = MathF.Max(MathF.Pow(2f, eg) - 1f, 0f);
-        b = MathF.Max(MathF.Pow(2f, eb) - 1f, 0f);
-
+        // 4. High Dynamic Range (HDR) in perceptual log-EV space relative to 18% middle gray
         float lum = Luma(r, g, b);
-        float shw = 1f - Smooth(lum, 0.02f, 0.28f);
-        float hiw = Smooth(lum, 0.10f, 0.70f);
-        float shGain = MathF.Pow(2f, shd * 1.45f);
-        float hiGain = MathF.Pow(2f, hi * 1.75f);
-        r = r * (1f + (shGain - 1f) * shw) * (1f + (hiGain - 1f) * hiw);
-        g = g * (1f + (shGain - 1f) * shw) * (1f + (hiGain - 1f) * hiw);
-        b = b * (1f + (shGain - 1f) * shw) * (1f + (hiGain - 1f) * hiw);
+        if (lum < 1e-5f) lum = 1e-5f;
+        float evVal = MathF.Log2(lum / 0.18f);
 
-        lum = Luma(r, g, b);
-        float ww = Smooth(lum, 0.20f, 1.05f);
-        float bw = 1f - Smooth(lum, 0.0f, 0.18f);
-        float wGain = MathF.Pow(2f, whites * 1.55f);
-        float bGain = MathF.Pow(2f, blacks * 1.25f);
-        r = r * (1f + (wGain - 1f) * ww) * (1f + (bGain - 1f) * bw);
-        g = g * (1f + (wGain - 1f) * ww) * (1f + (bGain - 1f) * bw);
-        b = b * (1f + (wGain - 1f) * ww) * (1f + (bGain - 1f) * bw);
-        if (whites > 0f)
+        // Highlights: Compressive rational shoulder to recover texture without muddy flat gray
+        if (MathF.Abs(hi) > 0.001f)
         {
-            float extra = 1f + whites * Smooth(lum, 0.35f, 1.2f) * 0.9f;
-            r *= extra;
-            g *= extra;
-            b *= extra;
+            if (evVal > 0f)
+            {
+                if (hi < 0f)
+                {
+                    float hlAmt = -hi;
+                    evVal = evVal / (1f + hlAmt * 0.40f * evVal);
+                }
+                else
+                {
+                    evVal += hi * 0.45f * Smooth(evVal, 0f, 3.5f);
+                }
+            }
         }
-        if (r < 0) r = 0;
-        if (g < 0) g = 0;
-        if (b < 0) b = 0;
+
+        // Shadows: Grounded lift/drop with pinned black anchor (prevents milky haze)
+        if (MathF.Abs(shd) > 0.001f)
+        {
+            if (evVal < 0f)
+            {
+                float t = MathF.Max(1f + evVal / 7f, 0f);
+                float w = 1f - Smooth(evVal, -6f, 0f);
+                if (shd > 0f)
+                    evVal += shd * 1.50f * t * w;
+                else
+                    evVal += shd * 1.20f * t * w;
+            }
+        }
+
+        // Whites: Range anchor for extreme highlight/specular rolloff
+        if (MathF.Abs(whites) > 0.001f)
+        {
+            if (evVal > 1f)
+            {
+                float ww = Smooth(evVal, 1f, 3.5f);
+                evVal += whites * 1.25f * ww;
+            }
+        }
+
+        // Blacks: Range anchor for deep toe/shadow threshold
+        if (MathF.Abs(blacks) > 0.001f)
+        {
+            if (evVal < -1f)
+            {
+                float bw = 1f - Smooth(evVal, -5.5f, -1.2f);
+                evVal += blacks * 1.10f * bw;
+            }
+        }
+
+        float targetLum = 0.18f * MathF.Pow(2f, evVal);
+        float hdrScale = MathF.Max(targetLum, 0f) / lum;
+        r *= hdrScale;
+        g *= hdrScale;
+        b *= hdrScale;
+
+        // 5. Contrast: Smooth S-curve pivoted at 18% middle gray with soft roll-off
+        if (MathF.Abs(contrast) > 0.0005f)
+        {
+            float lumC = Luma(r, g, b);
+            if (lumC < 1e-5f) lumC = 1e-5f;
+            float evC = MathF.Log2(lumC / 0.18f);
+            float deltaEv = contrast * 0.85f * (evC / (1f + 0.12f * evC * evC));
+            float evNew = evC + deltaEv;
+            float newLumC = 0.18f * MathF.Pow(2f, evNew);
+            float contrastScale = MathF.Max(newLumC, 0f) / lumC;
+            r *= contrastScale;
+            g *= contrastScale;
+            b *= contrastScale;
+        }
+
+        if (r < 0f) r = 0f;
+        if (g < 0f) g = 0f;
+        if (b < 0f) b = 0f;
 
         lum = Luma(r, g, b);
         float mx = r > g ? r : g;
@@ -1041,8 +1090,8 @@ internal static class DevelopCpu
     }
 
     // ref: bilateral filter & local laplacian
-    private static void ApplyLocalLaplacianSettle(
-        float[] look, int w, int h, float detail, float midtones, float shadows, float highlights)
+    private static void ApplyLocalContrast(
+        float[] look, int w, int h, float detail, float midtones, float shadows, float highlights, bool fast)
     {
         if (Math.Abs(detail) < 1e-4f && Math.Abs(highlights) < 1e-4f && Math.Abs(shadows) < 1e-4f && Math.Abs(midtones - 50f) < 0.1f)
             return;
@@ -1051,177 +1100,107 @@ internal static class DevelopCpu
         float shd = shadows / 100f;
         float hi = highlights / 100f;
 
-        int len = w * h;
-        float[] l0 = new float[len];
-        float maxL = 0.001f;
-        for (int i = 0; i < len; i++)
-        {
-            float l = Luma(look[3 * i], look[3 * i + 1], look[3 * i + 2]);
-            l0[i] = l;
-            if (l > maxL) maxL = l;
-        }
-
-        float invMaxL = 1f / maxL;
-        float[] norm0 = new float[len];
-        for (int i = 0; i < len; i++)
-            norm0[i] = l0[i] * invMaxL;
-
-        int w1 = Math.Max(1, (w + 1) / 2);
-        int h1 = Math.Max(1, (h + 1) / 2);
-        float[] norm1 = GaussReduce(norm0, w, h, w1, h1);
-
-        int w2 = Math.Max(1, (w1 + 1) / 2);
-        int h2 = Math.Max(1, (h1 + 1) / 2);
-        float[] norm2 = GaussReduce(norm1, w1, h1, w2, h2);
-
-        float[] gammas = [0.1f, 0.3f, 0.5f, 0.7f, 0.9f];
-        int numGamma = gammas.Length;
-
-        float[][] buf0 = new float[numGamma][];
-        float[][] buf1 = new float[numGamma][];
-        float[][] buf2 = new float[numGamma][];
-
-        for (int k = 0; k < numGamma; k++)
-        {
-            float g = gammas[k];
-            float[] r0 = new float[len];
-            for (int i = 0; i < len; i++)
-                r0[i] = CurveScalar(norm0[i], g, sigma, shd, hi, detail);
-            buf0[k] = r0;
-            buf1[k] = GaussReduce(r0, w, h, w1, h1);
-            buf2[k] = GaussReduce(buf1[k], w1, h1, w2, h2);
-        }
-
-        float[] out2 = norm2;
-        float[] exp2 = GaussExpand(out2, w2, h2, w1, h1);
-
-        float[] out1 = new float[w1 * h1];
-        for (int j = 0; j < h1; j++)
-        {
-            for (int i = 0; i < w1; i++)
-            {
-                int idx = j * w1 + i;
-                float v = norm1[idx];
-                int hiIdx = 1;
-                while (hiIdx < numGamma - 1 && gammas[hiIdx] <= v) hiIdx++;
-                int loIdx = hiIdx - 1;
-                float a = Math.Clamp((v - gammas[loIdx]) / (gammas[hiIdx] - gammas[loIdx]), 0f, 1f);
-
-                float expLo = GaussExpandSample(buf2[loIdx], w2, h2, i, j, w1, h1);
-                float expHi = GaussExpandSample(buf2[hiIdx], w2, h2, i, j, w1, h1);
-                float lapLo = buf1[loIdx][idx] - expLo;
-                float lapHi = buf1[hiIdx][idx] - expHi;
-
-                out1[idx] = exp2[idx] + (lapLo * (1f - a) + lapHi * a);
-            }
-        }
-
-        float[] exp1 = GaussExpand(out1, w1, h1, w, h);
-        float[] out0 = new float[len];
-        for (int j = 0; j < h; j++)
-        {
-            for (int i = 0; i < w; i++)
-            {
-                int idx = j * w + i;
-                float v = norm0[idx];
-                int hiIdx = 1;
-                while (hiIdx < numGamma - 1 && gammas[hiIdx] <= v) hiIdx++;
-                int loIdx = hiIdx - 1;
-                float a = Math.Clamp((v - gammas[loIdx]) / (gammas[hiIdx] - gammas[loIdx]), 0f, 1f);
-
-                float expLo = GaussExpandSample(buf1[loIdx], w1, h1, i, j, w, h);
-                float expHi = GaussExpandSample(buf1[hiIdx], w1, h1, i, j, w, h);
-                float lapLo = buf0[loIdx][idx] - expLo;
-                float lapHi = buf0[hiIdx][idx] - expHi;
-
-                out0[idx] = exp1[idx] + (lapLo * (1f - a) + lapHi * a);
-            }
-        }
-
-        for (int i = 0; i < len; i++)
-        {
-            float origL = l0[i];
-            float newL = Math.Max(0f, out0[i] * maxL);
-            float gain = newL / Math.Max(origL, 1e-4f);
-            look[3 * i] = Math.Max(0f, look[3 * i] * gain);
-            look[3 * i + 1] = Math.Max(0f, look[3 * i + 1] * gain);
-            look[3 * i + 2] = Math.Max(0f, look[3 * i + 2] * gain);
-        }
-    }
-
-    // ref: bilateral filter
-    private static void ApplyLocalContrastFast(
-        float[] look, int w, int h, float detail, float midtones, float shadows, float highlights)
-    {
-        if (Math.Abs(detail) < 1e-4f && Math.Abs(highlights) < 1e-4f && Math.Abs(shadows) < 1e-4f && Math.Abs(midtones - 50f) < 0.1f)
-            return;
-
-        float sigma = Math.Clamp(midtones / 100f, 0.05f, 1f);
-        float shd = shadows / 100f;
-        float hi = highlights / 100f;
-
+        // Precompute perceptual lightness L = cbrt(lum)
         float[] lums = new float[w * h];
-        for (int i = 0; i < w * h; i++)
-            lums[i] = Math.Max(Luma(look[3 * i], look[3 * i + 1], look[3 * i + 2]), 1e-4f);
-
-        int r = Math.Max(1, Math.Min(w, h) / 250);
-        int r2 = Math.Max(2, r * 2);
-
-        for (int y = 0; y < h; y++)
+        float[] lumsL = new float[w * h];
+        Parallel.For(0, h, y =>
         {
-            int yT = Math.Max(0, y - r);
-            int yB = Math.Min(h - 1, y + r);
+            int row = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                int idx = row + x;
+                float lum = MathF.Max(Luma(look[3 * idx], look[3 * idx + 1], look[3 * idx + 2]), 1e-5f);
+                lums[idx] = lum;
+                lumsL[idx] = MathF.Pow(lum, 0.33333333f);
+            }
+        });
+
+        int minDim = Math.Min(w, h);
+        int r1 = Math.Max(3, (int)MathF.Round(minDim * 0.002f));
+        int r2 = Math.Max(8, (int)MathF.Round(minDim * 0.006f));
+        int r3 = Math.Max(18, (int)MathF.Round(minDim * 0.014f));
+
+        float rangeSigma = 0.16f;
+        float invTwoSigmaSq = 0.5f / (rangeSigma * rangeSigma);
+
+        Parallel.For(0, h, y =>
+        {
+            int yT1 = Math.Max(0, y - r1);
+            int yB1 = Math.Min(h - 1, y + r1);
             int yT2 = Math.Max(0, y - r2);
             int yB2 = Math.Min(h - 1, y + r2);
+            int yT3 = Math.Max(0, y - r3);
+            int yB3 = Math.Min(h - 1, y + r3);
 
             for (int x = 0; x < w; x++)
             {
-                int xL = Math.Max(0, x - r);
-                int xR = Math.Min(w - 1, x + r);
-                int xL2 = Math.Max(0, x - r2);
-                int xR2 = Math.Min(w - 1, x + r2);
-
                 int idx = y * w + x;
                 float lum = lums[idx];
+                float xL = lumsL[idx];
 
-                // Tight bilateral edge-stopping range sigma: prevents stark edges from bleeding across boundaries
-                float rangeSigma = Math.Clamp(lum * 0.20f + 0.06f, 0.05f, 0.22f);
-                float invTwoSigmaSq = 0.5f / (rangeSigma * rangeSigma);
+                // Ring 1: 4 cardinal taps at r1
+                int xL1 = Math.Max(0, x - r1);
+                int xR1 = Math.Min(w - 1, x + r1);
+                float l1 = lumsL[y * w + xR1];
+                float l2 = lumsL[y * w + xL1];
+                float l3 = lumsL[yB1 * w + x];
+                float l4 = lumsL[yT1 * w + x];
 
-                float sumL = lum * 1.5f;
-                float sumW = 1.5f;
+                float grad = 0.25f * (MathF.Abs(l1 - xL) + MathF.Abs(l2 - xL) + MathF.Abs(l3 - xL) + MathF.Abs(l4 - xL));
 
-                // Ring 1: 4 diagonal taps
-                float l1 = lums[yT * w + xL];
-                float l2 = lums[yT * w + xR];
-                float l3 = lums[yB * w + xL];
-                float l4 = lums[yB * w + xR];
+                float sumL = xL * 2.0f;
+                float sumW = 2.0f;
 
-                float d1 = l1 - lum; float w1 = MathF.Exp(-d1 * d1 * invTwoSigmaSq); sumL += l1 * w1; sumW += w1;
-                float d2 = l2 - lum; float w2 = MathF.Exp(-d2 * d2 * invTwoSigmaSq); sumL += l2 * w2; sumW += w2;
-                float d3 = l3 - lum; float w3 = MathF.Exp(-d3 * d3 * invTwoSigmaSq); sumL += l3 * w3; sumW += w3;
-                float d4 = l4 - lum; float w4 = MathF.Exp(-d4 * d4 * invTwoSigmaSq); sumL += l4 * w4; sumW += w4;
+                float d1 = l1 - xL; float w1 = MathF.Exp(-d1 * d1 * invTwoSigmaSq); sumL += l1 * w1; sumW += w1;
+                float d2 = l2 - xL; float w2 = MathF.Exp(-d2 * d2 * invTwoSigmaSq); sumL += l2 * w2; sumW += w2;
+                float d3 = l3 - xL; float w3 = MathF.Exp(-d3 * d3 * invTwoSigmaSq); sumL += l3 * w3; sumW += w3;
+                float d4 = l4 - xL; float w4 = MathF.Exp(-d4 * d4 * invTwoSigmaSq); sumL += l4 * w4; sumW += w4;
 
-                // Ring 2: 4 cardinal taps
-                float l5 = lums[y * w + xL2];
-                float l6 = lums[y * w + xR2];
-                float l7 = lums[yT2 * w + x];
-                float l8 = lums[yB2 * w + x];
+                // Ring 2: 4 diagonal taps at r2
+                int xL2 = Math.Max(0, x - r2);
+                int xR2 = Math.Min(w - 1, x + r2);
+                float l5 = lumsL[yT2 * w + xR2];
+                float l6 = lumsL[yT2 * w + xL2];
+                float l7 = lumsL[yB2 * w + xR2];
+                float l8 = lumsL[yB2 * w + xL2];
 
-                float d5 = l5 - lum; float w5 = 0.7f * MathF.Exp(-d5 * d5 * invTwoSigmaSq); sumL += l5 * w5; sumW += w5;
-                float d6 = l6 - lum; float w6 = 0.7f * MathF.Exp(-d6 * d6 * invTwoSigmaSq); sumL += l6 * w6; sumW += w6;
-                float d7 = l7 - lum; float w7 = 0.7f * MathF.Exp(-d7 * d7 * invTwoSigmaSq); sumL += l7 * w7; sumW += w7;
-                float d8 = l8 - lum; float w8 = 0.7f * MathF.Exp(-d8 * d8 * invTwoSigmaSq); sumL += l8 * w8; sumW += w8;
+                float d5 = l5 - xL; float w5 = 0.8f * MathF.Exp(-d5 * d5 * invTwoSigmaSq); sumL += l5 * w5; sumW += w5;
+                float d6 = l6 - xL; float w6 = 0.8f * MathF.Exp(-d6 * d6 * invTwoSigmaSq); sumL += l6 * w6; sumW += w6;
+                float d7 = l7 - xL; float w7 = 0.8f * MathF.Exp(-d7 * d7 * invTwoSigmaSq); sumL += l7 * w7; sumW += w7;
+                float d8 = l8 - xL; float w8 = 0.8f * MathF.Exp(-d8 * d8 * invTwoSigmaSq); sumL += l8 * w8; sumW += w8;
 
-                float g = sumL / sumW;
+                if (!fast)
+                {
+                    // Ring 3: 4 cardinal taps at r3
+                    int xL3 = Math.Max(0, x - r3);
+                    int xR3 = Math.Min(w - 1, x + r3);
+                    float l9 = lumsL[y * w + xR3];
+                    float l10 = lumsL[y * w + xL3];
+                    float l11 = lumsL[yB3 * w + x];
+                    float l12 = lumsL[yT3 * w + x];
 
-                float newLum = CurveScalar(lum, g, sigma, shd, hi, detail);
-                float gain = Math.Max(newLum, 0f) / lum;
+                    float d9 = l9 - xL; float w9 = 0.5f * MathF.Exp(-d9 * d9 * invTwoSigmaSq); sumL += l9 * w9; sumW += w9;
+                    float d10 = l10 - xL; float w10 = 0.5f * MathF.Exp(-d10 * d10 * invTwoSigmaSq); sumL += l10 * w10; sumW += w10;
+                    float d11 = l11 - xL; float w11 = 0.5f * MathF.Exp(-d11 * d11 * invTwoSigmaSq); sumL += l11 * w11; sumW += w11;
+                    float d12 = l12 - xL; float w12 = 0.5f * MathF.Exp(-d12 * d12 * invTwoSigmaSq); sumL += l12 * w12; sumW += w12;
+                }
+
+                float gL = sumL / sumW;
+                float newL = CurveScalar(xL, gL, sigma, shd, hi, detail);
+
+                // Edge-guided halo suppression matching GPU SkSL
+                float edgeFactor = MathF.Exp(-grad * grad / 0.0064f);
+                float finalL = xL + (newL - xL) * edgeFactor;
+                finalL = Math.Clamp(finalL, 0.0001f, 2.0f);
+
+                float newLum = finalL * finalL * finalL;
+                float gain = newLum / lum;
+
                 look[3 * idx] *= gain;
                 look[3 * idx + 1] *= gain;
                 look[3 * idx + 2] *= gain;
             }
-        }
+        });
     }
 
     // ref: local laplacian
@@ -1231,77 +1210,35 @@ internal static class DevelopCpu
         if (MathF.Abs(clarity) < 1e-4f && MathF.Abs(highlights) < 1e-4f && MathF.Abs(shadows) < 1e-4f)
             return x;
 
-        float midCenter = Math.Clamp(sigma, 0.05f, 0.95f);
-        float dMid = (x - midCenter) / 0.30f;
-        float midWeight = MathF.Exp(-0.5f * dMid * dMid);
-
-        float hlMod = 1.0f + highlights * (x > midCenter ? 0.75f : 0.35f);
-        float shMod = 1.0f - shadows * (x < midCenter ? 0.75f : 0.35f);
-        float toneGain = midWeight * (c > 0f ? hlMod : shMod);
-
-        float detailBoost = c * (clarity * toneGain);
-        float maxDelta = 0.07f + 0.05f * MathF.Max(clarity, 0f);
-        float u = detailBoost / maxDelta;
-        float limitedDelta = maxDelta * (u / MathF.Sqrt(1.0f + u * u));
-
-        return MathF.Max(x + limitedDelta, 0.0001f);
-    }
-
-    private static float[] GaussReduce(float[] src, int sw, int sh, int dw, int dh)
-    {
-        float[] dst = new float[dw * dh];
-        for (int dy = 0; dy < dh; dy++)
+        float dtShadows = 1.0f + shadows;
+        float dtHighlights = 1.0f + highlights;
+        float effSigma = Math.Clamp(sigma * 0.40f, 0.04f, 0.50f);
+        float val;
+        if (c > 2.0f * effSigma)
         {
-            int sy = Math.Min(dy * 2, sh - 1);
-            int syM1 = Math.Max(0, sy - 1);
-            int syP1 = Math.Min(sh - 1, sy + 1);
-
-            for (int dx = 0; dx < dw; dx++)
-            {
-                int sx = Math.Min(dx * 2, sw - 1);
-                int sxM1 = Math.Max(0, sx - 1);
-                int sxP1 = Math.Min(sw - 1, sx + 1);
-
-                float center = src[sy * sw + sx];
-                float n = src[syM1 * sw + sx];
-                float s = src[syP1 * sw + sx];
-                float w = src[sy * sw + sxM1];
-                float e = src[sy * sw + sxP1];
-
-                dst[dy * dw + dx] = center * 0.5f + (n + s + w + e) * 0.125f;
-            }
+            val = g + effSigma + dtShadows * (c - effSigma);
         }
-        return dst;
-    }
-
-    private static float[] GaussExpand(float[] src, int sw, int sh, int dw, int dh)
-    {
-        float[] dst = new float[dw * dh];
-        for (int dy = 0; dy < dh; dy++)
+        else if (c < -2.0f * effSigma)
         {
-            for (int dx = 0; dx < dw; dx++)
-            {
-                dst[dy * dw + dx] = GaussExpandSample(src, sw, sh, dx, dy, dw, dh);
-            }
+            val = g - effSigma + dtHighlights * (c + effSigma);
         }
-        return dst;
-    }
+        else if (c > 0.0f)
+        {
+            float t = Math.Clamp(c / (2.0f * effSigma), 0.0f, 1.0f);
+            float t2 = t * t;
+            float mt = 1.0f - t;
+            val = g + effSigma * 2.0f * mt * t + t2 * (effSigma + effSigma * dtShadows);
+        }
+        else
+        {
+            float t = Math.Clamp(-c / (2.0f * effSigma), 0.0f, 1.0f);
+            float t2 = t * t;
+            float mt = 1.0f - t;
+            val = g - effSigma * 2.0f * mt * t + t2 * (-effSigma - effSigma * dtHighlights);
+        }
 
-    private static float GaussExpandSample(float[] src, int sw, int sh, int dx, int dy, int dw, int dh)
-    {
-        float fx = dx * (sw / (float)dw);
-        float fy = dy * (sh / (float)dh);
-
-        int x0 = (int)fx;
-        int y0 = (int)fy;
-        int x1 = Math.Min(sw - 1, x0 + 1);
-        int y1 = Math.Min(sh - 1, y0 + 1);
-
-        float wx = fx - x0;
-        float wy = fy - y0;
-
-        float top = src[y0 * sw + x0] * (1f - wx) + src[y0 * sw + x1] * wx;
-        float bot = src[y1 * sw + x0] * (1f - wx) + src[y1 * sw + x1] * wx;
-        return top * (1f - wy) + bot * wy;
+        // midtone local contrast (clarity)
+        val += clarity * c * MathF.Exp(-c * c / (0.6666667f * effSigma * effSigma));
+        return Math.Clamp(val, 0.0001f, 2.5f);
     }
 }
