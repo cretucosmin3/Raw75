@@ -10,13 +10,14 @@ namespace Raw75.Controls;
 
 /// <summary>
 /// Tactile chrome button supporting vector SVG icons, text captions, and hover/press/toggle states.
-/// Uses Blossom VisualElement BackgroundSvg and tinting.
+/// Automatically balances and centers [Icon + Gap + Text] horizontally within the button bounds.
 /// </summary>
 public class IconButton : VisualElement
 {
     private string _caption;
     private string? _iconName;
     private VisualElement? _iconElement;
+    private readonly VisualElement _labelElement;
     private bool _toggled;
     private bool _primary;
     private bool _pressed;
@@ -50,11 +51,17 @@ public class IconButton : VisualElement
         set
         {
             _caption = value ?? "";
-            Text = _caption;
-            UpdateTextLayout();
+            _labelElement.Text = _caption;
+            _labelElement.Visible = !string.IsNullOrEmpty(_caption);
             InvalidateLayout();
             InvalidatePaint();
         }
+    }
+
+    public new string Text
+    {
+        get => _caption;
+        set => Caption = value;
     }
 
     public string? IconName
@@ -62,6 +69,23 @@ public class IconButton : VisualElement
         get => _iconName;
         set => SetIcon(value);
     }
+
+    public float FontSize
+    {
+        get => _labelElement.Style?.Text?.Size ?? 12f;
+        set
+        {
+            if (_labelElement.Style?.Text != null)
+                _labelElement.Style.Text.Size = value;
+            if (Style?.Text != null)
+                Style.Text.Size = value;
+            InvalidateLayout();
+            InvalidatePaint();
+        }
+    }
+
+    public VisualElement? IconElement => _iconElement;
+    public VisualElement LabelElement => _labelElement;
 
     public event Action? Clicked;
 
@@ -76,7 +100,6 @@ public class IconButton : VisualElement
         _primary = primary;
         _iconName = iconName;
         Name = $"IconButton_{_caption}_{_iconName}";
-        Text = _caption;
         Cursor = StandardCursor.Hand;
         Transform.Height = Theme.ToolH;
         Style = new ElementStyle
@@ -98,13 +121,30 @@ public class IconButton : VisualElement
             }
         };
 
+        _labelElement = new VisualElement
+        {
+            Name = $"{Name}_Label",
+            IsClickthrough = true,
+            Text = _caption,
+            Visible = !string.IsNullOrEmpty(_caption),
+            Style = new ElementStyle
+            {
+                BackColor = SKColors.Transparent,
+                Text = new TextStyle
+                {
+                    Color = Theme.Text,
+                    Size = 12,
+                    Weight = 500,
+                    Alignment = TextAlign.Center,
+                    Padding = 0
+                }
+            }
+        };
+        AddChild(_labelElement);
+
         if (!string.IsNullOrEmpty(iconName))
         {
             SetIcon(iconName);
-        }
-        else
-        {
-            UpdateTextLayout();
         }
 
         Transform.OnChanged += _ => InvalidateLayout();
@@ -157,7 +197,6 @@ public class IconButton : VisualElement
                 _iconElement.Dispose();
                 _iconElement = null;
             }
-            UpdateTextLayout();
             ApplyChrome();
             InvalidateLayout();
             return;
@@ -178,59 +217,73 @@ public class IconButton : VisualElement
         }
 
         _iconElement.BackgroundSvg = IconStore.LoadSvg(iconName);
-        UpdateTextLayout();
         ApplyChrome();
         InvalidateLayout();
     }
 
-    private void UpdateTextLayout()
-    {
-        bool hasIcon = _iconElement != null;
-        bool hasText = !string.IsNullOrEmpty(Text);
-
-        if (hasIcon && hasText)
-        {
-            if (Style?.Text != null)
-            {
-                Style.Text.Alignment = TextAlign.Left;
-            }
-            Padding = new Thickness(29f, 0, 8f, 0);
-        }
-        else
-        {
-            if (Style?.Text != null)
-            {
-                Style.Text.Alignment = TextAlign.Center;
-            }
-            Padding = new Thickness(0);
-        }
-    }
-
     protected override void LayoutChildren()
     {
-        if (_iconElement == null) return;
-
         float ox = Transform.Computed.X;
         float oy = Transform.Computed.Y;
         float w = Transform.Computed.Width;
         float h = Transform.Computed.Height;
-        bool hasText = !string.IsNullOrEmpty(Text);
 
-        if (hasText)
+        bool hasIcon = _iconElement != null;
+        bool hasText = !string.IsNullOrEmpty(_caption);
+
+        if (hasIcon && hasText)
         {
-            float sz = 15f;
-            _iconElement.Transform.Width = sz;
-            _iconElement.Transform.Height = sz;
-            _iconElement.Transform.X = ox + 8f;
-            _iconElement.Transform.Y = oy + (h - sz) / 2f;
+            float iconSz = Math.Clamp(Math.Min(15f, h - 8f), 12f, 16f);
+            float iconGap = 6f;
+            float textW = _labelElement.Style?.Text?.Paint?.MeasureText(_caption) ?? (_caption.Length * 7.5f);
+            float totalW = iconSz + iconGap + textW;
+
+            // Smart centering: center [Icon + Gap + Text] as a unified block within the button width.
+            // When button width is tight, clamp to a safe margin of 6px so the icon never clips.
+            float startX = (w > totalW + 12f)
+                ? (w - totalW) * 0.5f
+                : Math.Max(6f, (w - totalW) * 0.5f);
+
+            _iconElement!.Transform.SetAbsoluteFrame(ox + startX, oy + (h - iconSz) * 0.5f, iconSz, iconSz);
+            _iconElement.Visible = true;
+
+            float textX = ox + startX + iconSz + iconGap;
+            float maxTextW = Math.Max(0f, ox + w - textX - 4f);
+            float actualTextW = Math.Min(textW + 2f, maxTextW);
+
+            _labelElement.Transform.SetAbsoluteFrame(textX, oy, actualTextW, h);
+            if (_labelElement.Style?.Text != null)
+            {
+                _labelElement.Style.Text.Alignment = TextAlign.Left;
+            }
+            _labelElement.Visible = true;
+        }
+        else if (hasIcon)
+        {
+            float sz = Math.Clamp(Math.Min(w - 6f, h - 6f), 14f, 18f);
+            _iconElement!.Transform.SetAbsoluteFrame(ox + (w - sz) * 0.5f, oy + (h - sz) * 0.5f, sz, sz);
+            _iconElement.Visible = true;
+
+            _labelElement.Visible = false;
+        }
+        else if (hasText)
+        {
+            if (_iconElement != null)
+            {
+                _iconElement.Visible = false;
+            }
+
+            _labelElement.Transform.SetAbsoluteFrame(ox, oy, w, h);
+            if (_labelElement.Style?.Text != null)
+            {
+                _labelElement.Style.Text.Alignment = TextAlign.Center;
+            }
+            _labelElement.Visible = true;
         }
         else
         {
-            float sz = Math.Clamp(Math.Min(w - 6f, h - 6f), 14f, 18f);
-            _iconElement.Transform.Width = sz;
-            _iconElement.Transform.Height = sz;
-            _iconElement.Transform.X = ox + (w - sz) / 2f;
-            _iconElement.Transform.Y = oy + (h - sz) / 2f;
+            if (_iconElement != null) _iconElement.Visible = false;
+            _labelElement.Visible = false;
         }
     }
 
@@ -239,15 +292,16 @@ public class IconButton : VisualElement
         float h = Theme.ToolH;
         if (maxHeight > 0) h = Math.Min(h, maxHeight);
 
-        if (string.IsNullOrEmpty(Text))
+        if (string.IsNullOrEmpty(_caption))
         {
             float w = maxWidth > 0 ? Math.Min(Theme.ToolH, maxWidth) : Theme.ToolH;
             return new SKSize(w, h);
         }
 
-        float iconPad = _iconElement != null ? 24f : 0f;
-        float textW = Math.Max(56f, Text.Length * 8f + 18f + iconPad);
-        float width = maxWidth > 0 ? Math.Min(textW, maxWidth) : textW;
+        float textW = _labelElement.Style?.Text?.Paint?.MeasureText(_caption) ?? (_caption.Length * 7.5f);
+        float iconPad = _iconElement != null ? (15f + 6f) : 0f;
+        float preferredW = Math.Max(52f, textW + iconPad + 18f);
+        float width = maxWidth > 0 ? Math.Min(preferredW, maxWidth) : preferredW;
         return new SKSize(width, h);
     }
 
@@ -271,8 +325,18 @@ public class IconButton : VisualElement
 
         Style.BackColor = fill;
         Style.Border.Color = border;
-        Style.Text.Color = text;
-        Style.Text.Weight = accent ? 600 : 500;
+
+        if (_labelElement.Style?.Text != null)
+        {
+            if (Style?.Text != null && Math.Abs(_labelElement.Style.Text.Size - Style.Text.Size) > 0.1f)
+            {
+                _labelElement.Style.Text.Size = Style.Text.Size;
+            }
+
+            _labelElement.Style.Text.Color = text;
+            _labelElement.Style.Text.Weight = accent ? 600 : 500;
+            _labelElement.InvalidatePaint();
+        }
 
         if (_iconElement != null)
         {
