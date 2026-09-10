@@ -482,20 +482,28 @@ public static class DevelopRenderer
                 if (abs(clarity) < 0.001 && abs(highlights) < 0.001 && abs(shadows) < 0.001) {
                     return x;
                 }
-                float midCenter = clamp(sigma, 0.05, 0.95);
-                float dMid = (x - midCenter) / 0.30;
-                float midWeight = exp(-0.5 * dMid * dMid);
-
-                float hlMod = 1.0 + highlights * (x > midCenter ? 0.75 : 0.35);
-                float shMod = 1.0 - shadows * (x < midCenter ? 0.75 : 0.35);
-                float toneGain = midWeight * (c > 0.0 ? hlMod : shMod);
-
-                float detailBoost = c * (clarity * toneGain);
-                float maxDelta = 0.07 + 0.05 * max(clarity, 0.0);
-                float u = detailBoost / maxDelta;
-                float limitedDelta = maxDelta * (u / sqrt(1.0 + u * u));
-
-                return max(x + limitedDelta, 0.0001);
+                float dtShadows = 1.0 + shadows;
+                float dtHighlights = 1.0 + highlights;
+                float effSigma = clamp(sigma * 0.40, 0.04, 0.50);
+                float val;
+                if (c > 2.0 * effSigma) {
+                    val = g + effSigma + dtShadows * (c - effSigma);
+                } else if (c < -2.0 * effSigma) {
+                    val = g - effSigma + dtHighlights * (c + effSigma);
+                } else if (c > 0.0) {
+                    float t = clamp(c / (2.0 * effSigma), 0.0, 1.0);
+                    float t2 = t * t;
+                    float mt = 1.0 - t;
+                    val = g + effSigma * 2.0 * mt * t + t2 * (effSigma + effSigma * dtShadows);
+                } else {
+                    float t = clamp(-c / (2.0 * effSigma), 0.0, 1.0);
+                    float t2 = t * t;
+                    float mt = 1.0 - t;
+                    val = g - effSigma * 2.0 * mt * t + t2 * (-effSigma - effSigma * dtHighlights);
+                }
+                // midtone local contrast (clarity)
+                val += clarity * c * exp(-c * c / (0.6666667 * effSigma * effSigma));
+                return clamp(val, 0.0001, 2.5);
             }
 
             float to_lin_1(float s) {
@@ -686,37 +694,82 @@ public static class DevelopRenderer
             }
 
             float3 apply_look(float3 col) {
-                col.r += 0.15 * u_temp;
-                col.b -= 0.15 * u_temp;
-                col.g -= 0.15 * u_tint;
+                // 1. Multiplicative chromatic white balance (preserves black levels and photon ratios)
+                float wb_r = exp(0.55 * u_temp + 0.18 * u_tint);
+                float wb_b = exp(-0.55 * u_temp - 0.18 * u_tint);
+                float wb_g = exp(-0.35 * u_tint);
+                col.r *= wb_r;
+                col.g *= wb_g;
+                col.b *= wb_b;
                 col = max(col, 0.0);
 
+                // 2. Linear Exposure gain
                 col *= pow(2.0, u_ev);
 
+                // 3. Match Gray (target middle gray at 0.18)
                 if (u_match > 0.001) {
-                    float lum = max(luma2020(col), 0.0001);
-                    float g = 0.18 / lum;
+                    float lum0 = max(luma2020(col), 0.0001);
+                    float g = 0.18 / lum0;
                     col *= mix(1.0, g, u_match * 0.35);
                 }
 
-                float3 enc = log2(1.0 + col);
-                float k = 1.0 + u_contrast * 0.85;
-                enc = (enc - 0.5) * k + 0.5;
-                col = max(exp2(enc) - 1.0, 0.0);
+                // 4. High Dynamic Range (HDR) in perceptual log-EV space relative to 18% middle gray
+                float lum = max(luma2020(col), 0.00001);
+                float ev = log2(lum / 0.18);
 
-                float lum2 = luma2020(col);
-                float shw = 1.0 - smoother(lum2, 0.02, 0.28);
-                float hiw = smoother(lum2, 0.10, 0.70);
-                col *= mix(1.0, pow(2.0, u_shadows * 1.45), shw);
-                col *= mix(1.0, pow(2.0, u_highlights * 1.75), hiw);
+                // Highlights: Compressive rational shoulder to recover texture without muddy flat gray
+                if (abs(u_highlights) > 0.001) {
+                    if (ev > 0.0) {
+                        if (u_highlights < 0.0) {
+                            float hl_amt = -u_highlights;
+                            ev = ev / (1.0 + hl_amt * 0.40 * ev);
+                        } else {
+                            ev += u_highlights * 0.45 * smoother(ev, 0.0, 3.5);
+                        }
+                    }
+                }
 
-                lum2 = luma2020(col);
-                float ww = smoother(lum2, 0.20, 1.05);
-                float bw = 1.0 - smoother(lum2, 0.0, 0.18);
-                col *= mix(1.0, pow(2.0, u_whites * 1.55), ww);
-                col *= mix(1.0, pow(2.0, u_blacks * 1.25), bw);
-                if (u_whites > 0.0) {
-                    col *= 1.0 + u_whites * smoother(lum2, 0.35, 1.2) * 0.9;
+                // Shadows: Grounded lift/drop with pinned black anchor (prevents milky haze)
+                if (abs(u_shadows) > 0.001) {
+                    if (ev < 0.0) {
+                        float t = max(1.0 + ev / 7.0, 0.0);
+                        float w = 1.0 - smoother(ev, -6.0, 0.0);
+                        if (u_shadows > 0.0) {
+                            ev += u_shadows * 1.50 * t * w;
+                        } else {
+                            ev += u_shadows * 1.20 * t * w;
+                        }
+                    }
+                }
+
+                // Whites: Range anchor for extreme highlight/specular rolloff
+                if (abs(u_whites) > 0.001) {
+                    if (ev > 1.0) {
+                        float ww = smoother(ev, 1.0, 3.5);
+                        ev += u_whites * 1.25 * ww;
+                    }
+                }
+
+                // Blacks: Range anchor for deep toe/shadow threshold
+                if (abs(u_blacks) > 0.001) {
+                    if (ev < -1.0) {
+                        float bw = 1.0 - smoother(ev, -5.5, -1.0);
+                        ev += u_blacks * 1.10 * bw;
+                    }
+                }
+
+                // Apply HDR luminance scaling (preserves chromaticity ratios and prevents hue shifts)
+                float target_lum = 0.18 * exp2(ev);
+                col *= max(target_lum, 0.0) / lum;
+
+                // 5. Contrast: Smooth S-curve pivoted at 18% middle gray with soft roll-off
+                if (abs(u_contrast) > 0.0005) {
+                    float lum_c = max(luma2020(col), 0.00001);
+                    float ev_c = log2(lum_c / 0.18);
+                    float delta_ev = u_contrast * 0.85 * (ev_c / (1.0 + 0.12 * ev_c * ev_c));
+                    float ev_new = ev_c + delta_ev;
+                    float new_lum_c = 0.18 * exp2(ev_new);
+                    col *= max(new_lum_c, 0.0) / lum_c;
                 }
                 col = max(col, 0.0);
 
@@ -794,7 +847,9 @@ public static class DevelopRenderer
                 // Highlight reconstruction (step 2)
                 // ref: darktable src/iop/highlights.c, src/iop/hlreconstruct/opposed.c, src/iop/hlreconstruct/lch.c
                 if (u_reconMode < 0.5) {
-                    lin = min(lin, u_hlThreshold);
+                    if (u_hlThreshold < 0.999) {
+                        lin = min(lin, u_hlThreshold);
+                    }
                 } else if (u_reconFast < 0.5) {
                     float clipThresh = u_hlThreshold * 0.987;
                     if (lin.r >= clipThresh || lin.g >= clipThresh || lin.b >= clipThresh) {
@@ -895,7 +950,9 @@ public static class DevelopRenderer
                         }
                     }
                 } else {
-                    lin = min(lin, float3(u_hlThreshold));
+                    if (u_hlThreshold < 0.999) {
+                        lin = min(lin, float3(u_hlThreshold));
+                    }
                 }
 
                 // Color reconstruction (step 2): ref: darktable src/iop/colorreconstruction.c
@@ -938,124 +995,126 @@ public static class DevelopRenderer
                     processed = apply_look(lin);
                 }
 
-                // Local contrast & Clarity (step 8): halo-free bilateral midtone enhancement
+                // Local contrast & Clarity (step 8): halo-free perceptual bilateral midtone enhancement
                 if (abs(u_localDetail) > 0.001 || abs(u_localHighlights) > 0.001 || abs(u_localShadows) > 0.001 || abs(u_localMidtones - 0.5) > 0.01) {
-                    float lum = max(luma2020(processed), 0.0001);
-                    float minDim = min(u_srcSize.x, u_srcSize.y);
-                    float r1 = max(1.5, minDim * 0.0035);
-                    float r2 = r1 * 2.2;
+                    float lum = max(luma2020(processed), 0.00001);
+                    float xL = pow(lum, 0.33333333); // Perceptual lightness domain L in [0, 1]
 
-                    // Tight bilateral edge-stopping range sigma: prevents stark edges (e.g. animal ears against background)
-                    // from bleeding into the base layer and creating dark or white ghost shadows.
-                    float rangeSigma = clamp(lum * 0.20 + 0.06, 0.05, 0.22);
+                    float minDim = min(u_srcSize.x, u_srcSize.y);
+                    // Multi-scale concentric radius tuning:
+                    // Ring 1 (r1): Micro-gradient detection & immediate edge awareness (~3-6px)
+                    // Ring 2 (r2): Mid-scale clarity & local texture (~8-18px)
+                    // Ring 3 (r3): Broad-scale contextual depth (~18-42px)
+                    float r1 = max(3.0, minDim * 0.002);
+                    float r2 = max(8.0, minDim * 0.006);
+                    float r3 = max(18.0, minDim * 0.014);
+
+                    // Edge-stopping sigma in perceptual L space:
+                    // Delta of 0.16 in L space corresponds to ~1.5 EV stops of contrast
+                    float rangeSigma = 0.16;
                     float invTwoSigmaSq = 0.5 / (rangeSigma * rangeSigma);
 
-                    float sumL = lum * 1.5;
-                    float sumW = 1.5;
+                    float sumL = xL * 2.0;
+                    float sumW = 2.0;
 
-                    // Ring 1: 4 diagonal taps (radius r1)
-                    float2 d1 = float2(r1 * 0.7071, r1 * 0.7071);
-                    float2 d2 = float2(-r1 * 0.7071, r1 * 0.7071);
-                    {
-                        float3 p = fetch_look(srcCoord + d1, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = exp(-diff * diff * invTwoSigmaSq);
-                        sumL += lp * w; sumW += w;
-                    }
-                    {
-                        float3 p = fetch_look(srcCoord - d1, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = exp(-diff * diff * invTwoSigmaSq);
-                        sumL += lp * w; sumW += w;
-                    }
-                    {
-                        float3 p = fetch_look(srcCoord + d2, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = exp(-diff * diff * invTwoSigmaSq);
-                        sumL += lp * w; sumW += w;
-                    }
-                    {
-                        float3 p = fetch_look(srcCoord - d2, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = exp(-diff * diff * invTwoSigmaSq);
-                        sumL += lp * w; sumW += w;
-                    }
+                    // Ring 1: 4 cardinal taps at r1 (used for base estimate AND gradient detection)
+                    float3 p1 = fetch_look(srcCoord + float2(r1, 0.0), lookAmt);
+                    float3 p2 = fetch_look(srcCoord - float2(r1, 0.0), lookAmt);
+                    float3 p3 = fetch_look(srcCoord + float2(0.0, r1), lookAmt);
+                    float3 p4 = fetch_look(srcCoord - float2(0.0, r1), lookAmt);
 
-                    // Ring 2: 4 cardinal taps (radius r2)
-                    float2 c1 = float2(r2, 0.0);
-                    float2 c2 = float2(0.0, r2);
+                    float l1 = pow(max(luma2020(p1), 0.00001), 0.33333333);
+                    float l2 = pow(max(luma2020(p2), 0.00001), 0.33333333);
+                    float l3 = pow(max(luma2020(p3), 0.00001), 0.33333333);
+                    float l4 = pow(max(luma2020(p4), 0.00001), 0.33333333);
+
+                    // Immediate local gradient for halo suppression
+                    float grad = 0.25 * (abs(l1 - xL) + abs(l2 - xL) + abs(l3 - xL) + abs(l4 - xL));
+
+                    float d1 = l1 - xL; float w1 = exp(-d1 * d1 * invTwoSigmaSq); sumL += l1 * w1; sumW += w1;
+                    float d2 = l2 - xL; float w2 = exp(-d2 * d2 * invTwoSigmaSq); sumL += l2 * w2; sumW += w2;
+                    float d3 = l3 - xL; float w3 = exp(-d3 * d3 * invTwoSigmaSq); sumL += l3 * w3; sumW += w3;
+                    float d4 = l4 - xL; float w4 = exp(-d4 * d4 * invTwoSigmaSq); sumL += l4 * w4; sumW += w4;
+
+                    // Ring 2: 4 diagonal taps at r2 (mid-frequency clarity)
+                    float2 diag1 = float2(r2 * 0.7071, r2 * 0.7071);
+                    float2 diag2 = float2(-r2 * 0.7071, r2 * 0.7071);
                     {
-                        float3 p = fetch_look(srcCoord + c1, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        float3 p = fetch_look(srcCoord + diag1, lookAmt);
+                        float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                        float diff = lp - xL;
+                        float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
                         sumL += lp * w; sumW += w;
                     }
                     {
-                        float3 p = fetch_look(srcCoord - c1, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        float3 p = fetch_look(srcCoord - diag1, lookAmt);
+                        float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                        float diff = lp - xL;
+                        float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
                         sumL += lp * w; sumW += w;
                     }
                     {
-                        float3 p = fetch_look(srcCoord + c2, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        float3 p = fetch_look(srcCoord + diag2, lookAmt);
+                        float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                        float diff = lp - xL;
+                        float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
                         sumL += lp * w; sumW += w;
                     }
                     {
-                        float3 p = fetch_look(srcCoord - c2, lookAmt);
-                        float lp = luma2020(p);
-                        float diff = lp - lum;
-                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        float3 p = fetch_look(srcCoord - diag2, lookAmt);
+                        float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                        float diff = lp - xL;
+                        float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
                         sumL += lp * w; sumW += w;
                     }
 
                     if (u_localFast < 0.5) {
-                        // Ring 3: 4 intermediate taps (radius r1 * 3.4) in settle mode
-                        float r3 = r1 * 3.4;
-                        float2 d3 = float2(r3 * 0.9239, r3 * 0.3827);
-                        float2 d4 = float2(-r3 * 0.3827, r3 * 0.9239);
+                        // Ring 3: 4 cardinal taps at r3 (broad structural base)
                         {
-                            float3 p = fetch_look(srcCoord + d3, lookAmt);
-                            float lp = luma2020(p);
-                            float diff = lp - lum;
-                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            float3 p = fetch_look(srcCoord + float2(r3, 0.0), lookAmt);
+                            float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                            float diff = lp - xL;
+                            float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
                             sumL += lp * w; sumW += w;
                         }
                         {
-                            float3 p = fetch_look(srcCoord - d3, lookAmt);
-                            float lp = luma2020(p);
-                            float diff = lp - lum;
-                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            float3 p = fetch_look(srcCoord - float2(r3, 0.0), lookAmt);
+                            float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                            float diff = lp - xL;
+                            float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
                             sumL += lp * w; sumW += w;
                         }
                         {
-                            float3 p = fetch_look(srcCoord + d4, lookAmt);
-                            float lp = luma2020(p);
-                            float diff = lp - lum;
-                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            float3 p = fetch_look(srcCoord + float2(0.0, r3), lookAmt);
+                            float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                            float diff = lp - xL;
+                            float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
                             sumL += lp * w; sumW += w;
                         }
                         {
-                            float3 p = fetch_look(srcCoord - d4, lookAmt);
-                            float lp = luma2020(p);
-                            float diff = lp - lum;
-                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            float3 p = fetch_look(srcCoord - float2(0.0, r3), lookAmt);
+                            float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
+                            float diff = lp - xL;
+                            float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
                             sumL += lp * w; sumW += w;
                         }
                     }
 
-                    float g = sumL / sumW;
+                    float gL = sumL / sumW;
                     float sigma = max(u_localMidtones, 0.05);
-                    float newLum = curve_scalar(lum, g, sigma, u_localShadows, u_localHighlights, u_localDetail);
-                    processed *= max(newLum, 0.0) / lum;
+                    float newL = curve_scalar(xL, gL, sigma, u_localShadows, u_localHighlights, u_localDetail);
+
+                    // Edge-guided halo suppression:
+                    // In flat or textured regions (grad < 0.05), edgeFactor ~ 1.0 (full clarity enhancement).
+                    // Across high-contrast silhouette boundaries (grad >= 0.12), edgeFactor drops to 0,
+                    // completely eliminating black shadow lines and bright edge halos.
+                    float edgeFactor = exp(-grad * grad / 0.0064);
+                    float finalL = mix(xL, newL, edgeFactor);
+                    finalL = clamp(finalL, 0.0001, 2.0);
+
+                    // Convert from perceptual L back to linear luminance (L^3)
+                    float newLum = finalL * finalL * finalL;
+                    processed *= newLum / lum;
                 }
 
                 // Denoise (step 9)
