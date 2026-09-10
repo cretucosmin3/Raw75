@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
 using Silk.NET.Input;
@@ -143,21 +144,24 @@ public class PanelGroup : VisualElement
 
     public void EnableReset(Action onReset, string tooltip = "Reset Section")
     {
-        AddHeaderAction("↺", tooltip, onReset);
+        AddHeaderAction("↺", tooltip, onReset, iconName: "rotate_left");
     }
 
     public void EnablePresets(Action onPresets, string tooltip = "Presets")
     {
-        AddHeaderAction("⋯", tooltip, onPresets);
+        AddHeaderAction("⋯", tooltip, onPresets, iconName: "dots");
     }
 
-    public void AddHeaderAction(string label, string tooltip, Action onClick, bool isAccentHover = false)
+    public void AddHeaderAction(string label, string tooltip, Action onClick, bool isAccentHover = false, string? iconName = null)
     {
         var btn = new VisualElement
         {
             Name = $"{Name}_Action_{label}",
-            Text = label,
+            Text = string.IsNullOrEmpty(iconName) ? label : "",
             Cursor = StandardCursor.Hand,
+            BackgroundImageScale = ImageScaleMode.Contain,
+            BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+            BackgroundImageTintColor = Theme.TextSecondary,
             Style = new ElementStyle
             {
                 BackColor = Theme.Well,
@@ -179,6 +183,11 @@ public class PanelGroup : VisualElement
             }
         };
 
+        if (!string.IsNullOrEmpty(iconName))
+        {
+            btn.BackgroundSvg = IconStore.LoadSvg(iconName);
+        }
+
         btn.Events.OnMouseEnter += _ =>
         {
             if (btn.Style != null)
@@ -193,6 +202,7 @@ public class PanelGroup : VisualElement
                 if (btn.Style.Text != null)
                     btn.Style.Text.Color = isAccentHover ? Theme.Accent : Theme.Text;
             }
+            btn.BackgroundImageTintColor = isAccentHover ? Theme.Accent : Theme.Text;
             InvalidatePaint();
         };
 
@@ -210,6 +220,7 @@ public class PanelGroup : VisualElement
                 if (btn.Style.Text != null)
                     btn.Style.Text.Color = Theme.TextSecondary;
             }
+            btn.BackgroundImageTintColor = Theme.TextSecondary;
             InvalidatePaint();
         };
 

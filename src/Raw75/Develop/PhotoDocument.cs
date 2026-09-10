@@ -10,6 +10,7 @@ public sealed class PhotoDocument : IDisposable
     public string Path { get; }
     public string Name { get; }
     public string Camera { get; set; } = "";
+    public bool IsReady { get; set; }
     public DevelopSettings Settings { get; } = new();
     public UndoStack Undo { get; } = new();
 

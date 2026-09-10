@@ -9,11 +9,19 @@ using SkiaSharp;
 
 namespace Raw75.Views;
 
+public enum ExportScope
+{
+    Active,
+    Ready,
+    All
+}
+
 public sealed class ExportRequest
 {
     public string Format = "JPEG";
     public int Quality;
     public int LongEdge;
+    public ExportScope Scope = ExportScope.Active;
 }
 
 /// <summary>Modal overlay: format, JPEG quality, long-edge size, Export / Cancel.</summary>
@@ -25,6 +33,8 @@ public sealed class ExportDialog : VisualElement
     private readonly VisualElement _card;
     private readonly VisualElement _title;
     private readonly VisualElement _fileLabel;
+    private readonly VisualElement _scopeLabel;
+    private readonly IconButton[] _scopeBtns;
     private readonly VisualElement _formatLabel;
     private readonly IconButton[] _formatBtns;
     private readonly VisualElement _qualityLabel;
@@ -34,6 +44,7 @@ public sealed class ExportDialog : VisualElement
     private readonly IconButton _exportBtn;
     private readonly IconButton _cancelBtn;
 
+    private ExportScope _scope = ExportScope.Active;
     private string _format = "JPEG";
     private int _quality = 95;
     private int _longEdge;
@@ -60,8 +71,18 @@ public sealed class ExportDialog : VisualElement
         };
 
         _card = Box("Card", Theme.Panel, 6f);
-        _title = Label("Title", "Export", Theme.Text, 16, 700, TextAlign.Left);
+        _title = Label("Title", "Export Photos", Theme.Text, 16, 700, TextAlign.Left);
         _fileLabel = Label("File", "", Theme.TextDim, 12, 400, TextAlign.Left);
+        _scopeLabel = Label("ScopeLbl", "Export Scope", Theme.TextDim, 11, 500, TextAlign.Left);
+
+        _scopeBtns = new IconButton[3];
+        _scopeBtns[0] = new IconButton("Active (1)");
+        _scopeBtns[0].Clicked += () => SetScope(ExportScope.Active);
+        _scopeBtns[1] = new IconButton("Ready (0)", "check");
+        _scopeBtns[1].Clicked += () => SetScope(ExportScope.Ready);
+        _scopeBtns[2] = new IconButton("All (0)");
+        _scopeBtns[2].Clicked += () => SetScope(ExportScope.All);
+
         _formatLabel = Label("FormatLbl", "Format", Theme.TextDim, 11, 500, TextAlign.Left);
         _qualityLabel = Label("QualityLbl", "Quality  95", Theme.TextDim, 11, 500, TextAlign.Left);
         _edgeLabel = Label("EdgeLbl", "Long edge  Full", Theme.TextDim, 11, 500, TextAlign.Left);
@@ -93,7 +114,7 @@ public sealed class ExportDialog : VisualElement
             _edgeBtns[i] = btn;
         }
 
-        _exportBtn = new IconButton("Export", primary: true);
+        _exportBtn = new IconButton("Export", "export", primary: true);
         _exportBtn.Clicked += Confirm;
         _cancelBtn = new IconButton("Cancel");
         _cancelBtn.Clicked += Close;
@@ -101,6 +122,9 @@ public sealed class ExportDialog : VisualElement
         AddChild(_card);
         _card.AddChild(_title);
         _card.AddChild(_fileLabel);
+        _card.AddChild(_scopeLabel);
+        foreach (var b in _scopeBtns)
+            _card.AddChild(b);
         _card.AddChild(_formatLabel);
         foreach (var b in _formatBtns)
             _card.AddChild(b);
@@ -133,9 +157,10 @@ public sealed class ExportDialog : VisualElement
 
         SetFormat("JPEG");
         SetLongEdge(0);
+        SetScope(ExportScope.Active);
     }
 
-    public void Open(string suggestedName, int nativeW = 0, int nativeH = 0)
+    public void Open(string suggestedName, int nativeW = 0, int nativeH = 0, int readyCount = 0, int totalCount = 1)
     {
         SuggestedName = suggestedName ?? "";
         _nativeW = nativeW;
@@ -144,12 +169,27 @@ public sealed class ExportDialog : VisualElement
         _fileLabel.Text = nativeW > 0 && nativeH > 0
             ? $"{name}  ·  {nativeW}×{nativeH}"
             : name;
+
+        _scopeBtns[0].Caption = "Active (1)";
+        _scopeBtns[1].Caption = $"Ready ({readyCount})";
+        _scopeBtns[2].Caption = $"All ({totalCount})";
+        SetScope(readyCount > 0 ? ExportScope.Ready : ExportScope.Active);
+
         SetLongEdge(_longEdge);
         CoverView();
         Visible = true;
         ParentView?.SetActiveKeyboardElement(this);
         InvalidateLayout();
         ForceLayoutSubtree();
+        InvalidatePaint();
+    }
+
+    private void SetScope(ExportScope scope)
+    {
+        _scope = scope;
+        _scopeBtns[0].Toggled = scope == ExportScope.Active;
+        _scopeBtns[1].Toggled = scope == ExportScope.Ready;
+        _scopeBtns[2].Toggled = scope == ExportScope.All;
         InvalidatePaint();
     }
 
@@ -179,7 +219,8 @@ public sealed class ExportDialog : VisualElement
         {
             Format = _format,
             Quality = _quality,
-            LongEdge = _longEdge
+            LongEdge = _longEdge,
+            Scope = _scope
         });
         Close();
     }
@@ -214,7 +255,7 @@ public sealed class ExportDialog : VisualElement
 
         const float pad = 18f;
         const float cardW = 440f;
-        const float cardH = 340f;
+        const float cardH = 406f;
         float cardX = originX + Math.Max(0, (w - cardW) / 2f);
         float cardY = originY + Math.Max(0, (h - cardH) / 2f);
         _card.Transform.SetAbsoluteFrame(cardX, cardY, cardW, cardH);
@@ -226,7 +267,12 @@ public sealed class ExportDialog : VisualElement
         _title.Transform.SetAbsoluteFrame(x, y, inner, 24f);
         y += 26f;
         _fileLabel.Transform.SetAbsoluteFrame(x, y, inner, 18f);
-        y += 26f;
+        y += 24f;
+
+        _scopeLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
+        y += 20f;
+        LayoutRow(_scopeBtns, x, y, inner, 28f, 6f);
+        y += 38f;
 
         _formatLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
         y += 20f;

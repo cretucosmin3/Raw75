@@ -476,18 +476,23 @@ public static class DevelopRenderer
             // ref: darktable src/common/locallaplacian.c
             float curve_scalar(float x, float g, float sigma, float shadows, float highlights, float clarity) {
                 float c = x - g;
-                float detailGain = 1.0 + clarity * 0.75;
-                float sc = c * detailGain;
-
-                if (sc > 0.0) {
-                    sc *= (1.0 + highlights * 0.60);
-                } else {
-                    sc *= (1.0 - shadows * 0.60);
+                if (abs(clarity) < 0.001 && abs(highlights) < 0.001 && abs(shadows) < 0.001) {
+                    return x;
                 }
+                float midCenter = clamp(sigma, 0.05, 0.95);
+                float dMid = (x - midCenter) / 0.30;
+                float midWeight = exp(-0.5 * dMid * dMid);
 
-                float midWeight = exp(-abs(x - sigma) / max(sigma, 0.1));
-                float val = g + sc * (0.65 + 0.35 * midWeight);
-                return max(val, 0.0001);
+                float hlMod = 1.0 + highlights * (x > midCenter ? 0.75 : 0.35);
+                float shMod = 1.0 - shadows * (x < midCenter ? 0.75 : 0.35);
+                float toneGain = midWeight * (c > 0.0 ? hlMod : shMod);
+
+                float detailBoost = c * (clarity * toneGain);
+                float maxDelta = 0.07 + 0.05 * max(clarity, 0.0);
+                float u = detailBoost / maxDelta;
+                float limitedDelta = maxDelta * (u / sqrt(1.0 + u * u));
+
+                return max(x + limitedDelta, 0.0001);
             }
 
             float to_lin_1(float s) {
@@ -930,56 +935,121 @@ public static class DevelopRenderer
                     processed = apply_look(lin);
                 }
 
-                // Local contrast (step 8): ref: darktable src/iop/bilat.c
+                // Local contrast & Clarity (step 8): halo-free bilateral midtone enhancement
                 if (abs(u_localDetail) > 0.001 || abs(u_localHighlights) > 0.001 || abs(u_localShadows) > 0.001 || abs(u_localMidtones - 0.5) > 0.01) {
                     float lum = max(luma2020(processed), 0.0001);
-                    float g = lum;
-                    float scale = max(min(u_srcSize.x, u_srcSize.y) / 64.0, 2.0);
-                    float2 d1 = float2(scale * 1.5, 0.0);
-                    float2 d2 = float2(0.0, scale * 1.5);
-                    float3 s1 = sample(u_image, clamp(srcCoord + d1, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                    float3 s2 = sample(u_image, clamp(srcCoord - d1, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                    float3 s3 = sample(u_image, clamp(srcCoord + d2, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                    float3 s4 = sample(u_image, clamp(srcCoord - d2, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                    float3 p1 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s1, 0.0) : to_lin(s1)) : (u_srcLinear > 0.5 ? max(s1, 0.0) : to_lin(s1));
-                    float3 p2 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s2, 0.0) : to_lin(s2)) : (u_srcLinear > 0.5 ? max(s2, 0.0) : to_lin(s2));
-                    float3 p3 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s3, 0.0) : to_lin(s3)) : (u_srcLinear > 0.5 ? max(s3, 0.0) : to_lin(s3));
-                    float3 p4 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s4, 0.0) : to_lin(s4)) : (u_srcLinear > 0.5 ? max(s4, 0.0) : to_lin(s4));
-                    float l1 = luma2020(p1);
-                    float l2 = luma2020(p2);
-                    float l3 = luma2020(p3);
-                    float l4 = luma2020(p4);
+                    float minDim = min(u_srcSize.x, u_srcSize.y);
+                    float r1 = max(1.5, minDim * 0.0035);
+                    float r2 = r1 * 2.2;
 
-                    float rangeSigma = 0.35;
-                    float w1 = exp(-abs(l1 - lum) / rangeSigma);
-                    float w2 = exp(-abs(l2 - lum) / rangeSigma);
-                    float w3 = exp(-abs(l3 - lum) / rangeSigma);
-                    float w4 = exp(-abs(l4 - lum) / rangeSigma);
-                    float sumW = 1.0 + w1 + w2 + w3 + w4;
-                    g = (lum + l1 * w1 + l2 * w2 + l3 * w3 + l4 * w4) / sumW;
+                    // Tight bilateral edge-stopping range sigma: prevents stark edges (e.g. animal ears against background)
+                    // from bleeding into the base layer and creating dark or white ghost shadows.
+                    float rangeSigma = clamp(lum * 0.20 + 0.06, 0.05, 0.22);
+                    float invTwoSigmaSq = 0.5 / (rangeSigma * rangeSigma);
 
-                    if (u_localFast < 0.5) {
-                        float2 d3 = float2(scale * 3.5, 0.0);
-                        float2 d4 = float2(0.0, scale * 3.5);
-                        float3 s5 = sample(u_image, clamp(srcCoord + d3, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                        float3 s6 = sample(u_image, clamp(srcCoord - d3, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                        float3 s7 = sample(u_image, clamp(srcCoord + d4, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                        float3 s8 = sample(u_image, clamp(srcCoord - d4, float2(0.5), u_srcSize - float2(0.5))).rgb;
-                        float3 p5 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s5, 0.0) : to_lin(s5)) : (u_srcLinear > 0.5 ? max(s5, 0.0) : to_lin(s5));
-                        float3 p6 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s6, 0.0) : to_lin(s6)) : (u_srcLinear > 0.5 ? max(s6, 0.0) : to_lin(s6));
-                        float3 p7 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s7, 0.0) : to_lin(s7)) : (u_srcLinear > 0.5 ? max(s7, 0.0) : to_lin(s7));
-                        float3 p8 = lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s8, 0.0) : to_lin(s8)) : (u_srcLinear > 0.5 ? max(s8, 0.0) : to_lin(s8));
-                        float l5 = luma2020(p5);
-                        float l6 = luma2020(p6);
-                        float l7 = luma2020(p7);
-                        float l8 = luma2020(p8);
-                        float w5 = 0.5 * exp(-abs(l5 - lum) / rangeSigma);
-                        float w6 = 0.5 * exp(-abs(l6 - lum) / rangeSigma);
-                        float w7 = 0.5 * exp(-abs(l7 - lum) / rangeSigma);
-                        float w8 = 0.5 * exp(-abs(l8 - lum) / rangeSigma);
-                        g = (g * sumW + l5 * w5 + l6 * w6 + l7 * w7 + l8 * w8) / (sumW + w5 + w6 + w7 + w8);
+                    float sumL = lum * 1.5;
+                    float sumW = 1.5;
+
+                    // Ring 1: 4 diagonal taps (radius r1)
+                    float2 d1 = float2(r1 * 0.7071, r1 * 0.7071);
+                    float2 d2 = float2(-r1 * 0.7071, r1 * 0.7071);
+                    {
+                        float3 p = fetch_look(srcCoord + d1, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord - d1, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord + d2, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord - d2, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
                     }
 
+                    // Ring 2: 4 cardinal taps (radius r2)
+                    float2 c1 = float2(r2, 0.0);
+                    float2 c2 = float2(0.0, r2);
+                    {
+                        float3 p = fetch_look(srcCoord + c1, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord - c1, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord + c2, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
+                    }
+                    {
+                        float3 p = fetch_look(srcCoord - c2, lookAmt);
+                        float lp = luma2020(p);
+                        float diff = lp - lum;
+                        float w = 0.7 * exp(-diff * diff * invTwoSigmaSq);
+                        sumL += lp * w; sumW += w;
+                    }
+
+                    if (u_localFast < 0.5) {
+                        // Ring 3: 4 intermediate taps (radius r1 * 3.4) in settle mode
+                        float r3 = r1 * 3.4;
+                        float2 d3 = float2(r3 * 0.9239, r3 * 0.3827);
+                        float2 d4 = float2(-r3 * 0.3827, r3 * 0.9239);
+                        {
+                            float3 p = fetch_look(srcCoord + d3, lookAmt);
+                            float lp = luma2020(p);
+                            float diff = lp - lum;
+                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            sumL += lp * w; sumW += w;
+                        }
+                        {
+                            float3 p = fetch_look(srcCoord - d3, lookAmt);
+                            float lp = luma2020(p);
+                            float diff = lp - lum;
+                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            sumL += lp * w; sumW += w;
+                        }
+                        {
+                            float3 p = fetch_look(srcCoord + d4, lookAmt);
+                            float lp = luma2020(p);
+                            float diff = lp - lum;
+                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            sumL += lp * w; sumW += w;
+                        }
+                        {
+                            float3 p = fetch_look(srcCoord - d4, lookAmt);
+                            float lp = luma2020(p);
+                            float diff = lp - lum;
+                            float w = 0.45 * exp(-diff * diff * invTwoSigmaSq);
+                            sumL += lp * w; sumW += w;
+                        }
+                    }
+
+                    float g = sumL / sumW;
                     float sigma = max(u_localMidtones, 0.05);
                     float newLum = curve_scalar(lum, g, sigma, u_localShadows, u_localHighlights, u_localDetail);
                     processed *= max(newLum, 0.0) / lum;
@@ -1096,7 +1166,8 @@ public static class DevelopRenderer
                     disp = mix(disp, sample_lut(disp), u_lutAmount);
                 }
 
-                float3 outc = mix(orig.rgb, disp, lookAmt);
+                float3 baseDisp = u_srcLinear > 0.5 ? to_srgb(sigmoid_rgb(lin)) : orig.rgb;
+                float3 outc = mix(baseDisp, disp, lookAmt);
                 outc = clamp(outc, 0.0, 1.0);
                 return half4(outc, orig.a);
             }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
 using Raw75.Presets;
@@ -62,7 +63,7 @@ public class PresetList : VisualElement
         _headerTitle = new VisualElement
         {
             Name = "PresetList_Title",
-            Text = "▾  🎨 PRESETS & LOOKS",
+            Text = "▾  PRESETS & LOOKS",
             IsClickthrough = true,
             Style = new ElementStyle
             {
@@ -80,7 +81,7 @@ public class PresetList : VisualElement
         _header.AddChild(_headerTitle);
         AddChild(_header);
 
-        _save = new IconButton("➕ Save Preset");
+        _save = new IconButton("Save Preset", "plus");
         _save.Clicked += () => SaveClicked?.Invoke();
         AddChild(_save);
 
@@ -210,7 +211,7 @@ public class PresetList : VisualElement
         public NameRow(string name, bool canDelete)
         {
             Name = $"Preset_{name}";
-            Text = $"🎨  {name}";
+            Text = name;
             Cursor = StandardCursor.Hand;
             Style = new ElementStyle
             {
@@ -236,31 +237,27 @@ public class PresetList : VisualElement
                 var del = new VisualElement
                 {
                     Name = $"{Name}_Del",
-                    Text = "✕",
                     Cursor = StandardCursor.Hand,
+                    BackgroundImageScale = ImageScaleMode.Contain,
+                    BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                    BackgroundImageTintColor = Theme.TextDim,
+                    BackgroundSvg = IconStore.LoadSvg("cross"),
                     Style = new ElementStyle
                     {
                         BackColor = SKColors.Transparent,
-                        Border = new BorderStyle { Width = 0, Roundness = 2 },
-                        Text = new TextStyle
-                        {
-                            Color = Theme.TextDim,
-                            Size = 11,
-                            Weight = 600,
-                            Alignment = TextAlign.Center
-                        }
+                        Border = new BorderStyle { Width = 0, Roundness = 2 }
                     }
                 };
                 del.Events.OnMouseEnter += _ =>
                 {
                     del.Style.BackColor = Theme.Hover;
-                    del.Style.Text.Color = Theme.Text;
+                    del.BackgroundImageTintColor = Theme.Text;
                     InvalidatePaint();
                 };
                 del.Events.OnMouseLeave += _ =>
                 {
                     del.Style.BackColor = SKColors.Transparent;
-                    del.Style.Text.Color = Theme.TextDim;
+                    del.BackgroundImageTintColor = Theme.TextDim;
                     InvalidatePaint();
                 };
                 del.Events.OnClick += (_, args) =>
