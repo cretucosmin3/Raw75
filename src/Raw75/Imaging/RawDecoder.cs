@@ -144,6 +144,11 @@ internal static class RawDecoder
 
     public static RasterBuffer DecodePreview(string path, out int nativeW, out int nativeH)
     {
+        return DecodePreview(path, out nativeW, out nativeH, out _);
+    }
+
+    public static RasterBuffer DecodePreview(string path, out int nativeW, out int nativeH, out Develop.PhotoMetadata? metadata)
+    {
         LibRawNative.EnsureLoaded();
         lock (LibRawGate)
         {
@@ -157,6 +162,7 @@ internal static class RawDecoder
 
             nativeW = raw.Width > 0 ? raw.Width : raw.RawWidth;
             nativeH = raw.Height > 0 ? raw.Height : raw.RawHeight;
+            metadata = ExtractMetadata(raw, path, nativeW, nativeH);
             int edge = ProxyLongEdge(nativeW, nativeH);
             bool half = Math.Max(nativeW, nativeH) > ProxyMaxEdge;
             using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half));
@@ -164,6 +170,134 @@ internal static class RawDecoder
             Log.Info($"Preview {nativeW}x{nativeH} → proxy {buf.Width}x{buf.Height} edge={edge} half={half} bits={image.Bits} ch={image.Channels} camWb={camWb} {Megabytes(buf):0.0}MB");
             return buf;
         }
+    }
+
+    public static Develop.PhotoMetadata ExtractMetadata(RawContext raw, string path, int w, int h)
+    {
+        var meta = new Develop.PhotoMetadata
+        {
+            Width = w,
+            Height = h
+        };
+        try
+        {
+            var p = raw.ImageParams;
+            meta.CameraMake = p.Make ?? p.NormalizedMake ?? "";
+            meta.CameraModel = p.Model ?? p.NormalizedModel ?? "";
+        }
+        catch { }
+
+        try
+        {
+            var op = raw.ImageOtherParams;
+            meta.Iso = op.IsoSpeed;
+            meta.ShutterSpeed = op.Shutter;
+            meta.Aperture = op.Aperture;
+            meta.FocalLength = op.FocalLength;
+            if (op.Timestamp > 0)
+            {
+                meta.CaptureTime = DateTimeOffset.FromUnixTimeSeconds(op.Timestamp).LocalDateTime;
+            }
+        }
+        catch { }
+
+        try
+        {
+            var l = raw.LensInfo;
+            meta.LensModel = l.Lens ?? l.LensMake ?? "";
+            meta.FocalLengthIn35mm = l.FocalLengthIn35mmFormat;
+        }
+        catch { }
+
+        try
+        {
+            var fi = new FileInfo(path);
+            if (fi.Exists)
+            {
+                meta.FileSizeBytes = fi.Length;
+                if (!meta.CaptureTime.HasValue)
+                    meta.CaptureTime = fi.LastWriteTime;
+            }
+        }
+        catch { }
+
+        return meta;
+    }
+
+    public static Develop.PhotoMetadata ReadMetadata(string path)
+    {
+        var meta = new Develop.PhotoMetadata();
+        try
+        {
+            var fi = new FileInfo(path);
+            if (fi.Exists)
+            {
+                meta.FileSizeBytes = fi.Length;
+                meta.CaptureTime = fi.LastWriteTime;
+            }
+        }
+        catch { }
+
+        if (IsRawPath(path))
+        {
+            LibRawNative.EnsureLoaded();
+            lock (LibRawGate)
+            {
+                try
+                {
+                    using var raw = RawContext.OpenFile(path);
+                    int nw = raw.Width > 0 ? raw.Width : raw.RawWidth;
+                    int nh = raw.Height > 0 ? raw.Height : raw.RawHeight;
+                    return ExtractMetadata(raw, path, nw, nh);
+                }
+                catch { }
+            }
+            return meta;
+        }
+
+        try
+        {
+            var info = SixLabors.ImageSharp.Image.Identify(path);
+            if (info != null)
+            {
+                meta.Width = info.Width;
+                meta.Height = info.Height;
+                var exif = info.Metadata.ExifProfile;
+                if (exif != null)
+                {
+                    meta.CameraMake = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Make)?.Value?.ToString() ?? "";
+                    meta.CameraModel = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Model)?.Value?.ToString() ?? "";
+                    meta.LensModel = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.LensModel)?.Value?.ToString() ?? "";
+
+                    var fnum = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.FNumber)?.Value;
+                    if (fnum is SixLabors.ImageSharp.Rational rF && rF.Denominator > 0)
+                        meta.Aperture = (float)rF.Numerator / rF.Denominator;
+
+                    var expTime = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.ExposureTime)?.Value;
+                    if (expTime is SixLabors.ImageSharp.Rational rE && rE.Denominator > 0)
+                        meta.ShutterSpeed = (float)rE.Numerator / rE.Denominator;
+
+                    var isoVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.ISOSpeedRatings)?.Value;
+                    if (isoVal != null && isoVal.Length > 0) meta.Iso = isoVal[0];
+
+                    var focalVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.FocalLength)?.Value;
+                    if (focalVal is SixLabors.ImageSharp.Rational rFocal && rFocal.Denominator > 0)
+                        meta.FocalLength = (float)rFocal.Numerator / rFocal.Denominator;
+
+                    var focal35 = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.FocalLengthIn35mmFilm)?.Value;
+                    if (focal35 is ushort f35) meta.FocalLengthIn35mm = f35;
+
+                    var dateVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTimeOriginal)?.Value?.ToString();
+                    if (!string.IsNullOrEmpty(dateVal) && DateTime.TryParseExact(dateVal, "yyyy:MM:dd HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var dt))
+                    {
+                        meta.CaptureTime = dt;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return meta;
     }
 
     public static RasterBuffer DecodeFull(string path)

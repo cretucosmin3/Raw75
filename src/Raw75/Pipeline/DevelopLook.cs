@@ -23,6 +23,7 @@ internal sealed class DevelopLook : IDisposable
     private bool _loggedOk;
     private bool _dirty = true;
     private bool _cachedCrop;
+    private bool _cachedClipping;
     private float _cachedTx, _cachedTy, _cachedTw = 1f, _cachedTh = 1f;
     private int _cachedFw, _cachedFh;
 
@@ -47,7 +48,8 @@ internal sealed class DevelopLook : IDisposable
         float viewCropW = float.NaN,
         float viewCropH = float.NaN,
         int frameW = 0,
-        int frameH = 0)
+        int frameH = 0,
+        bool showClipping = false)
     {
         if (Failed || canvas == null || source == null || source.Handle == IntPtr.Zero)
             return false;
@@ -65,6 +67,7 @@ internal sealed class DevelopLook : IDisposable
         {
             bool needRebind = _dirty
                 || _cachedCrop != applyCrop
+                || _cachedClipping != showClipping
                 || _cachedTx != tileX || _cachedTy != tileY
                 || _cachedTw != tileW || _cachedTh != tileH
                 || _cachedFw != frameW || _cachedFh != frameH
@@ -86,6 +89,7 @@ internal sealed class DevelopLook : IDisposable
 
                 _dirty = false;
                 _cachedCrop = applyCrop;
+                _cachedClipping = showClipping;
                 _cachedTx = tileX;
                 _cachedTy = tileY;
                 _cachedTw = tileW;
@@ -108,7 +112,7 @@ internal sealed class DevelopLook : IDisposable
                     uniforms, settings, source.Width, source.Height,
                     0f, 0f, 1f, 1f,
                     split: 0f, before: false, lutSize, lutAmount,
-                    fast: fast, applyCrop: applyCrop, srcLinear: srcLinear,
+                    fast: fast, applyCrop: applyCrop, srcLinear: srcLinear, showClipping: showClipping,
                     tileX: tileX, tileY: tileY, tileW: tileW, tileH: tileH,
                     viewCropX: float.NaN, viewCropY: float.NaN,
                     viewCropW: float.NaN, viewCropH: float.NaN,

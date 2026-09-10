@@ -199,6 +199,7 @@ public static class DevelopRenderer
         bool fast = false,
         bool applyCrop = true,
         bool srcLinear = true,
+        bool showClipping = false,
         float tileX = 0f,
         float tileY = 0f,
         float tileW = 1f,
@@ -305,6 +306,7 @@ public static class DevelopRenderer
         Set(u, "u_localShadows", s.EnableLocalContrast ? s.LocalContrastShadows / 100f : 0f);
         Set(u, "u_localMidtones", s.EnableLocalContrast ? s.LocalContrastMidtones / 100f : 0.5f);
         Set(u, "u_localFast", fast ? 1f : 0f);
+        Set(u, "u_showClipping", showClipping ? 1f : 0f);
     }
 
     private static void Set(SKRuntimeEffectUniforms u, string name, float value)
@@ -472,6 +474,7 @@ public static class DevelopRenderer
             uniform float u_localShadows;
             uniform float u_localMidtones;
             uniform float u_localFast;
+            uniform float u_showClipping;
 
             // ref: local laplacian
             float curve_scalar(float x, float g, float sigma, float shadows, float highlights, float clarity) {
@@ -1169,6 +1172,15 @@ public static class DevelopRenderer
                 float3 baseDisp = u_srcLinear > 0.5 ? to_srgb(sigmoid_rgb(lin)) : orig.rgb;
                 float3 outc = mix(baseDisp, disp, lookAmt);
                 outc = clamp(outc, 0.0, 1.0);
+
+                if (u_showClipping > 0.5) {
+                    if (outc.r >= 0.992 || outc.g >= 0.992 || outc.b >= 0.992) {
+                        outc = float3(1.0, 0.05, 0.05);
+                    } else if (outc.r <= 0.008 && outc.g <= 0.008 && outc.b <= 0.008) {
+                        outc = float3(0.05, 0.35, 1.0);
+                    }
+                }
+
                 return half4(outc, orig.a);
             }
         ";
