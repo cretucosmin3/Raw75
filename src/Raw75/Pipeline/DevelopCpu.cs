@@ -62,7 +62,8 @@ internal static class DevelopCpu
             Math.Abs(s.LocalContrastDetail) > 0.001f ||
             Math.Abs(s.LocalContrastHighlights) > 0.001f ||
             Math.Abs(s.LocalContrastShadows) > 0.001f ||
-            Math.Abs(s.LocalContrastMidtones - 50.0f) > 0.5f);
+            Math.Abs(s.LocalContrastMidtones - 50.0f) > 0.5f ||
+            Math.Abs(s.Texture) > 0.001f);
         bool neighbor = doDenoise;
         bool needBuffer = hasColorRecon || hasLocalContrast || neighbor || doGrain;
 
@@ -107,6 +108,24 @@ internal static class DevelopCpu
                     r = ToLin1(rgba![si] / 255f);
                     g = ToLin1(rgba[si + 1] / 255f);
                     b = ToLin1(rgba[si + 2] / 255f);
+                }
+
+                // Lens vignetting compensation / creative vignette
+                if (s.EnableGeometry && MathF.Abs(s.VignetteAmount) > 0.001f)
+                {
+                    float aspect = (float)sw / Math.Max(sh, 1);
+                    float su = (sx + 0.5f) / sw;
+                    float sv = (sy + 0.5f) / sh;
+                    float dx = (su - 0.5f) * aspect;
+                    float dy = (sv - 0.5f);
+                    float maxDist = MathF.Sqrt(0.25f * aspect * aspect + 0.25f);
+                    float d = MathF.Sqrt(dx * dx + dy * dy) / maxDist;
+                    float mp = Math.Clamp(s.VignetteMidpoint / 100f, 0.05f, 0.95f);
+                    float vFactor = Smooth(d, mp * 0.40f, 1.15f);
+                    float gain = MathF.Pow(2f, (s.VignetteAmount / 100f) * 2.5f * vFactor);
+                    r = MathF.Max(r * gain, 0f);
+                    g = MathF.Max(g * gain, 0f);
+                    b = MathF.Max(b * gain, 0f);
                 }
 
                 // Highlight reconstruction (step 2)
@@ -216,7 +235,7 @@ internal static class DevelopCpu
         // ref: darktable src/iop/bilat.c, src/common/locallaplacian.c
         if (hasLocalContrast)
         {
-            ApplyLocalContrast(look, dw, dh, s.LocalContrastDetail, s.LocalContrastMidtones, s.LocalContrastShadows, s.LocalContrastHighlights, fast);
+            ApplyLocalContrast(look, dw, dh, s.LocalContrastDetail, s.LocalContrastMidtones, s.LocalContrastShadows, s.LocalContrastHighlights, s.Texture / 100f, fast);
         }
 
         // Denoise (step 9) + Tone curve (step 12)
@@ -493,6 +512,31 @@ internal static class DevelopCpu
         if (g < 0f) g = 0f;
         if (b < 0f) b = 0f;
 
+        // Dehaze: Atmospheric scattering transmission recovery / mist
+        if (s.EnableLocalContrast && MathF.Abs(s.Dehaze) > 0.001f)
+        {
+            float dehazeAmt = s.Dehaze / 100f;
+            float lumD = MathF.Max(Luma(r, g, b), 0.0001f);
+            float darkCh = MathF.Min(r, MathF.Min(g, b));
+            float hazeRatio = Math.Clamp(darkCh / lumD, 0f, 1f);
+            if (dehazeAmt > 0f)
+            {
+                float t = Math.Clamp(1f - dehazeAmt * hazeRatio * 0.70f, 0.20f, 1f);
+                float airScale = MathF.Min(lumD, 1f) * (1f - t);
+                r = MathF.Max((r - 0.80f * airScale) / t, 0f);
+                g = MathF.Max((g - 0.84f * airScale) / t, 0f);
+                b = MathF.Max((b - 0.90f * airScale) / t, 0f);
+            }
+            else
+            {
+                float mist = -dehazeAmt * 0.50f * hazeRatio;
+                float airScale = MathF.Max(lumD, 0.2f);
+                r = r * (1f - mist) + 0.80f * airScale * mist;
+                g = g * (1f - mist) + 0.84f * airScale * mist;
+                b = b * (1f - mist) + 0.90f * airScale * mist;
+            }
+        }
+
         lum = Luma(r, g, b);
         float mx = r > g ? r : g;
         if (b > mx) mx = b;
@@ -507,6 +551,41 @@ internal static class DevelopCpu
         r = lum + (r - lum) * (1f + sat);
         g = lum + (g - lum) * (1f + sat);
         b = lum + (b - lum) * (1f + sat);
+
+        // Color Grading (Split Toning)
+        if (s.EnableHsl && (s.GradingShadowSat > 0.001f || s.GradingHighlightSat > 0.001f))
+        {
+            float lumG = MathF.Max(Luma(r, g, b), 0.00001f);
+            float evG = MathF.Log2(lumG / 0.18f) + (s.GradingBalance / 100f) * 1.5f;
+            float shdW = 1f - Smooth(evG, -2.5f, 0.5f);
+            float hlW = Smooth(evG, -0.5f, 2.5f);
+
+            if (s.GradingShadowSat > 0.001f && shdW > 0.001f)
+            {
+                HslToRgb(s.GradingShadowHue, 1f, 0.5f, out float tr, out float tg, out float tb);
+                float tLum = Luma(tr, tg, tb);
+                float vr = tr - tLum;
+                float vg = tg - tLum;
+                float vb = tb - tLum;
+                float amt = (s.GradingShadowSat / 100f) * shdW * 0.50f * lumG;
+                r = MathF.Max(r + vr * amt, 0f);
+                g = MathF.Max(g + vg * amt, 0f);
+                b = MathF.Max(b + vb * amt, 0f);
+            }
+
+            if (s.GradingHighlightSat > 0.001f && hlW > 0.001f)
+            {
+                HslToRgb(s.GradingHighlightHue, 1f, 0.5f, out float tr, out float tg, out float tb);
+                float tLum = Luma(tr, tg, tb);
+                float vr = tr - tLum;
+                float vg = tg - tLum;
+                float vb = tb - tLum;
+                float amt = (s.GradingHighlightSat / 100f) * hlW * 0.50f * lumG;
+                r = MathF.Max(r + vr * amt, 0f);
+                g = MathF.Max(g + vg * amt, 0f);
+                b = MathF.Max(b + vb * amt, 0f);
+            }
+        }
     }
 
     // ref: darktable src/iop/sigmoid.c
@@ -541,6 +620,34 @@ internal static class DevelopCpu
         float t = (x - a) / (b - a);
         t = Clamp01(t);
         return t * t * (3f - 2f * t);
+    }
+
+    private static void HslToRgb(float hDeg, float s, float l, out float r, out float g, out float b)
+    {
+        float h = (hDeg % 360f) / 360f;
+        if (h < 0f) h += 1f;
+        s = Math.Clamp(s, 0f, 1f);
+        l = Math.Clamp(l, 0f, 1f);
+        if (s < 1e-5f)
+        {
+            r = g = b = l;
+            return;
+        }
+        float q = l < 0.5f ? l * (1f + s) : l + s - l * s;
+        float p = 2f * l - q;
+        r = Hue2Rgb(p, q, h + 0.3333333f);
+        g = Hue2Rgb(p, q, h);
+        b = Hue2Rgb(p, q, h - 0.3333333f);
+    }
+
+    private static float Hue2Rgb(float p, float q, float t)
+    {
+        if (t < 0f) t += 1f;
+        if (t > 1f) t -= 1f;
+        if (t < 0.1666667f) return p + (q - p) * 6f * t;
+        if (t < 0.5f) return q;
+        if (t < 0.6666667f) return p + (q - p) * (0.6666667f - t) * 6f;
+        return p;
     }
 
     private static float ToLin1(float s)
@@ -1091,9 +1198,9 @@ internal static class DevelopCpu
 
     // ref: darktable src/iop/bilat.c, src/common/locallaplacian.c
     private static void ApplyLocalContrast(
-        float[] look, int w, int h, float detail, float midtones, float shadows, float highlights, bool fast)
+        float[] look, int w, int h, float detail, float midtones, float shadows, float highlights, float texture, bool fast)
     {
-        if (Math.Abs(detail) < 1e-4f && Math.Abs(highlights) < 1e-4f && Math.Abs(shadows) < 1e-4f && Math.Abs(midtones - 50f) < 0.1f)
+        if (Math.Abs(detail) < 1e-4f && Math.Abs(highlights) < 1e-4f && Math.Abs(shadows) < 1e-4f && Math.Abs(midtones - 50f) < 0.1f && Math.Abs(texture) < 1e-4f)
             return;
 
         float sigma = Math.Clamp(midtones / 100f, 0.05f, 1f);
@@ -1191,6 +1298,12 @@ internal static class DevelopCpu
                 // Edge-guided halo suppression matching GPU SkSL
                 float edgeFactor = MathF.Exp(-grad * grad / 0.0064f);
                 float finalL = xL + (newL - xL) * edgeFactor;
+                if (MathF.Abs(texture) > 0.001f)
+                {
+                    float microAvg = 0.25f * (l1 + l2 + l3 + l4);
+                    float microDiff = xL - microAvg;
+                    finalL += texture * microDiff * 0.75f * edgeFactor;
+                }
                 finalL = Math.Clamp(finalL, 0.0001f, 2.0f);
 
                 float newLum = finalL * finalL * finalL;

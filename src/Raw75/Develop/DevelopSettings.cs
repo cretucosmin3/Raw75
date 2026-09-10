@@ -61,11 +61,20 @@ public sealed class DevelopSettings
     public float ColorReconstructionAmount { get; set; } = 0.0f;  // 0..100
     public float ColorReconstructionSpatial { get; set; } = 0.0f; // 0..100
 
-    // --- Local contrast ---
+    // --- Local contrast & Atmosphere ---
     public float LocalContrastDetail { get; set; } = 0.0f;     // -1..4, 0 = off
+    public float Dehaze { get; set; } = 0.0f;                  // -100..100
+    public float Texture { get; set; } = 0.0f;                 // -100..100
     public float LocalContrastHighlights { get; set; } = 0.0f; // -100..100
     public float LocalContrastShadows { get; set; } = 0.0f;    // -100..100
     public float LocalContrastMidtones { get; set; } = 50.0f;  // 0..100
+
+    // --- Color Grading (Split Toning) ---
+    public float GradingShadowHue { get; set; } = 220.0f;      // 0..360 (default teal/blue)
+    public float GradingShadowSat { get; set; } = 0.0f;        // 0..100
+    public float GradingHighlightHue { get; set; } = 40.0f;    // 0..360 (default warm amber)
+    public float GradingHighlightSat { get; set; } = 0.0f;     // 0..100
+    public float GradingBalance { get; set; } = 0.0f;          // -100..100
 
     // Reds, Oranges, Yellows, Greens, Aquas, Blues
     public HslBand[] Hsl { get; set; } = CreateHsl();
@@ -87,6 +96,8 @@ public sealed class DevelopSettings
     public int Rotate90 { get; set; }     // 0..3 quarter turns CW
     public bool FlipH { get; set; }
     public bool FlipV { get; set; }
+    public float VignetteAmount { get; set; } = 0.0f;    // -100..100 (optical falloff correction or creative vignette)
+    public float VignetteMidpoint { get; set; } = 50.0f; // 0..100
 
     [JsonIgnore]
     public bool HasCrop =>
@@ -143,9 +154,16 @@ public sealed class DevelopSettings
         ColorReconstructionAmount = src.ColorReconstructionAmount;
         ColorReconstructionSpatial = src.ColorReconstructionSpatial;
         LocalContrastDetail = src.LocalContrastDetail;
+        Dehaze = src.Dehaze;
+        Texture = src.Texture;
         LocalContrastHighlights = src.LocalContrastHighlights;
         LocalContrastShadows = src.LocalContrastShadows;
         LocalContrastMidtones = src.LocalContrastMidtones;
+        GradingShadowHue = src.GradingShadowHue;
+        GradingShadowSat = src.GradingShadowSat;
+        GradingHighlightHue = src.GradingHighlightHue;
+        GradingHighlightSat = src.GradingHighlightSat;
+        GradingBalance = src.GradingBalance;
         Sharpen = src.Sharpen;
         Noise = src.Noise;
         DenoiseLuma = src.DenoiseLuma;
@@ -160,6 +178,8 @@ public sealed class DevelopSettings
         Rotate90 = src.Rotate90;
         FlipH = src.FlipH;
         FlipV = src.FlipV;
+        VignetteAmount = src.VignetteAmount;
+        VignetteMidpoint = src.VignetteMidpoint;
         if (src.Hsl != null && src.Hsl.Length == 6)
             Array.Copy(src.Hsl, Hsl, 6);
     }
@@ -186,12 +206,16 @@ public sealed class DevelopSettings
             && SigmoidContrast == o.SigmoidContrast && SigmoidSkew == o.SigmoidSkew
             && ReconstructionMode == o.ReconstructionMode && HighlightThreshold == o.HighlightThreshold
             && ColorReconstructionAmount == o.ColorReconstructionAmount && ColorReconstructionSpatial == o.ColorReconstructionSpatial
-            && LocalContrastDetail == o.LocalContrastDetail && LocalContrastHighlights == o.LocalContrastHighlights
+            && LocalContrastDetail == o.LocalContrastDetail && Dehaze == o.Dehaze && Texture == o.Texture
+            && LocalContrastHighlights == o.LocalContrastHighlights
             && LocalContrastShadows == o.LocalContrastShadows && LocalContrastMidtones == o.LocalContrastMidtones
+            && GradingShadowHue == o.GradingShadowHue && GradingShadowSat == o.GradingShadowSat
+            && GradingHighlightHue == o.GradingHighlightHue && GradingHighlightSat == o.GradingHighlightSat && GradingBalance == o.GradingBalance
             && Sharpen == o.Sharpen && Noise == o.Noise && DenoiseLuma == o.DenoiseLuma && DenoiseChroma == o.DenoiseChroma
             && LutPath == o.LutPath && LutAmount == o.LutAmount
             && CropX == o.CropX && CropY == o.CropY && CropW == o.CropW && CropH == o.CropH
             && Straighten == o.Straighten && Rotate90 == o.Rotate90 && FlipH == o.FlipH && FlipV == o.FlipV
+            && VignetteAmount == o.VignetteAmount && VignetteMidpoint == o.VignetteMidpoint
             && HslEqual(o);
     }
 
