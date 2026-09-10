@@ -143,36 +143,36 @@ public sealed class WorkspaceView : View
         AddElement(Bar("Top", Theme.TopBar, 0, 0, W, top, Anchor.Left | Anchor.Right | Anchor.Top));
         var brand = new BrandMark
         {
-            Transform = new Transform(16, 12, 92, 24)
+            Transform = new Transform(16, (top - 26) * 0.5f, 100, 26)
             {
                 Anchor = Anchor.Left | Anchor.Top
             }
         };
         AddElement(brand);
-        var open = Chip("Open", 118, 10, 80, 28, iconName: "open");
+        var open = Chip("Open", 124, (top - 32) * 0.5f, 84, 32, iconName: "open");
         open.Transform.Anchor = Anchor.Left | Anchor.Top;
         open.Clicked += OpenFiles;
-        var folder = Chip("Folder", 204, 10, 88, 28, iconName: "folder");
+        var folder = Chip("Folder", 214, (top - 32) * 0.5f, 92, 32, iconName: "folder");
         folder.Transform.Anchor = Anchor.Left | Anchor.Top;
         folder.Clicked += OpenWorkspace;
 
-        _btnViewerMode = Chip("Viewer", 298, 10, 92, 28, iconName: "viewer");
+        _btnViewerMode = Chip("Viewer", 312, (top - 32) * 0.5f, 96, 32, iconName: "viewer");
         _btnViewerMode.Transform.Anchor = Anchor.Left | Anchor.Top;
         _btnViewerMode.Toggled = true;
         _btnViewerMode.Clicked += () => SetViewMode(false);
 
-        _btnGalleryMode = Chip("Gallery", 396, 10, 92, 28, iconName: "gallery");
+        _btnGalleryMode = Chip("Gallery", 414, (top - 32) * 0.5f, 96, 32, iconName: "gallery");
         _btnGalleryMode.Transform.Anchor = Anchor.Left | Anchor.Top;
         _btnGalleryMode.Clicked += () => SetViewMode(true);
 
-        _photoTitleBadge = Label("PhotoTitle", "", 500, 12, W - 500 - 212, 24, Theme.TextDim, 12, 500);
+        _photoTitleBadge = Label("PhotoTitle", "", 520, 12, W - 520 - 232, 24, Theme.TextDim, 13, 500);
         _photoTitleBadge.Style.Text.Alignment = TextAlign.Left;
         _photoTitleBadge.Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top;
 
-        var settings = Chip("Settings", W - 204, 10, 96, 28, iconName: "settings");
+        var settings = Chip("Settings", W - 222, (top - 32) * 0.5f, 104, 32, iconName: "settings");
         settings.Transform.Anchor = Anchor.Right | Anchor.Top;
         settings.Clicked += OpenSettings;
-        var exp = Chip("Export", W - 100, 10, 88, 28, primary: true, iconName: "export");
+        var exp = Chip("Export", W - 112, (top - 32) * 0.5f, 96, 32, primary: true, iconName: "export");
         exp.Transform.Anchor = Anchor.Right | Anchor.Top;
         exp.Clicked += StartExport;
 
@@ -182,7 +182,7 @@ public sealed class WorkspaceView : View
         float leftInset = 10f;
         _nav = new NavigatorBox
         {
-            Transform = new Transform(leftInset, top + leftInset, L - leftInset * 2, 148)
+            Transform = new Transform(leftInset, top + leftInset, L - leftInset * 2, 168)
             {
                 Anchor = Anchor.Left | Anchor.Top
             }
@@ -205,7 +205,7 @@ public sealed class WorkspaceView : View
         };
         AddElement(_nav);
 
-        float presetTop = top + leftInset + 148 + 14f;
+        float presetTop = top + leftInset + 168 + 14f;
         _presets = new PresetList
         {
             Transform = new Transform(leftInset, presetTop, L - leftInset * 2, H - presetTop - leftInset - film - st)
@@ -224,14 +224,14 @@ public sealed class WorkspaceView : View
         float rightInset = 10f;
         _histogram = new HistogramView
         {
-            Transform = new Transform(W - R + rightInset, top + rightInset, R - rightInset * 2, 88)
+            Transform = new Transform(W - R + rightInset, top + rightInset, R - rightInset * 2, 96)
             {
                 Anchor = Anchor.Right | Anchor.Top
             }
         };
         AddElement(_histogram);
 
-        float rightDockTop = top + rightInset + 88 + 14f;
+        float rightDockTop = top + rightInset + 96 + 14f;
         var rightDock = new RightColumn
         {
             Transform = new Transform(W - R, rightDockTop, R, H - rightDockTop - film - st)
@@ -315,9 +315,9 @@ public sealed class WorkspaceView : View
 
         _toolsBar = Bar("Tools", Theme.PanelAlt, photoX, photoY + photoH, photoW, tool,
             Anchor.Left | Anchor.Right | Anchor.Bottom);
-        float tx = photoX + 8;
+        float tx = photoX + 10;
         float ty = photoY + photoH + 2;
-        _btnCrop = Tool("Crop", tx, ty, 68, iconName: "crop"); tx += 72;
+        _btnCrop = Tool("Crop", tx, ty, 74, iconName: "crop"); tx += 78;
         _btnCrop.Clicked += ToggleCrop;
         _photo.CropCommitted += () =>
         {
@@ -342,9 +342,9 @@ public sealed class WorkspaceView : View
             }
             PushLook(fast: false, settle: true);
         };
-        _btnBefore = Tool("Before", tx, ty, 76, iconName: "before"); tx += 80;
+        _btnBefore = Tool("Before", tx, ty, 82, iconName: "before"); tx += 86;
         _btnBefore.Clicked += ToggleBefore;
-        _btnSplit = Tool("Split", tx, ty, 68, iconName: "split"); tx += 72;
+        _btnSplit = Tool("Split", tx, ty, 74, iconName: "split"); tx += 78;
         _btnSplit.Clicked += () =>
         {
             _btnSplit.Toggled = !_btnSplit.Toggled;
@@ -352,17 +352,17 @@ public sealed class WorkspaceView : View
             var d = _session.Active;
             _photo.SetBefore(d?.Proxy);
         };
-        var rotL = Tool("-90°", tx, ty, 66, iconName: "rotate_left"); tx += 70;
+        var rotL = Tool("-90°", tx, ty, 70, iconName: "rotate_left"); tx += 74;
         rotL.Clicked += () => Rotate(-1);
-        var rotR = Tool("+90°", tx, ty, 66, iconName: "rotate_right"); tx += 70;
+        var rotR = Tool("+90°", tx, ty, 70, iconName: "rotate_right"); tx += 74;
         rotR.Clicked += () => Rotate(1);
-        var flipH = Tool("Flip H", tx, ty, 72, iconName: "flip_h"); tx += 76;
+        var flipH = Tool("Flip H", tx, ty, 78, iconName: "flip_h"); tx += 82;
         flipH.Clicked += () => Flip(h: true);
-        var flipV = Tool("Flip V", tx, ty, 72, iconName: "flip_v"); tx += 76;
+        var flipV = Tool("Flip V", tx, ty, 78, iconName: "flip_v"); tx += 82;
         flipV.Clicked += () => Flip(h: false);
-        var hdr = Tool("HDR", tx, ty, 64, iconName: "hdr");
+        var hdr = Tool("HDR", tx, ty, 68, iconName: "hdr");
         hdr.Clicked += MergeHdr;
-        _zoomLabel = Label("ZoomPct", "Fit", photoX + photoW - 70, photoY + photoH + 6, 64, 20, Theme.TextDim, 11, 400);
+        _zoomLabel = Label("ZoomPct", "Fit", photoX + photoW - 74, photoY + photoH + 6, 68, 20, Theme.TextDim, 12, 500);
 
         _film = new Filmstrip
         {
@@ -387,7 +387,7 @@ public sealed class WorkspaceView : View
         AddElement(_film);
 
         _status = Bar("Status", Theme.Filmstrip, 0, H - st, W, st, Anchor.Left | Anchor.Right | Anchor.Bottom);
-        _status.Style.Text = new TextStyle { Color = Theme.TextDim, Size = 11, Padding = 8, Alignment = TextAlign.Left };
+        _status.Style.Text = new TextStyle { Color = Theme.TextDim, Size = 12, Padding = 10, Alignment = TextAlign.Left };
         _status.Text = "Drop a RAW or Open.";
 
         _export = new ExportDialog();

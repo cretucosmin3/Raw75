@@ -15,9 +15,9 @@ namespace Raw75.Views;
 /// <summary>Modal settings: vertical tabs. Dev tab dumps a memory inventory to disk.</summary>
 public sealed class SettingsDialog : VisualElement
 {
-    private const float CardW = 760f;
-    private const float CardH = 500f;
-    private const float TabW = 128f;
+    private const float CardW = 800f;
+    private const float CardH = 530f;
+    private const float TabW = 140f;
 
     private readonly VisualElement _card;
     private readonly VisualElement _title;
@@ -52,7 +52,7 @@ public sealed class SettingsDialog : VisualElement
         Style = new ElementStyle { BackColor = new SKColor(0, 0, 0, 160) };
 
         _card = Box("Card", Theme.Panel, Theme.Radius);
-        _title = Label("Title", "Settings", Theme.Text, 16, 700, TextAlign.Left);
+        _title = Label("Title", "Settings", Theme.Text, 18, 700, TextAlign.Left);
         _close = new IconButton("Close");
         _close.Clicked += Close;
 
@@ -62,10 +62,10 @@ public sealed class SettingsDialog : VisualElement
         _tabDev.Clicked += () => SetTab("Dev");
 
         _panelGeneral = Box("PanelGeneral", Theme.PanelAlt, 6f);
-        _genWorkspace = Label("GenWs", "", Theme.Text, 13, 500, TextAlign.Left);
-        _genPhotos = Label("GenPhotos", "", Theme.Text, 13, 500, TextAlign.Left);
-        _genCache = Label("GenCache", "", Theme.TextDim, 12, 400, TextAlign.Left);
-        _genLog = Label("GenLog", "", Theme.TextDim, 11, 400, TextAlign.Left);
+        _genWorkspace = Label("GenWs", "", Theme.Text, 14, 500, TextAlign.Left);
+        _genPhotos = Label("GenPhotos", "", Theme.Text, 14, 500, TextAlign.Left);
+        _genCache = Label("GenCache", "", Theme.TextDim, 12.5f, 400, TextAlign.Left);
+        _genLog = Label("GenLog", "", Theme.TextDim, 12, 400, TextAlign.Left);
         _panelGeneral.AddChild(_genWorkspace);
         _panelGeneral.AddChild(_genPhotos);
         _panelGeneral.AddChild(_genCache);
@@ -73,12 +73,12 @@ public sealed class SettingsDialog : VisualElement
 
         _panelDev = Box("PanelDev", Theme.PanelAlt, 6f);
         _dumpHint = Label("DumpHint",
-            "Lists every photo buffer the session is holding (proxy, look, linear RAW, GPU retain) plus process RSS. Written to memory-dump.log next to blossom.log.",
-            Theme.TextDim, 12, 400, TextAlign.Left);
-        _dumpBtn = new IconButton("Write memory log", primary: true);
+            "Generate an on-disk diagnostic report of active managed objects, cached images, and native handles.",
+            Theme.TextDim, 13, 400, TextAlign.Left);
+        _dumpBtn = new IconButton("Dump Memory Inventory", "save");
         _dumpBtn.Clicked += Dump;
-        _dumpSummary = Label("DumpSummary", "No dump yet.", Theme.Text, 12, 500, TextAlign.Left);
-        _dumpPath = Label("DumpPath", "", Theme.TextDim, 11, 400, TextAlign.Left);
+        _dumpSummary = Label("DumpSummary", "No dump yet.", Theme.Text, 13, 500, TextAlign.Left);
+        _dumpPath = Label("DumpPath", "", Theme.TextDim, 12, 400, TextAlign.Left);
         _panelDev.AddChild(_dumpHint);
         _panelDev.AddChild(_dumpBtn);
         _panelDev.AddChild(_dumpSummary);
@@ -200,17 +200,17 @@ public sealed class SettingsDialog : VisualElement
         _card.Transform.SetAbsoluteFrame(cardX, cardY, CardW, CardH);
 
         const float pad = 18f;
-        _title.Transform.SetAbsoluteFrame(cardX + pad, cardY + 14, 240, 24);
-        _close.Transform.SetAbsoluteFrame(cardX + CardW - pad - 88, cardY + 12, 88, 28);
+        _title.Transform.SetAbsoluteFrame(cardX + pad, cardY + 14, 240, 26);
+        _close.Transform.SetAbsoluteFrame(cardX + CardW - pad - 96, cardY + 12, 96, 32);
 
         float tabX = cardX + 10;
-        float tabY = cardY + 52;
-        float tabH = 32f;
+        float tabY = cardY + 54;
+        float tabH = 34f;
         _tabGeneral.Transform.SetAbsoluteFrame(tabX, tabY, TabW, tabH);
         _tabDev.Transform.SetAbsoluteFrame(tabX, tabY + tabH + 6, TabW, tabH);
 
         float px = cardX + 10 + TabW + 12;
-        float py = cardY + 52;
+        float py = cardY + 54;
         float pw = cardX + CardW - pad - px;
         float ph = cardY + CardH - pad - py;
         _panelGeneral.Transform.SetAbsoluteFrame(px, py, pw, ph);
@@ -225,7 +225,7 @@ public sealed class SettingsDialog : VisualElement
         _genLog.Transform.SetAbsoluteFrame(ix, iy + 124, iw, 40);
 
         _dumpHint.Transform.SetAbsoluteFrame(ix, iy, iw, 56);
-        _dumpBtn.Transform.SetAbsoluteFrame(ix, iy + 68, 200, 32);
+        _dumpBtn.Transform.SetAbsoluteFrame(ix, iy + 68, 220, 34);
         _dumpSummary.Transform.SetAbsoluteFrame(ix, iy + 112, iw, 48);
         _dumpPath.Transform.SetAbsoluteFrame(ix, iy + 164, iw, 36);
     }

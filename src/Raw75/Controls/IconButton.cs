@@ -91,7 +91,7 @@ public class IconButton : VisualElement
             Text = new TextStyle
             {
                 Color = Theme.Text,
-                Size = 11,
+                Size = 12,
                 Weight = 500,
                 Alignment = TextAlign.Center,
                 Padding = 0
@@ -124,20 +124,17 @@ public class IconButton : VisualElement
         {
             if (args.Button != (int)MouseButton.Left) return;
             _pressed = true;
-            args.Handled = true;
             ApplyChrome();
         };
         Events.OnMouseUp += (_, args) =>
         {
             if (args.Button != (int)MouseButton.Left) return;
-            _pressed = false;
-            ApplyChrome();
-        };
-        Events.OnClick += (_, args) =>
-        {
-            if (args.Button != (int)MouseButton.Left) return;
-            Clicked?.Invoke();
-            args.Handled = true;
+            if (_pressed)
+            {
+                _pressed = false;
+                ApplyChrome();
+                Clicked?.Invoke();
+            }
         };
 
         ApplyChrome();
@@ -157,11 +154,12 @@ public class IconButton : VisualElement
             if (_iconElement != null)
             {
                 RemoveChild(_iconElement);
+                _iconElement.Dispose();
                 _iconElement = null;
             }
             UpdateTextLayout();
+            ApplyChrome();
             InvalidateLayout();
-            InvalidatePaint();
             return;
         }
 
@@ -170,9 +168,11 @@ public class IconButton : VisualElement
             _iconElement = new VisualElement
             {
                 Name = $"{Name}_Icon",
-                Interactive = false,
+                IsClickthrough = true,
                 BackgroundImageScale = ImageScaleMode.Contain,
-                BackgroundImageTintBlendMode = SKBlendMode.SrcIn
+                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                BackgroundImageTintColor = Theme.Text,
+                Style = new ElementStyle { BackColor = SKColors.Transparent }
             };
             AddChild(_iconElement);
         }
@@ -194,7 +194,7 @@ public class IconButton : VisualElement
             {
                 Style.Text.Alignment = TextAlign.Left;
             }
-            Padding = new Thickness(25f, 0, 6f, 0);
+            Padding = new Thickness(29f, 0, 8f, 0);
         }
         else
         {
@@ -218,15 +218,15 @@ public class IconButton : VisualElement
 
         if (hasText)
         {
-            float sz = 13f;
+            float sz = 15f;
             _iconElement.Transform.Width = sz;
             _iconElement.Transform.Height = sz;
-            _iconElement.Transform.X = ox + 7f;
+            _iconElement.Transform.X = ox + 8f;
             _iconElement.Transform.Y = oy + (h - sz) / 2f;
         }
         else
         {
-            float sz = Math.Clamp(Math.Min(w - 6f, h - 6f), 12f, 16f);
+            float sz = Math.Clamp(Math.Min(w - 6f, h - 6f), 14f, 18f);
             _iconElement.Transform.Width = sz;
             _iconElement.Transform.Height = sz;
             _iconElement.Transform.X = ox + (w - sz) / 2f;
@@ -245,8 +245,8 @@ public class IconButton : VisualElement
             return new SKSize(w, h);
         }
 
-        float iconPad = _iconElement != null ? 20f : 0f;
-        float textW = Math.Max(52f, Text.Length * 7.5f + 16f + iconPad);
+        float iconPad = _iconElement != null ? 24f : 0f;
+        float textW = Math.Max(56f, Text.Length * 8f + 18f + iconPad);
         float width = maxWidth > 0 ? Math.Min(textW, maxWidth) : textW;
         return new SKSize(width, h);
     }

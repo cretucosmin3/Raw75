@@ -15,9 +15,9 @@ namespace Raw75.Controls;
 /// </summary>
 public class PresetList : VisualElement
 {
-    private const float HeaderH = 28f;
-    private const float SaveH = 24f;
-    private const float RowH = 26f;
+    private const float HeaderH = Theme.GroupHeadH;
+    private const float SaveH = Theme.ToolH;
+    private const float RowH = 28f;
 
     private readonly VisualElement _header;
     private readonly VisualElement _headerTitle;
@@ -63,7 +63,7 @@ public class PresetList : VisualElement
         _headerTitle = new VisualElement
         {
             Name = "PresetList_Title",
-            Text = "▾  PRESETS & LOOKS",
+            Text = "PRESETS & LOOKS",
             IsClickthrough = true,
             Style = new ElementStyle
             {
@@ -71,7 +71,7 @@ public class PresetList : VisualElement
                 Text = new TextStyle
                 {
                     Color = Theme.Text,
-                    Size = 11,
+                    Size = 12,
                     Weight = 600,
                     Alignment = TextAlign.Left,
                     Padding = 0
@@ -225,10 +225,10 @@ public class PresetList : VisualElement
                 Text = new TextStyle
                 {
                     Color = Theme.TextDim,
-                    Size = 11,
+                    Size = 12.5f,
                     Weight = 400,
                     Alignment = TextAlign.Left,
-                    Padding = 8
+                    Padding = 10
                 }
             };
 
@@ -289,7 +289,7 @@ public class PresetList : VisualElement
             float oy = Transform.Computed.Y;
             float w = Math.Max(1f, Transform.Width);
             float h = Math.Max(1f, Transform.Height);
-            Children[0].Transform.SetAbsoluteFrame(ox + w - 22, oy + (h - 18) * 0.5f, 18, 18);
+            Children[0].Transform.SetAbsoluteFrame(ox + w - 24, oy + (h - 20) * 0.5f, 20, 20);
         }
     }
 }

@@ -17,6 +17,7 @@ public class PanelGroup : VisualElement
 {
     private readonly VisualElement _header;
     private readonly CheckToggle _toggle;
+    private readonly VisualElement _chevronEl;
     private readonly VisualElement _titleEl;
     private readonly List<VisualElement> _actions = new();
     private readonly List<VisualElement> _body = new();
@@ -93,6 +94,16 @@ public class PanelGroup : VisualElement
         };
         _header.AddChild(_toggle);
 
+        _chevronEl = new VisualElement
+        {
+            Name = $"{Name}_Chevron",
+            IsClickthrough = true,
+            BackgroundImageScale = ImageScaleMode.Contain,
+            BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+            BackgroundImageTintColor = Theme.TextSecondary,
+        };
+        _header.AddChild(_chevronEl);
+
         _titleEl = new VisualElement
         {
             Name = $"{Name}_Title",
@@ -103,7 +114,7 @@ public class PanelGroup : VisualElement
                 Text = new TextStyle
                 {
                     Color = Theme.Text,
-                    Size = 11,
+                    Size = 12,
                     Weight = 600,
                     Alignment = TextAlign.Left,
                     Padding = 0
@@ -144,12 +155,12 @@ public class PanelGroup : VisualElement
 
     public void EnableReset(Action onReset, string tooltip = "Reset Section")
     {
-        AddHeaderAction("↺", tooltip, onReset, iconName: "rotate_left");
+        AddHeaderAction("Reset", tooltip, onReset, iconName: "rotate_left");
     }
 
     public void EnablePresets(Action onPresets, string tooltip = "Presets")
     {
-        AddHeaderAction("⋯", tooltip, onPresets, iconName: "dots");
+        AddHeaderAction("Presets", tooltip, onPresets, iconName: "dots");
     }
 
     public void AddHeaderAction(string label, string tooltip, Action onClick, bool isAccentHover = false, string? iconName = null)
@@ -175,7 +186,7 @@ public class PanelGroup : VisualElement
                 Text = new TextStyle
                 {
                     Color = Theme.TextSecondary,
-                    Size = 11,
+                    Size = 12,
                     Weight = 600,
                     Alignment = TextAlign.Center,
                     Padding = 0
@@ -275,26 +286,32 @@ public class PanelGroup : VisualElement
         _header.Transform.SetAbsoluteFrame(originX, originY, w, Theme.GroupHeadH);
 
         // Layout checkbox toggle on the far left
-        float toggleSize = 14f;
+        float toggleSize = 18f;
         float toggleX = originX + 8f;
         float toggleY = originY + (Theme.GroupHeadH - toggleSize) * 0.5f;
         _toggle.Transform.SetAbsoluteFrame(toggleX, toggleY, toggleSize, toggleSize);
+
+        // Layout chevron next to toggle
+        float chevSize = 12f;
+        float chevX = toggleX + toggleSize + 6f;
+        float chevY = originY + (Theme.GroupHeadH - chevSize) * 0.5f;
+        _chevronEl.Transform.SetAbsoluteFrame(chevX, chevY, chevSize, chevSize);
 
         // Layout action buttons (from right to left)
         float ax = originX + w - 8f;
         for (int i = _actions.Count - 1; i >= 0; i--)
         {
-            float btnW = 22f;
-            float btnH = 20f;
+            float btnW = 24f;
+            float btnH = 22f;
             ax -= btnW;
             _actions[i].Transform.SetAbsoluteFrame(ax, originY + (Theme.GroupHeadH - btnH) * 0.5f, btnW, btnH);
             ax -= 4f;
         }
 
-        // Layout title after the checkbox
-        float titleLeft = toggleX + toggleSize + 7f;
+        // Layout title after the chevron
+        float titleLeft = chevX + chevSize + 6f;
         float titleW = Math.Max(1f, ax - titleLeft);
-        _titleEl.Transform.SetAbsoluteFrame(titleLeft, originY + (Theme.GroupHeadH - 18f) * 0.5f, titleW, 18f);
+        _titleEl.Transform.SetAbsoluteFrame(titleLeft, originY + (Theme.GroupHeadH - 20f) * 0.5f, titleW, 20f);
 
         if (!_expanded) return;
 
@@ -321,12 +338,14 @@ public class PanelGroup : VisualElement
         {
             _titleEl.Style.Text.Color = _sectionEnabled ? Theme.Text : Theme.TextDisabled;
         }
+        _chevronEl.BackgroundImageTintColor = _sectionEnabled ? Theme.TextSecondary : Theme.TextDisabled;
         InvalidatePaint();
     }
 
     private void ApplyExpanded()
     {
-        _titleEl.Text = (_expanded ? "▾  " : "▸  ") + _title.ToUpperInvariant();
+        _chevronEl.BackgroundSvg = IconStore.LoadSvg(_expanded ? "chevron_down" : "chevron_right");
+        _titleEl.Text = _title.ToUpperInvariant();
         for (int i = 0; i < _body.Count; i++)
         {
             if (_body[i] != null)

@@ -12,9 +12,9 @@ namespace Raw75.Controls;
 /// <summary>Horizontal session strip: thumbs, names, click to select, optional close.</summary>
 public class Filmstrip : VisualElement
 {
-    private const float ThumbW = 84f;
+    private const float ThumbW = 96f;
     private const float Gap = 6f;
-    private const float NameH = 16f;
+    private const float NameH = 18f;
 
     private readonly List<Cell> _cells = new();
 
@@ -146,7 +146,7 @@ public class Filmstrip : VisualElement
                     Text = new TextStyle
                     {
                         Color = active ? Theme.Accent : Theme.TextDim,
-                        Size = 10,
+                        Size = 11.5f,
                         Weight = 400,
                         Alignment = TextAlign.Center,
                         Padding = 2
@@ -186,30 +186,28 @@ public class Filmstrip : VisualElement
             _close = new VisualElement
             {
                 Name = $"{Name}_Close",
-                Text = "×",
+                BackgroundSvg = IconStore.LoadSvg("cross"),
+                BackgroundImageScale = ImageScaleMode.Contain,
+                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                BackgroundImageTintColor = Theme.Text,
+                Padding = new Thickness(2.5f),
                 Style = new ElementStyle
                 {
                     BackColor = new SKColor(0, 0, 0, 160),
-                    Border = new BorderStyle { Width = 1, Color = Theme.HairlineSubtle, Roundness = 6 },
-                    Text = new TextStyle
-                    {
-                        Color = Theme.Text,
-                        Size = 11,
-                        Weight = 600,
-                        Alignment = TextAlign.Center,
-                        Padding = 0
-                    }
+                    Border = new BorderStyle { Width = 1, Color = Theme.HairlineSubtle, Roundness = 6 }
                 }
             };
             _close.Cursor = StandardCursor.Hand;
             _close.Events.OnMouseEnter += _ =>
             {
                 _close.Style.BackColor = new SKColor(220, 50, 40, 220);
+                _close.BackgroundImageTintColor = SKColors.White;
                 _close.InvalidatePaint();
             };
             _close.Events.OnMouseLeave += _ =>
             {
                 _close.Style.BackColor = new SKColor(0, 0, 0, 160);
+                _close.BackgroundImageTintColor = Theme.Text;
                 _close.InvalidatePaint();
             };
             _close.Events.OnClick += (_, args) =>
@@ -293,8 +291,8 @@ public class Filmstrip : VisualElement
 
             _thumb.Transform.SetAbsoluteFrame(originX + 4, originY + 4, w - 8, thumbH);
             _caption.Transform.SetAbsoluteFrame(originX + 2, originY + 4 + thumbH, w - 4, NameH);
-            _ready.Transform.SetAbsoluteFrame(originX + 5, originY + 5, 14, 14);
-            _close.Transform.SetAbsoluteFrame(originX + w - 17, originY + 5, 12, 12);
+            _ready.Transform.SetAbsoluteFrame(originX + 6, originY + 6, 16, 16);
+            _close.Transform.SetAbsoluteFrame(originX + w - 20, originY + 6, 14, 14);
         }
     }
 

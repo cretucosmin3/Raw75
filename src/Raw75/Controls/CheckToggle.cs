@@ -62,7 +62,7 @@ public sealed class CheckToggle : VisualElement
         };
     }
 
-    public override SKSize GetPreferredSize(float maxWidth, float maxHeight) => new(14f, 14f);
+    public override SKSize GetPreferredSize(float maxWidth, float maxHeight) => new(18f, 18f);
 
     protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
     {
@@ -76,25 +76,34 @@ public sealed class CheckToggle : VisualElement
         if (w < 4f || h < 4f) return;
 
         var box = new SKRect(0.5f, 0.5f, w - 0.5f, h - 0.5f);
-        float radius = 3f;
+        float radius = 3.5f;
 
         if (_checked)
         {
-            // Checked: filled amber pill box
+            // Checked: filled neutral gray box with subtle border (no accent color)
             using var bgPaint = new SKPaint
             {
-                Color = _hovered ? Theme.AccentHover : Theme.Accent,
+                Color = _hovered ? new SKColor(88, 88, 98) : new SKColor(72, 72, 80),
                 Style = SKPaintStyle.Fill,
                 IsAntialias = true
             };
             canvas.DrawRoundRect(box, radius, radius, bgPaint);
 
-            // Vector checkmark
+            using var borderPaint = new SKPaint
+            {
+                Color = _hovered ? new SKColor(255, 255, 255, 70) : new SKColor(255, 255, 255, 40),
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 1f,
+                IsAntialias = true
+            };
+            canvas.DrawRoundRect(box, radius, radius, borderPaint);
+
+            // Crisp vector checkmark
             using var checkPaint = new SKPaint
             {
                 Color = SKColors.White,
                 Style = SKPaintStyle.Stroke,
-                StrokeWidth = 1.7f,
+                StrokeWidth = 2.0f,
                 StrokeCap = SKStrokeCap.Round,
                 StrokeJoin = SKStrokeJoin.Round,
                 IsAntialias = true

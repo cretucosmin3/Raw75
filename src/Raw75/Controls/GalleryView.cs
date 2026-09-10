@@ -23,9 +23,9 @@ public enum GalleryFilter
 /// </summary>
 public sealed class GalleryView : ScrollContainer
 {
-    private const float TopBarH = 40f;
-    private const float CardW = 186f;
-    private const float CardH = 196f;
+    private const float TopBarH = 46f;
+    private const float CardW = 200f;
+    private const float CardH = 210f;
     private const float Gap = 12f;
     private const float Pad = 16f;
 
@@ -104,7 +104,7 @@ public sealed class GalleryView : ScrollContainer
                 Text = new TextStyle
                 {
                     Color = Theme.TextDim,
-                    Size = 11,
+                    Size = 12,
                     Weight = 500,
                     Alignment = TextAlign.Right,
                     Padding = 0
@@ -250,17 +250,17 @@ public sealed class GalleryView : ScrollContainer
         // Header bar layout
         _headerBar.Transform.SetAbsoluteFrame(ox, oy, w, TopBarH);
         float hx = ox + Pad;
-        float hy = oy + 6f;
-        float btnH = 28f;
+        float hy = oy + 7f;
+        float btnH = 32f;
 
-        _btnFilterAll.Transform.SetAbsoluteFrame(hx, hy, 84f, btnH); hx += 88f;
-        _btnFilterReady.Transform.SetAbsoluteFrame(hx, hy, 98f, btnH); hx += 102f;
-        _btnFilterUnmarked.Transform.SetAbsoluteFrame(hx, hy, 110f, btnH); hx += 122f;
+        _btnFilterAll.Transform.SetAbsoluteFrame(hx, hy, 90f, btnH); hx += 94f;
+        _btnFilterReady.Transform.SetAbsoluteFrame(hx, hy, 108f, btnH); hx += 112f;
+        _btnFilterUnmarked.Transform.SetAbsoluteFrame(hx, hy, 126f, btnH); hx += 134f;
 
-        _btnMarkAll.Transform.SetAbsoluteFrame(hx, hy, 134f, btnH); hx += 138f;
-        _btnClearAll.Transform.SetAbsoluteFrame(hx, hy, 108f, btnH);
+        _btnMarkAll.Transform.SetAbsoluteFrame(hx, hy, 144f, btnH); hx += 148f;
+        _btnClearAll.Transform.SetAbsoluteFrame(hx, hy, 118f, btnH);
 
-        _countLabel.Transform.SetAbsoluteFrame(ox + w - Pad - 180f, hy + 4f, 180f, 20f);
+        _countLabel.Transform.SetAbsoluteFrame(ox + w - Pad - 200f, hy + 6f, 200f, 20f);
 
         // Grid layout for cards
         float startY = TopBarH + Pad;
@@ -367,7 +367,7 @@ public sealed class GalleryView : ScrollContainer
                     Text = new TextStyle
                     {
                         Color = active ? Theme.Accent : Theme.Text,
-                        Size = 11,
+                        Size = 12,
                         Weight = 500,
                         Alignment = TextAlign.Center,
                         Padding = 4
@@ -416,7 +416,7 @@ public sealed class GalleryView : ScrollContainer
                     Text = new TextStyle
                     {
                         Color = Theme.TextDim,
-                        Size = 10,
+                        Size = 11,
                         Weight = 500,
                         Alignment = TextAlign.Center,
                         Padding = 0
@@ -511,13 +511,13 @@ public sealed class GalleryView : ScrollContainer
             float h = Math.Max(1f, Transform.Height);
 
             float pad = 6f;
-            float captionH = 22f;
+            float captionH = 24f;
             float thumbH = Math.Max(10f, h - captionH - pad * 2f);
 
             _thumb.Transform.SetAbsoluteFrame(ox + pad, oy + pad, w - pad * 2f, thumbH);
             _caption.Transform.SetAbsoluteFrame(ox + pad, oy + pad + thumbH, w - pad * 2f, captionH);
-            _readyBtn.Transform.SetAbsoluteFrame(ox + pad + 3f, oy + pad + 3f, 20f, 20f);
-            _indexBadge.Transform.SetAbsoluteFrame(ox + w - pad - 30f, oy + pad + 3f, 27f, 18f);
+            _readyBtn.Transform.SetAbsoluteFrame(ox + pad + 4f, oy + pad + 4f, 22f, 22f);
+            _indexBadge.Transform.SetAbsoluteFrame(ox + w - pad - 34f, oy + pad + 4f, 30f, 20f);
         }
     }
 

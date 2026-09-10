@@ -26,21 +26,25 @@ public sealed class BrandMark : VisualElement
         using var rawPaint = new SKPaint
         {
             Color = Theme.Text,
-            TextSize = 20,
-            Typeface = Fonts.GetTypeface("Roboto", 700),
+            TextSize = 22,
+            Typeface = Fonts.GetTypeface("Liberation Sans, Noto Sans", 700),
             IsAntialias = true,
-            SubpixelText = true
+            SubpixelText = true,
+            LcdRenderText = true,
+            HintingLevel = SKPaintHinting.Normal
         };
         using var numPaint = new SKPaint
         {
             Color = Theme.Accent,
-            TextSize = 20,
-            Typeface = Fonts.GetTypeface("Roboto", 700),
+            TextSize = 22,
+            Typeface = Fonts.GetTypeface("Liberation Sans, Noto Sans", 700),
             IsAntialias = true,
-            SubpixelText = true
+            SubpixelText = true,
+            LcdRenderText = true,
+            HintingLevel = SKPaintHinting.Normal
         };
 
-        float y = 20f;
+        float y = 22f;
         canvas.DrawText("Raw", 0, y, rawPaint);
         float x = rawPaint.MeasureText("Raw") + 2f;
         canvas.DrawText("75", x, y, numPaint);

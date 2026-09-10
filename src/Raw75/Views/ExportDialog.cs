@@ -71,9 +71,9 @@ public sealed class ExportDialog : VisualElement
         };
 
         _card = Box("Card", Theme.Panel, 6f);
-        _title = Label("Title", "Export Photos", Theme.Text, 16, 700, TextAlign.Left);
-        _fileLabel = Label("File", "", Theme.TextDim, 12, 400, TextAlign.Left);
-        _scopeLabel = Label("ScopeLbl", "Export Scope", Theme.TextDim, 11, 500, TextAlign.Left);
+        _title = Label("Title", "Export Photos", Theme.Text, 18, 700, TextAlign.Left);
+        _fileLabel = Label("File", "", Theme.TextDim, 13, 400, TextAlign.Left);
+        _scopeLabel = Label("ScopeLbl", "Export Scope", Theme.TextDim, 12, 500, TextAlign.Left);
 
         _scopeBtns = new IconButton[3];
         _scopeBtns[0] = new IconButton("Active (1)");
@@ -83,9 +83,9 @@ public sealed class ExportDialog : VisualElement
         _scopeBtns[2] = new IconButton("All (0)");
         _scopeBtns[2].Clicked += () => SetScope(ExportScope.All);
 
-        _formatLabel = Label("FormatLbl", "Format", Theme.TextDim, 11, 500, TextAlign.Left);
-        _qualityLabel = Label("QualityLbl", "Quality  95", Theme.TextDim, 11, 500, TextAlign.Left);
-        _edgeLabel = Label("EdgeLbl", "Long edge  Full", Theme.TextDim, 11, 500, TextAlign.Left);
+        _formatLabel = Label("FormatLbl", "Format", Theme.TextDim, 12, 500, TextAlign.Left);
+        _qualityLabel = Label("QualityLbl", "Quality  95", Theme.TextDim, 12, 500, TextAlign.Left);
+        _edgeLabel = Label("EdgeLbl", "Long edge  Full", Theme.TextDim, 12, 500, TextAlign.Left);
 
         _formatBtns = new IconButton[Formats.Length];
         for (int i = 0; i < Formats.Length; i++)
@@ -253,9 +253,9 @@ public sealed class ExportDialog : VisualElement
         float w = Math.Max(1f, Transform.Computed.Width);
         float h = Math.Max(1f, Transform.Computed.Height);
 
-        const float pad = 18f;
-        const float cardW = 440f;
-        const float cardH = 406f;
+        const float pad = 20f;
+        const float cardW = 480f;
+        const float cardH = 436f;
         float cardX = originX + Math.Max(0, (w - cardW) / 2f);
         float cardY = originY + Math.Max(0, (h - cardH) / 2f);
         _card.Transform.SetAbsoluteFrame(cardX, cardY, cardW, cardH);
@@ -264,33 +264,33 @@ public sealed class ExportDialog : VisualElement
         float y = cardY + pad;
         float inner = cardW - pad * 2f;
 
-        _title.Transform.SetAbsoluteFrame(x, y, inner, 24f);
+        _title.Transform.SetAbsoluteFrame(x, y, inner, 26f);
+        y += 28f;
+        _fileLabel.Transform.SetAbsoluteFrame(x, y, inner, 20f);
         y += 26f;
-        _fileLabel.Transform.SetAbsoluteFrame(x, y, inner, 18f);
-        y += 24f;
 
-        _scopeLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
-        y += 20f;
-        LayoutRow(_scopeBtns, x, y, inner, 28f, 6f);
-        y += 38f;
+        _scopeLabel.Transform.SetAbsoluteFrame(x, y, inner, 18f);
+        y += 22f;
+        LayoutRow(_scopeBtns, x, y, inner, 32f, 6f);
+        y += 42f;
 
-        _formatLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
-        y += 20f;
-        LayoutRow(_formatBtns, x, y, inner, 28f, 6f);
-        y += 40f;
-
-        _qualityLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
-        y += 20f;
-        _slider.Transform.SetAbsoluteFrame(x, y, inner, 28f);
-        y += 38f;
-
-        _edgeLabel.Transform.SetAbsoluteFrame(x, y, inner, 16f);
-        y += 20f;
-        LayoutRow(_edgeBtns, x, y, inner, 26f, 5f);
+        _formatLabel.Transform.SetAbsoluteFrame(x, y, inner, 18f);
+        y += 22f;
+        LayoutRow(_formatBtns, x, y, inner, 32f, 6f);
         y += 44f;
 
-        const float btnW = 96f;
-        const float btnH = 32f;
+        _qualityLabel.Transform.SetAbsoluteFrame(x, y, inner, 18f);
+        y += 22f;
+        _slider.Transform.SetAbsoluteFrame(x, y, inner, 30f);
+        y += 40f;
+
+        _edgeLabel.Transform.SetAbsoluteFrame(x, y, inner, 18f);
+        y += 22f;
+        LayoutRow(_edgeBtns, x, y, inner, 30f, 6f);
+        y += 46f;
+
+        const float btnW = 104f;
+        const float btnH = 34f;
         _exportBtn.Transform.SetAbsoluteFrame(cardX + cardW - pad - btnW, y, btnW, btnH);
         _cancelBtn.Transform.SetAbsoluteFrame(cardX + cardW - pad - btnW * 2 - 10f, y, btnW, btnH);
     }

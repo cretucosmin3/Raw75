@@ -133,7 +133,7 @@ public class SliderRow : VisualElement
         if (_inline)
         {
             float rowH = Theme.RowH;
-            float textH = 15f;
+            float textH = 18f;
             float textY = originY + (rowH - textH) * 0.5f;
 
             _labelEl.Transform.SetAbsoluteFrame(originX, textY, LabelW, textH);
@@ -141,7 +141,7 @@ public class SliderRow : VisualElement
         }
         else
         {
-            float labelH = 13f;
+            float labelH = 15f;
             _labelEl.Transform.SetAbsoluteFrame(originX, originY, Math.Max(1f, w - ValueW), labelH);
             _valueEl.Transform.SetAbsoluteFrame(originX + w - ValueW, originY, ValueW, labelH);
         }
@@ -174,8 +174,8 @@ public class SliderRow : VisualElement
         {
             trackX = 0;
             trackW = w;
-            trackY = 15f;
-            trackAreaH = Theme.RowHStacked - 15f;
+            trackY = 17f;
+            trackAreaH = Theme.RowHStacked - 17f;
         }
 
         canvas.Save();
@@ -333,8 +333,8 @@ public class SliderRow : VisualElement
         Text = new TextStyle
         {
             Color = isValue ? Theme.TextDim : Theme.TextSecondary,
-            Size = 11,
-            Weight = isValue ? 500 : 500,
+            Size = 12,
+            Weight = 500,
             Alignment = align,
             Padding = 0
         }
