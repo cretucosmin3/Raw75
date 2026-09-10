@@ -29,13 +29,21 @@ public sealed class SettingsDialog : VisualElement
     private readonly VisualElement _genWorkspace;
     private readonly VisualElement _genPhotos;
     private readonly VisualElement _genCache;
+    private readonly VisualElement _genDiskCache;
     private readonly VisualElement _genLog;
+    private readonly VisualElement _clearCacheDivider;
+    private readonly VisualElement _clearCacheHeading;
+    private readonly VisualElement _clearCacheHint;
+    private readonly IconButton _clearCacheBtn;
+    private readonly VisualElement _clearCacheStatus;
     private readonly IconButton _dumpBtn;
     private readonly VisualElement _dumpHint;
     private readonly VisualElement _dumpSummary;
     private readonly VisualElement _dumpPath;
 
-    private string _tab = "Dev";
+    public event Action? CacheCleared;
+
+    private string _tab = "General";
     private Session? _session;
     private PhotoPane? _pane;
 
@@ -65,11 +73,28 @@ public sealed class SettingsDialog : VisualElement
         _genWorkspace = Label("GenWs", "", Theme.Text, 14, 500, TextAlign.Left);
         _genPhotos = Label("GenPhotos", "", Theme.Text, 14, 500, TextAlign.Left);
         _genCache = Label("GenCache", "", Theme.TextDim, 12.5f, 400, TextAlign.Left);
+        _genDiskCache = Label("GenDiskCache", "", Theme.TextDim, 12.5f, 400, TextAlign.Left);
         _genLog = Label("GenLog", "", Theme.TextDim, 12, 400, TextAlign.Left);
+
+        _clearCacheDivider = Box("ClearCacheDivider", Theme.HairlineSubtle, 0f);
+        _clearCacheHeading = Label("ClearCacheHeading", "STORED PHOTO MEMORY & CACHE", Theme.TextSecondary, 12f, 600, TextAlign.Left);
+        _clearCacheHint = Label("ClearCacheHint",
+            "Delete cached preview images, thumbnails, and saved edit metadata (.raw75/cache). Resets loaded photos to original defaults if they were edited by previous versions.",
+            Theme.TextDim, 12f, 400, TextAlign.Left);
+        _clearCacheBtn = new IconButton("Clear Photo Cache & History", "rotate_left");
+        _clearCacheBtn.Clicked += ClearCacheClicked;
+        _clearCacheStatus = Label("ClearCacheStatus", "", Theme.Accent, 12f, 500, TextAlign.Left);
+
         _panelGeneral.AddChild(_genWorkspace);
         _panelGeneral.AddChild(_genPhotos);
         _panelGeneral.AddChild(_genCache);
+        _panelGeneral.AddChild(_genDiskCache);
         _panelGeneral.AddChild(_genLog);
+        _panelGeneral.AddChild(_clearCacheDivider);
+        _panelGeneral.AddChild(_clearCacheHeading);
+        _panelGeneral.AddChild(_clearCacheHint);
+        _panelGeneral.AddChild(_clearCacheBtn);
+        _panelGeneral.AddChild(_clearCacheStatus);
 
         _panelDev = Box("PanelDev", Theme.PanelAlt, 6f);
         _dumpHint = Label("DumpHint",
@@ -108,13 +133,14 @@ public sealed class SettingsDialog : VisualElement
                 Close();
         };
 
-        SetTab("Dev");
+        SetTab("General");
     }
 
     public void Open(Session session, PhotoPane pane)
     {
         _session = session;
         _pane = pane;
+        _clearCacheStatus.Text = "";
         RefreshGeneral();
         CoverView();
         Visible = true;
@@ -131,6 +157,27 @@ public sealed class SettingsDialog : VisualElement
         if (ParentView?.ActiveKeyboardElement == this)
             ParentView.SetActiveKeyboardElement(null);
         Visible = false;
+        InvalidatePaint();
+    }
+
+    private void ClearCacheClicked()
+    {
+        try
+        {
+            int entries = WorkspaceStore.ClearCache();
+            _session?.ResetAllDocuments();
+            CacheCleared?.Invoke();
+            _clearCacheStatus.Text = $"Cleared {entries} cache items. Memory and edits reset.";
+            if (_clearCacheStatus.Style?.Text != null)
+                _clearCacheStatus.Style.Text.Color = Theme.Accent;
+            RefreshGeneral();
+        }
+        catch (Exception ex)
+        {
+            _clearCacheStatus.Text = "Clear failed: " + ex.Message;
+            if (_clearCacheStatus.Style?.Text != null)
+                _clearCacheStatus.Style.Text.Color = Theme.RedChannel;
+        }
         InvalidatePaint();
     }
 
@@ -165,6 +212,8 @@ public sealed class SettingsDialog : VisualElement
         _genPhotos.Text = n == 0 ? "Photos  none" : $"Photos  {n}   active  {i + 1}/{n}";
         _genCache.Text = "Working copies kept in RAM  " + (_session?.CacheLimit ?? 1)
                          + "  (inactive photos drop proxy/linear, keep preview)";
+        var stats = WorkspaceStore.GetCacheStats();
+        _genDiskCache.Text = $"Disk cache  {stats.Count} items  ·  {MemSize.Bytes(stats.Bytes)}";
         _genLog.Text = "Log  " + Log.LogFilePath;
     }
 
@@ -219,10 +268,17 @@ public sealed class SettingsDialog : VisualElement
         float ix = px + 16;
         float iy = py + 16;
         float iw = pw - 32;
-        _genWorkspace.Transform.SetAbsoluteFrame(ix, iy, iw, 36);
-        _genPhotos.Transform.SetAbsoluteFrame(ix, iy + 44, iw, 24);
-        _genCache.Transform.SetAbsoluteFrame(ix, iy + 76, iw, 40);
-        _genLog.Transform.SetAbsoluteFrame(ix, iy + 124, iw, 40);
+        _genWorkspace.Transform.SetAbsoluteFrame(ix, iy, iw, 28);
+        _genPhotos.Transform.SetAbsoluteFrame(ix, iy + 32, iw, 24);
+        _genCache.Transform.SetAbsoluteFrame(ix, iy + 60, iw, 24);
+        _genDiskCache.Transform.SetAbsoluteFrame(ix, iy + 88, iw, 24);
+        _genLog.Transform.SetAbsoluteFrame(ix, iy + 116, iw, 24);
+
+        _clearCacheDivider.Transform.SetAbsoluteFrame(ix, iy + 152, iw, 1);
+        _clearCacheHeading.Transform.SetAbsoluteFrame(ix, iy + 166, iw, 20);
+        _clearCacheHint.Transform.SetAbsoluteFrame(ix, iy + 190, iw, 36);
+        _clearCacheBtn.Transform.SetAbsoluteFrame(ix, iy + 236, 260, 36);
+        _clearCacheStatus.Transform.SetAbsoluteFrame(ix + 272, iy + 236, iw - 272, 36);
 
         _dumpHint.Transform.SetAbsoluteFrame(ix, iy, iw, 56);
         _dumpBtn.Transform.SetAbsoluteFrame(ix, iy + 68, 220, 34);

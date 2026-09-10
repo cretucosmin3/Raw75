@@ -313,7 +313,8 @@ public class PanelGroup : VisualElement
         float titleW = Math.Max(1f, ax - titleLeft);
         _titleEl.Transform.SetAbsoluteFrame(titleLeft, originY + (Theme.GroupHeadH - 20f) * 0.5f, titleW, 20f);
 
-        if (!_expanded) return;
+        if (!_expanded)
+            return;
 
         float y = Theme.GroupHeadH + Padding.Top;
         float innerW = Math.Max(0, w - Padding.Horizontal);
@@ -352,6 +353,7 @@ public class PanelGroup : VisualElement
                 _body[i].Visible = _expanded;
         }
         InvalidateLayout();
+        Parent?.InvalidateLayout();
         InvalidatePaint();
     }
 }

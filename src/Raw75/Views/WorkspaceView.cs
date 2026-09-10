@@ -414,6 +414,7 @@ public sealed class WorkspaceView : View
         AddElement(_nameDialog);
 
         _settings = new SettingsDialog();
+        _settings.CacheCleared += OnCacheCleared;
         AddElement(_settings);
 
         _gate = new WorkspaceGate();
@@ -1425,6 +1426,24 @@ public sealed class WorkspaceView : View
         _settings.Open(_session, _photo);
     }
 
+    private void OnCacheCleared()
+    {
+        var d = _session.Active;
+        if (d != null)
+        {
+            PullSliders(d);
+            _engine.Open(d);
+            BindPhoto(d);
+            RequestViewport(d);
+            _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
+            _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
+        }
+
+        _engine.FillMissingThumbs(_session.Documents);
+        RefreshSession();
+        SetStatus("Cleared cache and stored edits. Photo memory reset.");
+    }
+
     private int _exporting;
 
     private void StartExport()
@@ -1834,7 +1853,12 @@ internal sealed class RightColumn : ScrollContainer
             c.Transform.SetAbsoluteFrame(ox + inset, oy + y, w, ch);
             y += ch + 14f;
         }
-        SetContentSize(Transform.Width, Math.Max(y + inset, Transform.Computed.Height));
+        float newH = Math.Max(y + inset, Transform.Computed.Height);
+        float newW = Transform.Width;
+        if (CustomContentHeight != newH || CustomContentWidth != newW)
+        {
+            SetContentSize(newW, newH);
+        }
         base.LayoutChildren();
     }
 }

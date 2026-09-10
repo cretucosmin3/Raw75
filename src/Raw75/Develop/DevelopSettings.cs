@@ -107,6 +107,11 @@ public sealed class DevelopSettings
         return c;
     }
 
+    public void Reset()
+    {
+        CopyFrom(new DevelopSettings());
+    }
+
     public void CopyFrom(DevelopSettings src)
     {
         EnableWhiteBalance = src.EnableWhiteBalance;
