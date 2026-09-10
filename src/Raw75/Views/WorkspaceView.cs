@@ -87,11 +87,24 @@ public sealed class WorkspaceView : View
     private SliderRow _reconColor = null!;
     private SliderRow _reconSpatial = null!;
 
-    // Local contrast
+    // Local contrast & Atmosphere
     private SliderRow _localDetail = null!;
+    private SliderRow _texture = null!;
+    private SliderRow _dehaze = null!;
     private SliderRow _localHighlights = null!;
     private SliderRow _localShadows = null!;
     private SliderRow _localMidtones = null!;
+
+    // Color grading (split toning)
+    private SliderRow _gradeShadowHue = null!;
+    private SliderRow _gradeShadowSat = null!;
+    private SliderRow _gradeHighlightHue = null!;
+    private SliderRow _gradeHighlightSat = null!;
+    private SliderRow _gradeBalance = null!;
+
+    // Lens
+    private SliderRow _vignette = null!;
+    private SliderRow _vignetteMidpoint = null!;
 
     private IconButton _matchGray = null!;
     private IconButton _btnCropGeom = null!;
@@ -453,14 +466,18 @@ public sealed class WorkspaceView : View
         _hdrGroup.EnableReset(ResetHdr, "Reset High Dynamic Range");
         _hdrGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHdr = en);
 
-        // 4. Clarity & Local Contrast
-        _localGroup = new PanelGroup("Clarity & Local Contrast");
+        // 4. Clarity & Atmosphere
+        _localGroup = new PanelGroup("Clarity & Atmosphere");
         _localDetail = BindSlider(_localGroup, "Detail", -1.0f, 4.0f, "0.00",
             (s, v) =>
             {
                 s.LocalContrastDetail = v;
                 UpdateLocalContrastUi(s);
             }, s => s.LocalContrastDetail, 0.0f);
+        _texture = BindSlider(_localGroup, "Texture", -100f, 100f, "0",
+            (s, v) => s.Texture = v, s => s.Texture, 0f);
+        _dehaze = BindSlider(_localGroup, "Dehaze", -100f, 100f, "0",
+            (s, v) => s.Dehaze = v, s => s.Dehaze, 0f);
         _localHighlights = BindSlider(_localGroup, "Highlights", -100f, 100f, "0",
             (s, v) => s.LocalContrastHighlights = v, s => s.LocalContrastHighlights, 0f);
         _localShadows = BindSlider(_localGroup, "Shadows", -100f, 100f, "0",
@@ -472,7 +489,7 @@ public sealed class WorkspaceView : View
             if (exp && _session.Active != null)
                 UpdateLocalContrastUi(_session.Active.Settings);
         };
-        _localGroup.EnableReset(ResetLocalContrast, "Reset Clarity & Local Contrast");
+        _localGroup.EnableReset(ResetLocalContrast, "Reset Clarity & Atmosphere");
         _localGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableLocalContrast = en);
 
         // 5. Tone & Curve
@@ -517,8 +534,8 @@ public sealed class WorkspaceView : View
         _reconGroup.EnableReset(ResetReconstruction, "Reset Reconstruction");
         _reconGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableReconstruction = en);
 
-        // 7. Color Editor (HSL)
-        _hslGroup = new PanelGroup("Color Editor (HSL)");
+        // 7. Color Editor & Grading
+        _hslGroup = new PanelGroup("Color Editor & Grading");
         _hslSelector = new HslBandSelector();
         _hslSelector.BandSelected += OnHslBandSelected;
         _hslGroup.AddBody(_hslSelector);
@@ -533,6 +550,17 @@ public sealed class WorkspaceView : View
         _vib = BindSlider(_hslGroup, "Vibrance", -100, 100, "0",
             (s, v) => s.Vibrance = v, s => s.Vibrance);
 
+        _gradeShadowHue = BindSlider(_hslGroup, "Shadow Hue", 0f, 360f, "0°",
+            (s, v) => s.GradingShadowHue = v, s => s.GradingShadowHue, 220f);
+        _gradeShadowSat = BindSlider(_hslGroup, "Shadow Sat", 0f, 100f, "0",
+            (s, v) => s.GradingShadowSat = v, s => s.GradingShadowSat, 0f);
+        _gradeHighlightHue = BindSlider(_hslGroup, "Highlight Hue", 0f, 360f, "0°",
+            (s, v) => s.GradingHighlightHue = v, s => s.GradingHighlightHue, 40f);
+        _gradeHighlightSat = BindSlider(_hslGroup, "Highlight Sat", 0f, 100f, "0",
+            (s, v) => s.GradingHighlightSat = v, s => s.GradingHighlightSat, 0f);
+        _gradeBalance = BindSlider(_hslGroup, "Balance", -100f, 100f, "0",
+            (s, v) => s.GradingBalance = v, s => s.GradingBalance, 0f);
+
         _matchGray = new IconButton("Match mid-gray", "scale");
         _matchGray.Clicked += () =>
         {
@@ -544,7 +572,7 @@ public sealed class WorkspaceView : View
             PushLook(fast: false, settle: true);
         };
         _hslGroup.AddBody(_matchGray);
-        _hslGroup.EnableReset(ResetHsl, "Reset Color Editor");
+        _hslGroup.EnableReset(ResetHsl, "Reset Color Editor & Grading");
         _hslGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHsl = en);
 
         // 8. Detail & Noise Reduction
@@ -561,8 +589,8 @@ public sealed class WorkspaceView : View
         _detailGroup.EnableReset(ResetDetail, "Reset Detail");
         _detailGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableDetail = en);
 
-        // 9. Rotation & Geometry
-        _geomGroup = new PanelGroup("Rotation, Flip & Geometry");
+        // 9. Rotation, Geometry & Lens
+        _geomGroup = new PanelGroup("Rotation, Geometry & Lens");
         _straight = BindSlider(_geomGroup, "Straighten", -45, 45, "0.0", (s, v) =>
         {
             s.Straighten = v;
@@ -584,8 +612,14 @@ public sealed class WorkspaceView : View
         _btnCropGeom = new IconButton("Crop Tool (C)", "crop");
         _btnCropGeom.Clicked += ToggleCrop;
         _geomGroup.AddBody(_btnCropGeom);
+
+        _vignette = BindSlider(_geomGroup, "Vignette", -100f, 100f, "0",
+            (s, v) => s.VignetteAmount = v, s => s.VignetteAmount, 0f);
+        _vignetteMidpoint = BindSlider(_geomGroup, "Midpoint", 0f, 100f, "0",
+            (s, v) => s.VignetteMidpoint = v, s => s.VignetteMidpoint, 50f);
+
         _geomGroup.EnableAuto(AutoStraighten, "Auto Straighten");
-        _geomGroup.EnableReset(ResetGeometry, "Reset Geometry");
+        _geomGroup.EnableReset(ResetGeometry, "Reset Rotation, Geometry & Lens");
         _geomGroup.EnabledChanged += en => OnSectionToggled(s =>
         {
             s.EnableGeometry = en;
@@ -908,14 +942,23 @@ public sealed class WorkspaceView : View
         _reconSpatial.Value = s.ColorReconstructionSpatial;
         UpdateReconModeUi(s);
         _localDetail.Value = s.LocalContrastDetail;
+        _texture.Value = s.Texture;
+        _dehaze.Value = s.Dehaze;
         _localHighlights.Value = s.LocalContrastHighlights;
         _localShadows.Value = s.LocalContrastShadows;
         _localMidtones.Value = s.LocalContrastMidtones;
         UpdateLocalContrastUi(s);
+        _gradeShadowHue.Value = s.GradingShadowHue;
+        _gradeShadowSat.Value = s.GradingShadowSat;
+        _gradeHighlightHue.Value = s.GradingHighlightHue;
+        _gradeHighlightSat.Value = s.GradingHighlightSat;
+        _gradeBalance.Value = s.GradingBalance;
         _sharp.Value = s.Sharpen;
         _noise.Value = s.Noise != 0 ? s.Noise : (s.DenoiseLuma > 0 ? -s.DenoiseLuma : 0);
         _straight.Value = s.Straighten;
         _photo.StraightenPreview = s.Straighten;
+        _vignette.Value = s.VignetteAmount;
+        _vignetteMidpoint.Value = s.VignetteMidpoint;
         SyncActiveHslSliders();
         _sync = false;
     }
@@ -1004,12 +1047,14 @@ public sealed class WorkspaceView : View
         if (d == null) return;
         d.Undo.Push(d.Settings);
         d.Settings.LocalContrastDetail = 0;
+        d.Settings.Texture = 0;
+        d.Settings.Dehaze = 0;
         d.Settings.LocalContrastHighlights = 0;
         d.Settings.LocalContrastShadows = 0;
         d.Settings.LocalContrastMidtones = 50;
         PullSliders(d);
         PushLook(fast: false, settle: true);
-        SetStatus("Reset Clarity & Local Contrast");
+        SetStatus("Reset Clarity & Atmosphere");
     }
 
     private void ResetTone()
@@ -1052,9 +1097,14 @@ public sealed class WorkspaceView : View
         }
         d.Settings.Vibrance = 0;
         d.Settings.MatchGray = false;
+        d.Settings.GradingShadowHue = 220f;
+        d.Settings.GradingShadowSat = 0f;
+        d.Settings.GradingHighlightHue = 40f;
+        d.Settings.GradingHighlightSat = 0f;
+        d.Settings.GradingBalance = 0f;
         PullSliders(d);
         PushLook(fast: false, settle: true);
-        SetStatus("Reset Color Editor (HSL)");
+        SetStatus("Reset Color Editor & Grading");
     }
 
     private void ResetDetail()
@@ -1080,10 +1130,12 @@ public sealed class WorkspaceView : View
         d.Settings.Rotate90 = 0;
         d.Settings.FlipH = false;
         d.Settings.FlipV = false;
+        d.Settings.VignetteAmount = 0;
+        d.Settings.VignetteMidpoint = 50;
         _photo.NotifyOrientation(0, flipH: false, flipV: false);
         PullSliders(d);
         PushLook(fast: false, settle: true);
-        SetStatus("Reset Rotation & Geometry");
+        SetStatus("Reset Rotation, Geometry & Lens");
     }
 
     private void AutoWhiteBalance()

@@ -305,6 +305,13 @@ public static class DevelopRenderer
         Set(u, "u_localHighlights", s.EnableLocalContrast ? s.LocalContrastHighlights / 100f : 0f);
         Set(u, "u_localShadows", s.EnableLocalContrast ? s.LocalContrastShadows / 100f : 0f);
         Set(u, "u_localMidtones", s.EnableLocalContrast ? s.LocalContrastMidtones / 100f : 0.5f);
+        Set(u, "u_dehaze", s.EnableLocalContrast ? s.Dehaze / 100f : 0f);
+        Set(u, "u_texture", s.EnableLocalContrast ? s.Texture / 100f : 0f);
+        Set(u, "u_vignette", s.EnableGeometry ? s.VignetteAmount / 100f : 0f);
+        Set(u, "u_vignetteMidpoint", s.EnableGeometry ? s.VignetteMidpoint / 100f : 0.5f);
+        Set(u, "u_gradeShadow", s.EnableHsl ? new[] { s.GradingShadowHue / 360f, s.GradingShadowSat / 100f } : new[] { 0f, 0f });
+        Set(u, "u_gradeHighlight", s.EnableHsl ? new[] { s.GradingHighlightHue / 360f, s.GradingHighlightSat / 100f } : new[] { 0f, 0f });
+        Set(u, "u_gradeBalance", s.EnableHsl ? s.GradingBalance / 100f : 0f);
         Set(u, "u_localFast", fast ? 1f : 0f);
         Set(u, "u_showClipping", showClipping ? 1f : 0f);
     }
@@ -473,6 +480,13 @@ public static class DevelopRenderer
             uniform float u_localHighlights;
             uniform float u_localShadows;
             uniform float u_localMidtones;
+            uniform float u_dehaze;
+            uniform float u_texture;
+            uniform float u_vignette;
+            uniform float u_vignetteMidpoint;
+            uniform float2 u_gradeShadow;
+            uniform float2 u_gradeHighlight;
+            uniform float u_gradeBalance;
             uniform float u_localFast;
             uniform float u_showClipping;
 
@@ -773,6 +787,22 @@ public static class DevelopRenderer
                 }
                 col = max(col, 0.0);
 
+                // Dehaze: Atmospheric scattering transmission recovery / mist
+                if (abs(u_dehaze) > 0.001) {
+                    float lumD = max(luma2020(col), 0.0001);
+                    float darkCh = min(min(col.r, col.g), col.b);
+                    float hazeRatio = clamp(darkCh / lumD, 0.0, 1.0);
+                    if (u_dehaze > 0.0) {
+                        float t = clamp(1.0 - u_dehaze * hazeRatio * 0.70, 0.20, 1.0);
+                        float3 air = float3(0.80, 0.84, 0.90) * min(lumD, 1.0);
+                        col = max((col - air * (1.0 - t)) / t, 0.0);
+                    } else {
+                        float mist = -u_dehaze * 0.50 * hazeRatio;
+                        float3 air = float3(0.80, 0.84, 0.90) * max(lumD, 0.2);
+                        col = mix(col, air, mist);
+                    }
+                }
+
                 float lum3 = luma2020(col);
                 float3 gray = float3(lum3);
                 float sat = 0.0;
@@ -801,6 +831,25 @@ public static class DevelopRenderer
                 hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
                 hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
                 col = hsl_to_rgb(hsl);
+
+                // Color Grading (Split Toning)
+                if (u_gradeShadow.y > 0.001 || u_gradeHighlight.y > 0.001) {
+                    float lumG = max(luma2020(col), 0.00001);
+                    float evG = log2(lumG / 0.18) + u_gradeBalance * 1.5;
+                    float shdW = 1.0 - smoother(evG, -2.5, 0.5);
+                    float hlW = smoother(evG, -0.5, 2.5);
+
+                    if (u_gradeShadow.y > 0.001 && shdW > 0.001) {
+                        float3 sTint = hsl_to_rgb(float3(u_gradeShadow.x * 360.0, 1.0, 0.5));
+                        float3 sVec = sTint - float3(luma2020(sTint));
+                        col = max(col + sVec * lumG * (u_gradeShadow.y * 0.50 * shdW), 0.0);
+                    }
+                    if (u_gradeHighlight.y > 0.001 && hlW > 0.001) {
+                        float3 hTint = hsl_to_rgb(float3(u_gradeHighlight.x * 360.0, 1.0, 0.5));
+                        float3 hVec = hTint - float3(luma2020(hTint));
+                        col = max(col + hVec * lumG * (u_gradeHighlight.y * 0.50 * hlW), 0.0);
+                    }
+                }
                 return max(col, 0.0);
             }
 
@@ -843,6 +892,18 @@ public static class DevelopRenderer
                 lookAmt *= sample(u_mask, fragCoord).r;
 
                 float3 lin = u_srcLinear > 0.5 ? max(orig.rgb, 0.0) : to_lin(orig.rgb);
+
+                // Lens vignetting compensation / creative vignette
+                if (abs(u_vignette) > 0.001) {
+                    float aspect = u_srcSize.x / max(u_srcSize.y, 1.0);
+                    float2 centered = (srcUv - float2(0.5)) * float2(aspect, 1.0);
+                    float maxDist = length(float2(0.5 * aspect, 0.5));
+                    float d = length(centered) / maxDist;
+                    float mp = clamp(u_vignetteMidpoint, 0.05, 0.95);
+                    float vFactor = smoother(d, mp * 0.40, 1.15);
+                    float gain = exp2(u_vignette * 2.5 * vFactor);
+                    lin = max(lin * gain, 0.0);
+                }
 
                 // Highlight reconstruction (step 2)
                 // ref: highlight reconstruction (opposed & LCh)
@@ -996,7 +1057,7 @@ public static class DevelopRenderer
                 }
 
                 // Local contrast & Clarity (step 8): halo-free perceptual bilateral midtone enhancement
-                if (abs(u_localDetail) > 0.001 || abs(u_localHighlights) > 0.001 || abs(u_localShadows) > 0.001 || abs(u_localMidtones - 0.5) > 0.01) {
+                if (abs(u_localDetail) > 0.001 || abs(u_localHighlights) > 0.001 || abs(u_localShadows) > 0.001 || abs(u_localMidtones - 0.5) > 0.01 || abs(u_texture) > 0.001) {
                     float lum = max(luma2020(processed), 0.00001);
                     float xL = pow(lum, 0.33333333); // Perceptual lightness domain L in [0, 1]
 
@@ -1110,6 +1171,11 @@ public static class DevelopRenderer
                     // completely eliminating black shadow lines and bright edge halos.
                     float edgeFactor = exp(-grad * grad / 0.0064);
                     float finalL = mix(xL, newL, edgeFactor);
+                    if (abs(u_texture) > 0.001) {
+                        float microAvg = 0.25 * (l1 + l2 + l3 + l4);
+                        float microDiff = xL - microAvg;
+                        finalL += u_texture * microDiff * 0.75 * edgeFactor;
+                    }
                     finalL = clamp(finalL, 0.0001, 2.0);
 
                     // Convert from perceptual L back to linear luminance (L^3)
