@@ -33,8 +33,6 @@ internal sealed class DevelopLook : IDisposable
     private float _cachedHlThreshold;
     private float _cachedReconColorAmount;
     private float _cachedReconColorSpatial;
-    private float _cachedVignette;
-    private float _cachedVignetteMidpoint;
     private bool _cachedStage1Fast;
     private bool _stage1Dirty = true;
 
@@ -145,17 +143,12 @@ internal sealed class DevelopLook : IDisposable
             float curHlThresh = settings.HighlightThreshold;
             float curColorAmt = settings.EnableReconstruction ? settings.ColorReconstructionAmount / 100f : 0f;
             float curColorSpatial = settings.ColorReconstructionSpatial;
-            float curVigAmt = settings.EnableGeometry ? settings.VignetteAmount / 100f : 0f;
-            float curVigMid = settings.EnableGeometry ? settings.VignetteMidpoint / 100f : 0.5f;
-
             bool needStage1 = _stage1Dirty
                 || _stage1Image == null
                 || curReconMode != _cachedReconMode
                 || curHlThresh != _cachedHlThreshold
                 || curColorAmt != _cachedReconColorAmount
                 || curColorSpatial != _cachedReconColorSpatial
-                || curVigAmt != _cachedVignette
-                || curVigMid != _cachedVignetteMidpoint
                 || (curReconMode != HighlightMode.Off && fast != _cachedStage1Fast);
 
             if (needStage1)
@@ -175,8 +168,6 @@ internal sealed class DevelopLook : IDisposable
                 _cachedHlThreshold = curHlThresh;
                 _cachedReconColorAmount = curColorAmt;
                 _cachedReconColorSpatial = curColorSpatial;
-                _cachedVignette = curVigAmt;
-                _cachedVignetteMidpoint = curVigMid;
                 _cachedStage1Fast = fast;
                 _stage1Dirty = false;
                 _stage2Dirty = true; // Stage 1 change forces Stage 2 update
@@ -266,10 +257,12 @@ internal sealed class DevelopLook : IDisposable
             if (stage3CurveShader == null) return false;
             ch3.Add("u_curve", stage3CurveShader);
 
-            using SKShader? fx = eff3.ToShader(true, u3, ch3);
+            bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
+            using SKShader? fx = eff3.ToShader(!tilePartial, u3, ch3);
             if (fx == null) return false;
 
             _paint.Shader = fx;
+            _paint.BlendMode = SKBlendMode.SrcOver;
 
             canvas.Save();
             canvas.ClipRect(clip);
@@ -363,8 +356,8 @@ internal sealed class DevelopLook : IDisposable
                     split: 0f, before: false, lutSize, lutAmount,
                     fast: fast, applyCrop: applyCrop, srcLinear: srcLinear, showClipping: showClipping,
                     tileX: tileX, tileY: tileY, tileW: tileW, tileH: tileH,
-                    viewCropX: float.NaN, viewCropY: float.NaN,
-                    viewCropW: float.NaN, viewCropH: float.NaN,
+                    viewCropX: viewCropX, viewCropY: viewCropY,
+                    viewCropW: viewCropW, viewCropH: viewCropH,
                     frameW: frameW, frameH: frameH);
 
                 var children = new SKRuntimeEffectChildren(effect);
@@ -376,7 +369,8 @@ internal sealed class DevelopLook : IDisposable
                 if (curveShader == null) return false;
                 children.Add("u_curve", curveShader);
 
-                SKShader? fx = effect.ToShader(true, uniforms, children);
+                bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
+                SKShader? fx = effect.ToShader(!tilePartial, uniforms, children);
                 if (fx == null)
                 {
                     Failed = true;
@@ -387,6 +381,7 @@ internal sealed class DevelopLook : IDisposable
             }
 
             _paint.Shader = activeFx;
+            _paint.BlendMode = SKBlendMode.SrcOver;
 
             canvas.Save();
             canvas.ClipRect(clip);
