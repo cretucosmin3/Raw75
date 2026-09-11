@@ -539,6 +539,11 @@ public sealed class DevelopEngine
                     doc.SourceRgba = raster;
                     doc.SourceLinear = raster.HasLinear;
                     doc.LiveRgba = RawDecoder.Limit(raster, 256);
+                    AtmosphereEstimator.Estimate(raster, out float airR, out float airG, out float airB, out float depthMax);
+                    doc.Settings.AtmosphereR = airR;
+                    doc.Settings.AtmosphereG = airG;
+                    doc.Settings.AtmosphereB = airB;
+                    doc.Settings.AtmosphereDepthMax = depthMax;
                     if (nativeW > 0)
                     {
                         doc.NativeWidth = nativeW;

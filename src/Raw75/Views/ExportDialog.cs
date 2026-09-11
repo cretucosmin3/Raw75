@@ -410,7 +410,10 @@ public sealed class ExportDialog : VisualElement
         {
             var local = PointToClient(globalX, 0);
             float w = Math.Max(1f, Transform.Computed.Width);
-            Value = (int)Math.Round(Math.Clamp(local.X / w, 0f, 1f) * 99f + 1f);
+            float thumbRadius = Theme.ThumbW * 0.5f;
+            float travel = Math.Max(1f, w - Theme.ThumbW);
+            float t = Math.Clamp((local.X - thumbRadius) / travel, 0f, 1f);
+            Value = (int)Math.Round(t * 99f + 1f);
         }
 
         protected override void OnAfterStyleDraw(List<DrawCommand> cmds)

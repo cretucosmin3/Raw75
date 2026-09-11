@@ -13,6 +13,7 @@ using Raw75.Controls;
 using Raw75.Develop;
 using Raw75.Imaging;
 using Raw75.Io;
+using Raw75.Pipeline;
 using Raw75.Presets;
 using Silk.NET.Input;
 using SkiaSharp;
@@ -72,6 +73,7 @@ public sealed class WorkspaceView : View
     private int _activeHslBand = 0;
 
     // Tone
+    private CurveGraphControl _curveGraph = null!;
     private IconButton _btnToneSigmoid = null!;
     private IconButton _btnToneFilmic = null!;
     private SliderRow _sigContrast = null!;
@@ -89,6 +91,7 @@ public sealed class WorkspaceView : View
     private SliderRow _localDetail = null!;
     private SliderRow _texture = null!;
     private SliderRow _dehaze = null!;
+    private SliderRow _dehazeDistance = null!;
 
     // Color grading (split toning)
     private SliderRow _gradeShadowHue = null!;
@@ -521,7 +524,7 @@ public sealed class WorkspaceView : View
         // 2. Exposure
         _exposureGroup = new PanelGroup("Exposure");
         _ev = BindSlider(_exposureGroup, "Exposure", -2.5f, 2.5f, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
-        _con = BindSlider(_exposureGroup, "Contrast", -50, 50, "0", (s, v) => s.Contrast = v, s => s.Contrast);
+        _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
         _exposureGroup.EnableAuto(AutoExposure, "Auto Exposure");
         _exposureGroup.EnableReset(ResetExposure, "Reset Exposure");
@@ -545,11 +548,33 @@ public sealed class WorkspaceView : View
             (s, v) => s.Texture = v, s => s.Texture, 0f);
         _dehaze = BindSlider(_localGroup, "Dehaze", -100f, 100f, "0",
             (s, v) => s.Dehaze = v, s => s.Dehaze, 0f);
+        _dehazeDistance = BindSlider(_localGroup, "Distance", 0f, 100f, "0",
+            (s, v) => s.DehazeDistance = v, s => s.DehazeDistance, 20f);
         _localGroup.EnableReset(ResetLocalContrast, "Reset Clarity & Atmosphere");
         _localGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableLocalContrast = en);
 
         // 5. Tone & Curve
         _toneGroup = new PanelGroup("Tone & Curve");
+        _curveGraph = new CurveGraphControl();
+        _curveGraph.CurveChanged += () =>
+        {
+            if (_sync) return;
+            var d = _session.Active;
+            if (d == null) return;
+            _curveGraph.SaveToSettings(d.Settings);
+            PushLook(fast: true, settle: false);
+        };
+        _curveGraph.DragEnded += () =>
+        {
+            if (_sync) return;
+            var d = _session.Active;
+            if (d == null) return;
+            d.Undo.Push(d.Settings);
+            _curveGraph.SaveToSettings(d.Settings);
+            PushLook(fast: false, settle: true);
+        };
+        _toneGroup.AddBody(_curveGraph);
+
         _btnToneSigmoid = new IconButton("Sigmoid");
         _btnToneFilmic = new IconButton("Filmic");
         _btnToneSigmoid.Clicked += () => SetToneMode(ToneMode.Sigmoid);
@@ -818,6 +843,7 @@ public sealed class WorkspaceView : View
         _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
         SaveCurrentSession();
         _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
+        _curveGraph.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
         PullSliders(d);
         _matchGray.Toggled = d.Settings.MatchGray;
         UpdateZoomLabel();
@@ -908,6 +934,7 @@ public sealed class WorkspaceView : View
 
         _nav.Image = doc.Preview ?? doc.Look ?? doc.Display ?? doc.Thumb;
         _histogram.SetBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
+        _curveGraph.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _filmThumb = doc.Preview ?? doc.Thumb;
         UpdateZoomLabel();
         UpdateTitleBadge();
@@ -919,6 +946,18 @@ public sealed class WorkspaceView : View
     /// </summary>
     private void BindPhoto(PhotoDocument d)
     {
+        if (d.Settings.AtmosphereDepthMax <= 0.1f || d.Settings.AtmosphereR <= 0.001f)
+        {
+            RasterBuffer r = d.SourceRgba.HasPixels ? d.SourceRgba : d.LiveRgba;
+            if (r.HasPixels)
+            {
+                AtmosphereEstimator.Estimate(r, out float ar, out float ag, out float ab, out float dm);
+                d.Settings.AtmosphereR = ar;
+                d.Settings.AtmosphereG = ag;
+                d.Settings.AtmosphereB = ab;
+                d.Settings.AtmosphereDepthMax = dm;
+            }
+        }
         _photo.PrepareBind(d.Settings);
         _photo.SetNativeSize(d.NativeWidth, d.NativeHeight);
         _photo.Metadata = d.Metadata;
@@ -969,6 +1008,7 @@ public sealed class WorkspaceView : View
         _sigContrast.Value = s.SigmoidContrast;
         _sigSkew.Value = s.SigmoidSkew;
         UpdateToneModeUi(s);
+        _curveGraph.LoadFromSettings(s);
         _reconThreshold.Value = s.HighlightThreshold;
         _reconColor.Value = s.ColorReconstructionAmount;
         _reconSpatial.Value = s.ColorReconstructionSpatial;
@@ -976,6 +1016,7 @@ public sealed class WorkspaceView : View
         _localDetail.Value = s.LocalContrastDetail;
         _texture.Value = s.Texture;
         _dehaze.Value = s.Dehaze;
+        _dehazeDistance.Value = s.DehazeDistance;
         _gradeShadowHue.Value = s.GradingShadowHue;
         _gradeShadowSat.Value = s.GradingShadowSat;
         _gradeHighlightHue.Value = s.GradingHighlightHue;
@@ -1077,6 +1118,7 @@ public sealed class WorkspaceView : View
         d.Settings.LocalContrastDetail = 0;
         d.Settings.Texture = 0;
         d.Settings.Dehaze = 0;
+        d.Settings.DehazeDistance = 20;
         d.Settings.LocalContrastHighlights = 0;
         d.Settings.LocalContrastShadows = 0;
         d.Settings.LocalContrastMidtones = 50;
@@ -1093,6 +1135,11 @@ public sealed class WorkspaceView : View
         d.Settings.ToneMode = ToneMode.Sigmoid;
         d.Settings.SigmoidContrast = 1.5f;
         d.Settings.SigmoidSkew = 0.0f;
+        d.Settings.CurveRgb = CurveMath.DefaultCurve();
+        d.Settings.CurveRed = CurveMath.DefaultCurve();
+        d.Settings.CurveGreen = CurveMath.DefaultCurve();
+        d.Settings.CurveBlue = CurveMath.DefaultCurve();
+        _curveGraph.LoadFromSettings(d.Settings);
         PullSliders(d);
         PushLook(fast: false, settle: true);
         SetStatus("Reset Tone & Curve");
@@ -1267,6 +1314,7 @@ public sealed class WorkspaceView : View
         if (!ReferenceEquals(doc, _session.Active) || _histogram == null)
             return;
         _histogram.SetBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
+        _curveGraph.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
     }
 
     private void ToggleBefore()
@@ -1532,6 +1580,7 @@ public sealed class WorkspaceView : View
             BindPhoto(d);
             RequestViewport(d);
             _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
+            _curveGraph.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
             _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
         }
 

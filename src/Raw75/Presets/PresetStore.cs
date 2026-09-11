@@ -49,6 +49,14 @@ public static class PresetStore
                 continue;
             if (settings.Hsl == null || settings.Hsl.Length != 6)
                 settings.Hsl = DevelopSettings.CreateHsl();
+            if (settings.CurveRgb == null || settings.CurveRgb.Length < 2)
+                settings.CurveRgb = Raw75.Pipeline.CurveMath.DefaultCurve();
+            if (settings.CurveRed == null || settings.CurveRed.Length < 2)
+                settings.CurveRed = Raw75.Pipeline.CurveMath.DefaultCurve();
+            if (settings.CurveGreen == null || settings.CurveGreen.Length < 2)
+                settings.CurveGreen = Raw75.Pipeline.CurveMath.DefaultCurve();
+            if (settings.CurveBlue == null || settings.CurveBlue.Length < 2)
+                settings.CurveBlue = Raw75.Pipeline.CurveMath.DefaultCurve();
             return settings;
         }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Text.Json.Serialization;
+using Raw75.Pipeline;
 
 namespace Raw75.Develop;
 
@@ -40,7 +41,7 @@ public sealed class DevelopSettings
     public float Tint { get; set; }        // -100..100 (green/magenta)
 
     public float Exposure { get; set; }    // -2.5..2.5 EV
-    public float Contrast { get; set; }    // -50..50
+    public float Contrast { get; set; }    // -100..100
     public float Highlights { get; set; }  // -100..100
     public float Shadows { get; set; }     // -100..100
     public float Whites { get; set; }      // -100..100
@@ -55,6 +56,13 @@ public sealed class DevelopSettings
     public float SigmoidContrast { get; set; } = 1.5f; // 0.1..10, default 1.5
     public float SigmoidSkew { get; set; } = 0.0f;     // -1..1, default 0.0
 
+    // --- Tone & Color Curves ---
+    public bool EnableCurve { get; set; } = true;
+    public CurvePoint[] CurveRgb { get; set; } = CurveMath.DefaultCurve();
+    public CurvePoint[] CurveRed { get; set; } = CurveMath.DefaultCurve();
+    public CurvePoint[] CurveGreen { get; set; } = CurveMath.DefaultCurve();
+    public CurvePoint[] CurveBlue { get; set; } = CurveMath.DefaultCurve();
+
     // --- Reconstruction ---
     public HighlightMode ReconstructionMode { get; set; } = HighlightMode.Off;
     public float HighlightThreshold { get; set; } = 1.0f;         // clip relative to white
@@ -64,6 +72,11 @@ public sealed class DevelopSettings
     // --- Local contrast & Atmosphere ---
     public float LocalContrastDetail { get; set; } = 0.0f;     // -1..4, 0 = off
     public float Dehaze { get; set; } = 0.0f;                  // -100..100
+    public float DehazeDistance { get; set; } = 20.0f;         // 0..100 (default 20, Darktable depth reach 0.20)
+    public float AtmosphereR { get; set; } = 0.82f;            // estimated airlight vector
+    public float AtmosphereG { get; set; } = 0.86f;
+    public float AtmosphereB { get; set; } = 0.92f;
+    public float AtmosphereDepthMax { get; set; } = 3.2f;      // estimated scene max depth reach
     public float Texture { get; set; } = 0.0f;                 // -100..100
     public float LocalContrastHighlights { get; set; } = 0.0f; // -100..100
     public float LocalContrastShadows { get; set; } = 0.0f;    // -100..100
@@ -115,6 +128,10 @@ public sealed class DevelopSettings
         var c = (DevelopSettings)MemberwiseClone();
         c.Hsl = new HslBand[6];
         Array.Copy(Hsl, c.Hsl, 6);
+        c.CurveRgb = CurveRgb != null ? (CurvePoint[])CurveRgb.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
+        c.CurveRed = CurveRed != null ? (CurvePoint[])CurveRed.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
+        c.CurveGreen = CurveGreen != null ? (CurvePoint[])CurveGreen.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
+        c.CurveBlue = CurveBlue != null ? (CurvePoint[])CurveBlue.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         return c;
     }
 
@@ -155,6 +172,11 @@ public sealed class DevelopSettings
         ColorReconstructionSpatial = src.ColorReconstructionSpatial;
         LocalContrastDetail = src.LocalContrastDetail;
         Dehaze = src.Dehaze;
+        DehazeDistance = src.DehazeDistance;
+        AtmosphereR = src.AtmosphereR;
+        AtmosphereG = src.AtmosphereG;
+        AtmosphereB = src.AtmosphereB;
+        AtmosphereDepthMax = src.AtmosphereDepthMax;
         Texture = src.Texture;
         LocalContrastHighlights = src.LocalContrastHighlights;
         LocalContrastShadows = src.LocalContrastShadows;
@@ -180,6 +202,11 @@ public sealed class DevelopSettings
         FlipV = src.FlipV;
         VignetteAmount = src.VignetteAmount;
         VignetteMidpoint = src.VignetteMidpoint;
+        EnableCurve = src.EnableCurve;
+        CurveRgb = src.CurveRgb != null ? (CurvePoint[])src.CurveRgb.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
+        CurveRed = src.CurveRed != null ? (CurvePoint[])src.CurveRed.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
+        CurveGreen = src.CurveGreen != null ? (CurvePoint[])src.CurveGreen.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
+        CurveBlue = src.CurveBlue != null ? (CurvePoint[])src.CurveBlue.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         if (src.Hsl != null && src.Hsl.Length == 6)
             Array.Copy(src.Hsl, Hsl, 6);
     }
@@ -196,6 +223,7 @@ public sealed class DevelopSettings
             && EnableHsl == o.EnableHsl
             && EnableDetail == o.EnableDetail
             && EnableGeometry == o.EnableGeometry
+            && EnableCurve == o.EnableCurve
             && Temperature == o.Temperature && Tint == o.Tint
             && Exposure == o.Exposure && Contrast == o.Contrast
             && Highlights == o.Highlights && Shadows == o.Shadows
@@ -206,7 +234,9 @@ public sealed class DevelopSettings
             && SigmoidContrast == o.SigmoidContrast && SigmoidSkew == o.SigmoidSkew
             && ReconstructionMode == o.ReconstructionMode && HighlightThreshold == o.HighlightThreshold
             && ColorReconstructionAmount == o.ColorReconstructionAmount && ColorReconstructionSpatial == o.ColorReconstructionSpatial
-            && LocalContrastDetail == o.LocalContrastDetail && Dehaze == o.Dehaze && Texture == o.Texture
+            && LocalContrastDetail == o.LocalContrastDetail && Dehaze == o.Dehaze && DehazeDistance == o.DehazeDistance
+            && AtmosphereR == o.AtmosphereR && AtmosphereG == o.AtmosphereG && AtmosphereB == o.AtmosphereB
+            && AtmosphereDepthMax == o.AtmosphereDepthMax && Texture == o.Texture
             && LocalContrastHighlights == o.LocalContrastHighlights
             && LocalContrastShadows == o.LocalContrastShadows && LocalContrastMidtones == o.LocalContrastMidtones
             && GradingShadowHue == o.GradingShadowHue && GradingShadowSat == o.GradingShadowSat
@@ -216,7 +246,24 @@ public sealed class DevelopSettings
             && CropX == o.CropX && CropY == o.CropY && CropW == o.CropW && CropH == o.CropH
             && Straighten == o.Straighten && Rotate90 == o.Rotate90 && FlipH == o.FlipH && FlipV == o.FlipV
             && VignetteAmount == o.VignetteAmount && VignetteMidpoint == o.VignetteMidpoint
+            && CurveEqual(CurveRgb, o.CurveRgb)
+            && CurveEqual(CurveRed, o.CurveRed)
+            && CurveEqual(CurveGreen, o.CurveGreen)
+            && CurveEqual(CurveBlue, o.CurveBlue)
             && HslEqual(o);
+    }
+
+    private static bool CurveEqual(CurvePoint[]? a, CurvePoint[]? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a == null || b == null) return false;
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (MathF.Abs(a[i].X - b[i].X) > 0.01f || MathF.Abs(a[i].Y - b[i].Y) > 0.01f)
+                return false;
+        }
+        return true;
     }
 
     private bool HslEqual(DevelopSettings o)

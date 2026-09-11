@@ -261,6 +261,10 @@ internal sealed class DevelopLook : IDisposable
             ch3.Add("u_image", stage3InputShader);
             ch3.Add("u_lut", _lut);
             ch3.Add("u_mask", _mask);
+            SKImage curve = DevelopRenderer.GetCurveTexture(settings, out _, out _);
+            using var stage3CurveShader = curve.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
+            if (stage3CurveShader == null) return false;
+            ch3.Add("u_curve", stage3CurveShader);
 
             using SKShader? fx = eff3.ToShader(true, u3, ch3);
             if (fx == null) return false;
@@ -367,6 +371,10 @@ internal sealed class DevelopLook : IDisposable
                 children.Add("u_image", _img);
                 children.Add("u_lut", _lut);
                 children.Add("u_mask", _mask);
+                SKImage curve = DevelopRenderer.GetCurveTexture(settings, out _, out _);
+                using var curveShader = curve.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
+                if (curveShader == null) return false;
+                children.Add("u_curve", curveShader);
 
                 SKShader? fx = effect.ToShader(true, uniforms, children);
                 if (fx == null)

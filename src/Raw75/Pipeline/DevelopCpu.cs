@@ -64,6 +64,13 @@ internal static class DevelopCpu
         bool neighbor = doDenoise;
         bool needBuffer = hasColorRecon || hasLocalContrast || neighbor || doGrain;
 
+        bool hasCurve = s.EnableCurve && (!CurveMath.IsIdentity(s.CurveRgb) || !CurveMath.IsIdentity(s.CurveRed) || !CurveMath.IsIdentity(s.CurveGreen) || !CurveMath.IsIdentity(s.CurveBlue));
+        bool rgbCurvesActive = s.EnableCurve && (!CurveMath.IsIdentity(s.CurveRed) || !CurveMath.IsIdentity(s.CurveGreen) || !CurveMath.IsIdentity(s.CurveBlue));
+        float[]? lutR = hasCurve ? CurveMath.EvaluateSpline(s.CurveRed) : null;
+        float[]? lutG = hasCurve ? CurveMath.EvaluateSpline(s.CurveGreen) : null;
+        float[]? lutB = hasCurve ? CurveMath.EvaluateSpline(s.CurveBlue) : null;
+        float[]? lutM = hasCurve ? CurveMath.EvaluateSpline(s.CurveRgb) : null;
+
         bool linearSrc = src.HasLinear;
         float[]? linSrc = src.Linear;
         byte[]? rgba = src.Rgba;
@@ -191,6 +198,8 @@ internal static class DevelopCpu
                     {
                         int di = (y * dw + x) * 4;
                         ToneCurveSrgb(r, g, b, toneMode, sig, out float or, out float og, out float ob);
+                        if (hasCurve)
+                            ApplyCurveCpu(ref or, ref og, ref ob, rgbCurvesActive, lutR!, lutG!, lutB!, lutM!);
                         dst[di] = ToByte(or);
                         dst[di + 1] = ToByte(og);
                         dst[di + 2] = ToByte(ob);
@@ -323,6 +332,8 @@ internal static class DevelopCpu
 
                 int di = (y * dw + x) * 4;
                 ToneCurveSrgb(r, g, b, toneMode, sig, out float or, out float og, out float ob);
+                if (hasCurve)
+                    ApplyCurveCpu(ref or, ref og, ref ob, rgbCurvesActive, lutR!, lutG!, lutB!, lutM!);
                 dst[di] = ToByte(or);
                 dst[di + 1] = ToByte(og);
                 dst[di + 2] = ToByte(ob);
@@ -428,113 +439,168 @@ internal static class DevelopCpu
             b *= mg;
         }
 
-        // 4. High Dynamic Range (HDR) in perceptual log-EV space relative to 18% middle gray
-        float lum = Luma(r, g, b);
-        if (lum < 1e-5f) lum = 1e-5f;
-        float evVal = MathF.Log2(lum / 0.18f);
-
-        // Highlights: Compressive rational shoulder for recovery, smooth lift for boost
-        if (MathF.Abs(hi) > 0.001f)
+        // 4. Whites: Dynamic white headroom / white point scaling (RapidRAW)
+        if (MathF.Abs(whites) > 0.001f)
         {
-            if (evVal > -0.2f)
+            float whiteLevel = MathF.Max(1f - whites * 0.833333f, 0.01f);
+            float wMult = 1f / whiteLevel;
+            r *= wMult;
+            g *= wMult;
+            b *= wMult;
+        }
+
+        // 5. Shadows & Blacks: Perceptual gamma-domain bell curve with anti-mud contrast restoration (RapidRAW)
+        float sh = shd * 0.833333f;
+        float bl = blacks * 2.5f;
+        if (MathF.Abs(sh) > 0.001f || MathF.Abs(bl) > 0.001f)
+        {
+            float pixelLuma = MathF.Max(Luma(r, g, b), 0.00001f);
+            float tPixel = MathF.Pow(pixelLuma, 0.4545f);
+
+            float shadowLift = sh * tPixel * MathF.Pow(MathF.Max(1f - tPixel, 0f), 4.5f);
+            float blackLift = bl * tPixel * MathF.Pow(MathF.Max(1f - tPixel, 0f), 12f);
+            float liftAmount = MathF.Max(shadowLift + blackLift, 0f);
+
+            float tPixelCurved = MathF.Max(tPixel + shadowLift + blackLift, 0f);
+
+            const float shadowPivot = 0.2f;
+            float stretchFactor = 1f + (liftAmount * 1.3f);
+            float contrastedT = shadowPivot + (tPixelCurved - shadowPivot) * stretchFactor;
+
+            float finalT = MathF.Max(tPixelCurved * 0.15f + contrastedT * 0.85f, 0f);
+            float curvedLuma = MathF.Pow(finalT, 2.2f);
+
+            float lumaRatio = curvedLuma / pixelLuma;
+            r *= lumaRatio;
+            g *= lumaRatio;
+            b *= lumaRatio;
+
+            if (lumaRatio > 1f)
             {
-                if (hi < 0f)
+                float recoveredLuma = Luma(r, g, b);
+                float boostAmount = Math.Clamp((lumaRatio - 1f) * 0.15f, 0f, 0.4f);
+                r = r * (1f - boostAmount) + recoveredLuma * boostAmount;
+                g = g * (1f - boostAmount) + recoveredLuma * boostAmount;
+                b = b * (1f - boostAmount) + recoveredLuma * boostAmount;
+            }
+        }
+
+        // 6. Highlights: Soft tanh-masked dual-regime compression & desaturation rolloff (RapidRAW)
+        float hl = hi * 0.833333f;
+        if (MathF.Abs(hl) > 0.001f)
+        {
+            float pixelLuma = MathF.Max(Luma(r, g, b), 0.00001f);
+            float xTanh = pixelLuma * 1.5f;
+            float e2x = MathF.Exp(MathF.Min(2f * xTanh, 20f));
+            float pixelMaskInput = (e2x - 1f) / (e2x + 1f);
+            float highlightMask = Smooth(pixelMaskInput, 0.3f, 0.95f);
+
+            if (highlightMask > 0.001f)
+            {
+                float adjR, adjG, adjB;
+                if (hl < 0f)
                 {
-                    float hlAmt = -hi;
-                    float excess = evVal + 0.2f;
-                    float compressed = excess / (1f + hlAmt * 0.65f * excess);
-                    evVal = -0.2f + compressed;
+                    float newLuma;
+                    if (pixelLuma <= 1f)
+                    {
+                        float gamma = 1f - hl * 1.75f;
+                        newLuma = MathF.Pow(pixelLuma, gamma);
+                    }
+                    else
+                    {
+                        float lumaExcess = pixelLuma - 1f;
+                        float compressionStrength = -hl * 6f;
+                        float compressedExcess = lumaExcess / (1f + lumaExcess * compressionStrength);
+                        newLuma = 1f + compressedExcess;
+                    }
+                    float tonallyRatio = newLuma / pixelLuma;
+                    float desat = Smooth(pixelLuma, 1f, 10f);
+                    adjR = (r * tonallyRatio) * (1f - desat) + newLuma * desat;
+                    adjG = (g * tonallyRatio) * (1f - desat) + newLuma * desat;
+                    adjB = (b * tonallyRatio) * (1f - desat) + newLuma * desat;
                 }
                 else
                 {
-                    evVal += hi * 1.80f * Smooth(evVal, -0.2f, 3.0f);
+                    float factor = MathF.Pow(2f, hl * 1.75f);
+                    adjR = r * factor;
+                    adjG = g * factor;
+                    adjB = b * factor;
                 }
+                r = r * (1f - highlightMask) + adjR * highlightMask;
+                g = g * (1f - highlightMask) + adjG * highlightMask;
+                b = b * (1f - highlightMask) + adjB * highlightMask;
             }
         }
 
-        // Shadows: Broad, organic lift/drop with anchored black point (no flat milky noise)
-        if (MathF.Abs(shd) > 0.001f)
-        {
-            float wUpper = 1f - Smooth(evVal, -2.4f, 1.0f);
-            float wLower = Smooth(evVal, -8.0f, -4.2f);
-            float shdW = wUpper * wLower;
-            if (shd > 0f)
-                evVal += shd * 2.20f * shdW;
-            else
-                evVal += shd * 1.80f * shdW;
-        }
-
-        // Whites: Specular shoulder and upper clipping threshold control
-        if (MathF.Abs(whites) > 0.001f)
-        {
-            if (evVal > 0f)
-            {
-                float ww = Smooth(evVal, 0f, 3.0f);
-                evVal += whites * 1.50f * ww;
-            }
-        }
-
-        // Blacks: Deep toe and black clipping point control
-        if (MathF.Abs(blacks) > 0.001f)
-        {
-            if (evVal < -0.5f)
-            {
-                float bw = 1f - Smooth(evVal, -4.5f, -0.5f);
-                evVal += blacks * 1.80f * bw;
-            }
-        }
-
-        float targetLum = 0.18f * MathF.Pow(2f, evVal);
-        float hdrScale = MathF.Max(targetLum, 0f) / lum;
-        r *= hdrScale;
-        g *= hdrScale;
-        b *= hdrScale;
-
-        // 5. Contrast: Smooth S-curve pivoted at 18% middle gray with soft roll-off
+        // 7. Contrast: RapidRAW per-channel symmetric power S-curve in gamma 2.2 with specular highlight protection
         if (MathF.Abs(contrast) > 0.0005f)
         {
-            float lumC = Luma(r, g, b);
-            if (lumC < 1e-5f) lumC = 1e-5f;
-            float evC = MathF.Log2(lumC / 0.18f);
-            float deltaEv = contrast * 0.85f * (evC / (1f + 0.12f * evC * evC));
-            float evNew = evC + deltaEv;
-            float newLumC = 0.18f * MathF.Pow(2f, evNew);
-            float contrastScale = MathF.Max(newLumC, 0f) / lumC;
-            r *= contrastScale;
-            g *= contrastScale;
-            b *= contrastScale;
+            float cr = MathF.Max(r, 0f);
+            float cg = MathF.Max(g, 0f);
+            float cb = MathF.Max(b, 0f);
+
+            const float gExp = 2.2f;
+            const float invG = 1f / gExp;
+
+            float pr = MathF.Pow(cr, invG);
+            float pg = MathF.Pow(cg, invG);
+            float pb = MathF.Pow(cb, invG);
+
+            float cpr = Math.Clamp(pr, 0f, 1f);
+            float cpg = Math.Clamp(pg, 0f, 1f);
+            float cpb = Math.Clamp(pb, 0f, 1f);
+
+            float strength = MathF.Pow(2f, contrast * 1.25f);
+
+            float lowR = 0.5f * MathF.Pow(2f * cpr, strength);
+            float lowG = 0.5f * MathF.Pow(2f * cpg, strength);
+            float lowB = 0.5f * MathF.Pow(2f * cpb, strength);
+
+            float highR = 1f - 0.5f * MathF.Pow(2f * (1f - cpr), strength);
+            float highG = 1f - 0.5f * MathF.Pow(2f * (1f - cpg), strength);
+            float highB = 1f - 0.5f * MathF.Pow(2f * (1f - cpb), strength);
+
+            float curvedR = (cpr < 0.5f) ? lowR : highR;
+            float curvedG = (cpg < 0.5f) ? lowG : highG;
+            float curvedB = (cpb < 0.5f) ? lowB : highB;
+
+            float adjR = MathF.Pow(curvedR, gExp);
+            float adjG = MathF.Pow(curvedG, gExp);
+            float adjB = MathF.Pow(curvedB, gExp);
+
+            float mixR = Smooth(cr, 1f, 1.01f);
+            float mixG = Smooth(cg, 1f, 1.01f);
+            float mixB = Smooth(cb, 1f, 1.01f);
+
+            r = adjR * (1f - mixR) + cr * mixR;
+            g = adjG * (1f - mixG) + cg * mixG;
+            b = adjB * (1f - mixB) + cb * mixB;
         }
 
         if (r < 0f) r = 0f;
         if (g < 0f) g = 0f;
         if (b < 0f) b = 0f;
 
-        // Dehaze: Atmospheric scattering transmission recovery / mist
+        // Dehaze: Darktable physical atmospheric transmission & radiance recovery
         if (s.EnableLocalContrast && MathF.Abs(s.Dehaze) > 0.001f)
         {
             float dehazeAmt = s.Dehaze / 100f;
-            float lumD = MathF.Max(Luma(r, g, b), 0.0001f);
-            float darkCh = MathF.Min(r, MathF.Min(g, b));
-            float hazeRatio = Math.Clamp(darkCh / lumD, 0f, 1f);
-            if (dehazeAmt > 0f)
-            {
-                float t = Math.Clamp(1f - dehazeAmt * hazeRatio * 0.70f, 0.20f, 1f);
-                float airScale = MathF.Min(lumD, 1f) * (1f - t);
-                r = MathF.Max((r - 0.80f * airScale) / t, 0f);
-                g = MathF.Max((g - 0.84f * airScale) / t, 0f);
-                b = MathF.Max((b - 0.90f * airScale) / t, 0f);
-            }
-            else
-            {
-                float mist = -dehazeAmt * 0.50f * hazeRatio;
-                float airScale = MathF.Max(lumD, 0.2f);
-                r = r * (1f - mist) + 0.80f * airScale * mist;
-                g = g * (1f - mist) + 0.84f * airScale * mist;
-                b = b * (1f - mist) + 0.90f * airScale * mist;
-            }
+            float airR = MathF.Max(s.AtmosphereR > 0.001f ? s.AtmosphereR : 0.82f, 0.01f);
+            float airG = MathF.Max(s.AtmosphereG > 0.001f ? s.AtmosphereG : 0.86f, 0.01f);
+            float airB = MathF.Max(s.AtmosphereB > 0.001f ? s.AtmosphereB : 0.92f, 0.01f);
+            float m = MathF.Min(r / airR, MathF.Min(g / airG, b / airB));
+            if (m < 0f) m = 0f;
+            float tRaw = 1f - m * dehazeAmt;
+            float dist = Math.Clamp(s.DehazeDistance / 100f, 0f, 1f);
+            float dMax = MathF.Max(s.AtmosphereDepthMax > 0.001f ? s.AtmosphereDepthMax : 3.2f, 0.5f);
+            float tMin = Math.Clamp(MathF.Exp(-dist * dMax), 0.0009765625f, 1f);
+            float t = MathF.Max(tRaw, tMin);
+            r = MathF.Max((r - airR) / t + airR, 0f);
+            g = MathF.Max((g - airG) / t + airG, 0f);
+            b = MathF.Max((b - airB) / t + airB, 0f);
         }
 
-        lum = Luma(r, g, b);
+        float lum = Luma(r, g, b);
         float mx = r > g ? r : g;
         if (b > mx) mx = b;
         float mn = r < g ? r : g;
@@ -600,6 +666,66 @@ internal static class DevelopCpu
             og = ToSrgb1(sig.Eval(g));
             ob = ToSrgb1(sig.Eval(b));
         }
+    }
+
+    private static void ApplyCurveCpu(ref float r, ref float g, ref float b, bool rgbActive, float[] lutR, float[] lutG, float[] lutB, float[] lutM)
+    {
+        float cr = Math.Clamp(r, 0f, 1f);
+        float cg = Math.Clamp(g, 0f, 1f);
+        float cb = Math.Clamp(b, 0f, 1f);
+
+        if (!rgbActive)
+        {
+            r = SampleLut(lutM, cr);
+            g = SampleLut(lutM, cg);
+            b = SampleLut(lutM, cb);
+        }
+        else
+        {
+            float gradR = SampleLut(lutR, cr);
+            float gradG = SampleLut(lutG, cg);
+            float gradB = SampleLut(lutB, cb);
+
+            float l0 = Luma(cr, cg, cb);
+            float lTarget = SampleLut(lutM, Math.Clamp(l0, 0f, 1f));
+            float lGraded = Luma(gradR, gradG, gradB);
+            float d = lTarget - lGraded;
+
+            float fr = gradR + d;
+            float fg = gradG + d;
+            float fb = gradB + d;
+
+            float cMin = MathF.Min(fr, MathF.Min(fg, fb));
+            if (cMin < 0f)
+            {
+                float scale = lTarget / MathF.Max(lTarget - cMin, 1e-6f);
+                fr = lTarget + (fr - lTarget) * scale;
+                fg = lTarget + (fg - lTarget) * scale;
+                fb = lTarget + (fb - lTarget) * scale;
+            }
+
+            float cMax = MathF.Max(fr, MathF.Max(fg, fb));
+            if (cMax > 1f)
+            {
+                float scale = (1f - lTarget) / MathF.Max(cMax - lTarget, 1e-6f);
+                fr = lTarget + (fr - lTarget) * scale;
+                fg = lTarget + (fg - lTarget) * scale;
+                fb = lTarget + (fb - lTarget) * scale;
+            }
+
+            r = Math.Clamp(fr, 0f, 1f);
+            g = Math.Clamp(fg, 0f, 1f);
+            b = Math.Clamp(fb, 0f, 1f);
+        }
+    }
+
+    private static float SampleLut(float[] lut, float val)
+    {
+        float idx = val * 255f;
+        int i0 = Math.Clamp((int)idx, 0, 255);
+        int i1 = Math.Min(i0 + 1, 255);
+        float frac = idx - i0;
+        return lut[i0] + (lut[i1] - lut[i0]) * frac;
     }
 
     private static float Filmic1(float x)
