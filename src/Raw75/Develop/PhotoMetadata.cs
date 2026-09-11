@@ -108,7 +108,7 @@ public sealed class PhotoMetadata
         {
             if (Width <= 0 || Height <= 0) return "—";
             double mp = (double)Width * Height / 1_000_000.0;
-            return $"{Width} × {Height}  ({mp:0.1} MP)";
+            return $"{Width} × {Height}  ({mp.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} MP)";
         }
     }
 
@@ -117,8 +117,22 @@ public sealed class PhotoMetadata
         get
         {
             if (FileSizeBytes <= 0) return "—";
-            double mb = FileSizeBytes / (1024.0 * 1024.0);
-            return $"{mb:0.1} MB";
+            if (FileSizeBytes >= 1024L * 1024L * 1024L)
+            {
+                double gb = FileSizeBytes / (1024.0 * 1024.0 * 1024.0);
+                return $"{gb.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} GB";
+            }
+            if (FileSizeBytes >= 1024L * 1024L)
+            {
+                double mb = FileSizeBytes / (1024.0 * 1024.0);
+                return $"{mb.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} MB";
+            }
+            if (FileSizeBytes >= 1024L)
+            {
+                double kb = FileSizeBytes / 1024.0;
+                return $"{kb.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} KB";
+            }
+            return $"{FileSizeBytes} B";
         }
     }
 
@@ -126,7 +140,9 @@ public sealed class PhotoMetadata
     {
         get
         {
-            return CaptureTime.HasValue ? CaptureTime.Value.ToString("yyyy-MM-dd  HH:mm") : "—";
+            return CaptureTime.HasValue
+                ? CaptureTime.Value.ToString("yyyy-MM-dd  HH:mm", System.Globalization.CultureInfo.InvariantCulture)
+                : "—";
         }
     }
 }

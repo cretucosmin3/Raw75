@@ -27,7 +27,7 @@ public sealed class BrandMark : VisualElement
         {
             Color = Theme.Text,
             TextSize = 22,
-            Typeface = Fonts.GetTypeface("Liberation Sans, Noto Sans", 700),
+            Typeface = Theme.GetTypeface(700),
             IsAntialias = true,
             SubpixelText = true,
             LcdRenderText = true,
@@ -37,7 +37,7 @@ public sealed class BrandMark : VisualElement
         {
             Color = Theme.Accent,
             TextSize = 22,
-            Typeface = Fonts.GetTypeface("Liberation Sans, Noto Sans", 700),
+            Typeface = Theme.GetTypeface(700),
             IsAntialias = true,
             SubpixelText = true,
             LcdRenderText = true,

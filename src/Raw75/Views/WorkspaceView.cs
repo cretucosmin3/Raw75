@@ -41,7 +41,7 @@ public sealed class WorkspaceView : View
     private IconButton _btnBefore => _viewOverlay.BtnBefore;
     private IconButton _btnSplit => _viewOverlay.BtnSplit;
     private IconButton _btnClip => _viewOverlay.BtnClip;
-    private IconButton _btnInfo = null!;
+    private IconButton _btnInfo => _viewOverlay.BtnInfo;
     private DevelopSettings? _copiedSettings;
     private VisualElement _zoomLabel = null!;
     private GalleryView _gallery = null!;
@@ -317,6 +317,8 @@ public sealed class WorkspaceView : View
         };
         _photo.ClippingChanged += v => { if (_btnClip != null) _btnClip.Toggled = v; };
         _photo.InfoOverlayChanged += v => { if (_btnInfo != null) _btnInfo.Toggled = v; };
+        _photo.ShowBeforeChanged += v => { if (_btnBefore != null) _btnBefore.Toggled = v; };
+        _photo.SplitBeforeChanged += v => { if (_btnSplit != null) _btnSplit.Toggled = v; };
         AddElement(_photo);
 
         _gallery = new GalleryView
@@ -381,7 +383,7 @@ public sealed class WorkspaceView : View
 
         // Floating photo view overlay: top-right corner of photo viewport
         float overlayW = 88f;
-        float overlayH = 104f;
+        float overlayH = 138f;
         float overlayMargin = 14f;
         float overlayX = W - R - overlayMargin - overlayW;
         float overlayY = top + overlayMargin;
@@ -394,10 +396,16 @@ public sealed class WorkspaceView : View
                 FixedWidth = true
             }
         };
+        _btnInfo.Clicked += ToggleInfoOverlay;
         _btnBefore.Clicked += ToggleBefore;
         _btnSplit.Clicked += () =>
         {
             _btnSplit.Toggled = !_btnSplit.Toggled;
+            if (_btnSplit.Toggled && _btnBefore.Toggled)
+            {
+                _btnBefore.Toggled = false;
+                _photo.ShowBefore = false;
+            }
             _photo.SplitBefore = _btnSplit.Toggled;
             var d = _session.Active;
             _photo.SetBefore(d?.Proxy);
@@ -408,7 +416,7 @@ public sealed class WorkspaceView : View
         // Top bar tools panel: centered horizontally to the right of Viewer/Gallery
         float toolsH = 32f;
         float toolsY = (top - toolsH) * 0.5f;
-        float toolsW = 178f;
+        float toolsW = 118f;
         float toolsX = (510f + (W - 222f) - toolsW) * 0.5f;
 
         _toolsBar = new VisualElement
@@ -424,8 +432,6 @@ public sealed class WorkspaceView : View
         AddElement(_toolsBar);
 
         float curX = 0f;
-        _btnInfo = AddBarTool(_toolsBar, "Info", ref curX, 58f, "info");
-        _btnInfo.Clicked += ToggleInfoOverlay;
         var hdr = AddBarTool(_toolsBar, "HDR", ref curX, 58f, "hdr");
         hdr.Clicked += MergeHdr;
         curX += 4f;
@@ -1266,6 +1272,11 @@ public sealed class WorkspaceView : View
     private void ToggleBefore()
     {
         _btnBefore.Toggled = !_btnBefore.Toggled;
+        if (_btnBefore.Toggled && _btnSplit.Toggled)
+        {
+            _btnSplit.Toggled = false;
+            _photo.SplitBefore = false;
+        }
         _photo.ShowBefore = _btnBefore.Toggled;
     }
 

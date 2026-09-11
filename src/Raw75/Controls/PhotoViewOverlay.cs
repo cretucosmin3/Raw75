@@ -16,10 +16,12 @@ public class PhotoViewOverlay : VisualElement
     private const float Gap = 4f;
     private const float BtnH = 28f;
 
+    private readonly IconButton _btnInfo;
     private readonly IconButton _btnBefore;
     private readonly IconButton _btnSplit;
     private readonly IconButton _btnClip;
 
+    public IconButton BtnInfo => _btnInfo;
     public IconButton BtnBefore => _btnBefore;
     public IconButton BtnSplit => _btnSplit;
     public IconButton BtnClip => _btnClip;
@@ -39,10 +41,12 @@ public class PhotoViewOverlay : VisualElement
             Shadow = new ShadowStyle(0, 2.5f, 4, 4, new SKColor(0, 0, 0, 95))
         };
 
+        _btnInfo = new IconButton("Info", "info");
         _btnBefore = new IconButton("Before", "before");
         _btnSplit = new IconButton("Split", "split");
         _btnClip = new IconButton("Clip", "clipping");
 
+        AddChild(_btnInfo);
         AddChild(_btnBefore);
         AddChild(_btnSplit);
         AddChild(_btnClip);
@@ -54,7 +58,7 @@ public class PhotoViewOverlay : VisualElement
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = 88f;
-        float h = Pad * 2f + BtnH * 3f + Gap * 2f;
+        float h = Pad * 2f + BtnH * 4f + Gap * 3f;
         return new SKSize(w, h);
     }
 
@@ -65,8 +69,13 @@ public class PhotoViewOverlay : VisualElement
         float w = Transform.Computed.Width;
         float btnW = Math.Max(0f, w - Pad * 2f);
 
-        _btnBefore.Transform.SetAbsoluteFrame(ox + Pad, oy + Pad, btnW, BtnH);
-        _btnSplit.Transform.SetAbsoluteFrame(ox + Pad, oy + Pad + BtnH + Gap, btnW, BtnH);
-        _btnClip.Transform.SetAbsoluteFrame(ox + Pad, oy + Pad + (BtnH + Gap) * 2f, btnW, BtnH);
+        float curY = oy + Pad;
+        _btnInfo.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
+        curY += BtnH + Gap;
+        _btnBefore.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
+        curY += BtnH + Gap;
+        _btnSplit.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
+        curY += BtnH + Gap;
+        _btnClip.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
     }
 }
