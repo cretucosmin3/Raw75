@@ -6,7 +6,7 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>In-chrome wordmark: Raw in white, 75 in accent. Text only.</summary>
+/// <summary>In-chrome wordmark: RAW in white, 75 in accent. Text only.</summary>
 public sealed class BrandMark : VisualElement
 {
     public BrandMark()
@@ -45,8 +45,8 @@ public sealed class BrandMark : VisualElement
         };
 
         float y = 22f;
-        canvas.DrawText("Raw", 0, y, rawPaint);
-        float x = rawPaint.MeasureText("Raw") + 2f;
+        canvas.DrawText("RAW", 0, y, rawPaint);
+        float x = rawPaint.MeasureText("RAW") + 1f;
         canvas.DrawText("75", x, y, numPaint);
     }
 }

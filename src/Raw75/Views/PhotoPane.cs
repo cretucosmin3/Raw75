@@ -231,6 +231,12 @@ public sealed class PhotoPane : VisualElement
         {
             if (_showInfoOverlay == value) return;
             _showInfoOverlay = value;
+            if (!_showInfoOverlay)
+            {
+                _infoCardRect = default;
+                _infoCloseRect = default;
+                _infoCloseHover = false;
+            }
             InvalidatePaint();
             InfoOverlayChanged?.Invoke(_showInfoOverlay);
         }
@@ -250,6 +256,8 @@ public sealed class PhotoPane : VisualElement
     }
 
     private SKRect _infoCardRect;
+    private SKRect _infoCloseRect;
+    private bool _infoCloseHover;
 
     public float CropX
     {
@@ -926,128 +934,204 @@ public sealed class PhotoPane : VisualElement
     {
         if (_metadata == null) return;
 
-        float cardW = 340f;
-        float cardH = 136f;
-        float cardX = pane.Left + 24f;
+        var rows = new List<(string Label, string Value, SKColor Color)>(10);
+
+        string? filename = !string.IsNullOrEmpty(_droppedPath) ? System.IO.Path.GetFileName(_droppedPath) : null;
+        if (!string.IsNullOrEmpty(filename))
+            rows.Add(("File", filename, Theme.Text));
+
+        if (!string.IsNullOrEmpty(_metadata.CameraName))
+            rows.Add(("Camera", _metadata.CameraName, Theme.Text));
+
+        if (!string.IsNullOrEmpty(_metadata.LensName) && _metadata.LensName != "Unknown Lens")
+            rows.Add(("Lens", _metadata.LensName, Theme.TextSecondary));
+
+        if (_metadata.ShutterSpeed > 0.000001f)
+            rows.Add(("Shutter", _metadata.FormattedShutter, Theme.Accent));
+
+        if (_metadata.Aperture > 0.01f)
+            rows.Add(("Aperture", _metadata.FormattedAperture, Theme.Accent));
+
+        if (_metadata.Iso > 0.1f)
+            rows.Add(("ISO", _metadata.FormattedIso, Theme.Accent));
+
+        if (_metadata.FocalLength > 0.1f)
+            rows.Add(("Focal Length", _metadata.FormattedFocal, Theme.Accent));
+
+        if (_metadata.Width > 0 && _metadata.Height > 0)
+            rows.Add(("Dimensions", _metadata.FormattedDimensions, Theme.Text));
+
+        if (_metadata.FileSizeBytes > 0)
+            rows.Add(("File Size", _metadata.FormattedFileSize, Theme.Text));
+
+        if (_metadata.CaptureTime.HasValue)
+            rows.Add(("Date & Time", _metadata.FormattedDateTime, Theme.TextDim));
+
+        if (rows.Count == 0) return;
+
+        var tfSemiBold = Blossom.Utils.Fonts.GetTypeface("Liberation Sans, Noto Sans, sans-serif", 600);
+        var tfMedium = Blossom.Utils.Fonts.GetTypeface("Liberation Sans, Noto Sans, sans-serif", 500);
+
+        using var labelPaint = new SKPaint
+        {
+            Typeface = tfMedium,
+            TextSize = 12.5f,
+            Color = Theme.TextDim,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true
+        };
+
+        using var valuePaint = new SKPaint
+        {
+            Typeface = tfSemiBold,
+            TextSize = 13.5f,
+            IsAntialias = true,
+            SubpixelText = true,
+            LcdRenderText = true
+        };
+
+        float maxLabelW = 0f;
+        float maxValueW = 0f;
+        foreach (var r in rows)
+        {
+            float lw = labelPaint.MeasureText(r.Label);
+            if (lw > maxLabelW) maxLabelW = lw;
+            float vw = valuePaint.MeasureText(r.Value);
+            if (vw > maxValueW) maxValueW = vw;
+        }
+
+        float padX = 16f;
+        float gap = 18f;
+        float rowH = 25f;
+        float headerH = 42f;
+        float bottomPad = 14f;
+
+        float cardW = Math.Clamp(padX + maxLabelW + gap + maxValueW + padX, 320f, 500f);
+        float cardH = headerH + (rows.Count * rowH) + bottomPad;
+        float cardX = _cropTool ? (pane.Left + 8f + 84f + 12f) : (pane.Left + 24f);
         float cardY = pane.Top + 24f;
         _infoCardRect = new SKRect(cardX, cardY, cardX + cardW, cardY + cardH);
 
         // Soft drop shadow
         using var shadow = new SKPaint
         {
-            Color = new SKColor(0, 0, 0, 120),
+            Color = new SKColor(0, 0, 0, 95),
             IsAntialias = true,
             Style = SKPaintStyle.Fill
         };
-        canvas.DrawRoundRect(new SKRoundRect(new SKRect(cardX, cardY + 3, cardX + cardW, cardY + cardH + 3), 8, 8), shadow);
+        canvas.DrawRoundRect(new SKRoundRect(new SKRect(cardX, cardY + 4, cardX + cardW, cardY + cardH + 4), Theme.Radius, Theme.Radius), shadow);
 
-        // Card background
+        // Card background (semi-transparent ~75% opacity dark neutral well)
         using var bg = new SKPaint
         {
-            Color = new SKColor(20, 20, 25, 235),
+            Color = new SKColor(20, 20, 24, 191),
             IsAntialias = true,
             Style = SKPaintStyle.Fill
         };
-        var cardR = new SKRoundRect(_infoCardRect, 8, 8);
+        var cardR = new SKRoundRect(_infoCardRect, Theme.Radius, Theme.Radius);
         canvas.DrawRoundRect(cardR, bg);
 
         // Card border
         using var border = new SKPaint
         {
-            Color = new SKColor(255, 255, 255, 38),
+            Color = new SKColor(255, 255, 255, 28),
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
             StrokeWidth = 1f
         };
         canvas.DrawRoundRect(cardR, border);
 
-        float padX = cardX + 16f;
-        float curY = cardY + 22f;
-
-        // Top tag: "PHOTO INFO"
+        // Top tag pill: "PHOTO INFO"
         using var tagBg = new SKPaint
         {
-            Color = new SKColor(255, 255, 255, 22),
+            Color = new SKColor(255, 255, 255, 20),
             IsAntialias = true,
             Style = SKPaintStyle.Fill
         };
-        var tagRect = new SKRoundRect(new SKRect(padX, curY - 12, padX + 80, curY + 4), 3, 3);
+        float tagW = 84f;
+        float tagH = 20f;
+        var tagRect = new SKRoundRect(new SKRect(cardX + padX, cardY + 11f, cardX + padX + tagW, cardY + 11f + tagH), Theme.RadiusSm, Theme.RadiusSm);
         canvas.DrawRoundRect(tagRect, tagBg);
 
         using var tagText = new SKPaint
         {
+            Typeface = tfSemiBold,
+            TextSize = 10f,
             Color = Theme.TextSecondary,
             IsAntialias = true,
             SubpixelText = true,
             LcdRenderText = true,
-            TextSize = 9.5f,
-            FakeBoldText = true,
             TextAlign = SKTextAlign.Center
         };
-        canvas.DrawText("PHOTO INFO", padX + 40, curY - 1, tagText);
+        canvas.DrawText("PHOTO INFO", cardX + padX + tagW * 0.5f, cardY + 11f + 14f, tagText);
 
-        // Date/Time on the right
-        using var dateText = new SKPaint
-        {
-            Color = Theme.TextDim,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            TextSize = 11f,
-            TextAlign = SKTextAlign.Right
-        };
-        canvas.DrawText(_metadata.FormattedDateTime, cardX + cardW - 16f, curY, dateText);
+        // Close button: vector "✕" (lines drawn manually so no font/tofu glyph dependency)
+        float closeW = 24f;
+        float closeH = 24f;
+        float closeX = cardX + cardW - padX - closeW;
+        float closeY = cardY + 9f;
+        _infoCloseRect = new SKRect(closeX, closeY, closeX + closeW, closeY + closeH);
 
-        // Camera name
-        curY += 26f;
-        using var camText = new SKPaint
+        if (_infoCloseHover)
         {
-            Color = Theme.Text,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            TextSize = 14f,
-            FakeBoldText = true
-        };
-        canvas.DrawText(_metadata.CameraName, padX, curY, camText);
+            using var closeHoverBg = new SKPaint
+            {
+                Color = new SKColor(255, 255, 255, 32),
+                IsAntialias = true,
+                Style = SKPaintStyle.Fill
+            };
+            canvas.DrawRoundRect(new SKRoundRect(_infoCloseRect, Theme.RadiusSm, Theme.RadiusSm), closeHoverBg);
+        }
 
-        // Lens name
-        curY += 20f;
-        using var lensText = new SKPaint
+        using var xPaint = new SKPaint
         {
-            Color = Theme.TextSecondary,
+            Color = _infoCloseHover ? Theme.Text : Theme.TextDim,
             IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            TextSize = 12f
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1.6f,
+            StrokeCap = SKStrokeCap.Round
         };
-        canvas.DrawText(_metadata.LensName, padX, curY, lensText);
+        float cx = _infoCloseRect.MidX;
+        float cy = _infoCloseRect.MidY;
+        float arm = 4.5f;
+        canvas.DrawLine(cx - arm, cy - arm, cx + arm, cy + arm, xPaint);
+        canvas.DrawLine(cx + arm, cy - arm, cx - arm, cy + arm, xPaint);
 
-        // Exposure parameter strip (Signature Warm Amber)
-        curY += 24f;
-        using var expText = new SKPaint
+        // Subtle divider line under header
+        using var divider = new SKPaint
         {
-            Color = Theme.Accent,
+            Color = Theme.HairlineSubtle,
             IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            TextSize = 13f,
-            FakeBoldText = true
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1f
         };
-        canvas.DrawText(_metadata.FormattedExposure, padX, curY, expText);
+        float divY = cardY + headerH - 4f;
+        canvas.DrawLine(cardX + padX, divY, cardX + cardW - padX, divY, divider);
 
-        // Dimensions and file size
-        curY += 20f;
-        using var dimText = new SKPaint
+        // Draw rows vertically
+        float curY = divY + 18f;
+        float valueX = cardX + padX + maxLabelW + gap;
+        float maxValueAvailW = cardX + cardW - padX - valueX;
+
+        foreach (var r in rows)
         {
-            Color = Theme.TextDim,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            TextSize = 11f
-        };
-        string dimStr = $"{_metadata.FormattedDimensions}   ·   {_metadata.FormattedFileSize}";
-        canvas.DrawText(dimStr, padX, curY, dimText);
+            canvas.DrawText(r.Label, cardX + padX, curY, labelPaint);
+
+            valuePaint.Color = r.Color;
+            string valStr = r.Value;
+            if (valuePaint.MeasureText(valStr) > maxValueAvailW && valStr.Length > 8)
+            {
+                while (valStr.Length > 4 && valuePaint.MeasureText(valStr + "…") > maxValueAvailW)
+                {
+                    valStr = valStr[..^1];
+                }
+                valStr += "…";
+            }
+            canvas.DrawText(valStr, valueX, curY, valuePaint);
+
+            curY += rowH;
+        }
     }
 
     private void OnPointerDown(object sender, MouseEventArgs e)
@@ -1055,17 +1139,24 @@ public sealed class PhotoPane : VisualElement
         if (e.Button != 0 || !HasPhoto)
             return;
 
-        if (_showInfoOverlay && _infoCardRect.Contains(e.Relative.X, e.Relative.Y))
+        if (_showInfoOverlay)
         {
-            _showInfoOverlay = false;
-            InvalidatePaint();
-            e.Handled = true;
-            return;
+            if (_infoCloseRect.Contains(e.Relative.X, e.Relative.Y))
+            {
+                ShowInfoOverlay = false;
+                e.Handled = true;
+                return;
+            }
+            if (_infoCardRect.Contains(e.Relative.X, e.Relative.Y))
+            {
+                // Clicking inside the info panel absorbs the event so it doesn't dismiss the panel or drag/zoom the photo
+                e.Handled = true;
+                return;
+            }
         }
 
         _pointerDown = true;
         _didDrag = false;
-        _cropTool = _crop.Active != CropHandle.None;
         _downLocal = e.Relative;
         _downPanX = PanX;
         _downPanY = PanY;
@@ -1264,6 +1355,15 @@ public sealed class PhotoPane : VisualElement
     private void OnHover(VisualElement el, Vector2 pos)
     {
         _pointerLocal = PointToClient(pos.X, pos.Y);
+
+        if (_showInfoOverlay)
+        {
+            bool wasHover = _infoCloseHover;
+            _infoCloseHover = _infoCloseRect.Contains(_pointerLocal.X, _pointerLocal.Y);
+            if (wasHover != _infoCloseHover)
+                InvalidatePaint();
+        }
+
         if (!_cropTool)
             return;
         string? id = CropBarIdAt(_pointerLocal.X, _pointerLocal.Y);

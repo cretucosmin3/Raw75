@@ -60,9 +60,6 @@ internal static class DevelopCpu
         bool hasColorRecon = s.EnableReconstruction && s.ColorReconstructionAmount > 0.001f;
         bool hasLocalContrast = s.EnableLocalContrast && (
             Math.Abs(s.LocalContrastDetail) > 0.001f ||
-            Math.Abs(s.LocalContrastHighlights) > 0.001f ||
-            Math.Abs(s.LocalContrastShadows) > 0.001f ||
-            Math.Abs(s.LocalContrastMidtones - 50.0f) > 0.5f ||
             Math.Abs(s.Texture) > 0.001f);
         bool neighbor = doDenoise;
         bool needBuffer = hasColorRecon || hasLocalContrast || neighbor || doGrain;
@@ -232,10 +229,10 @@ internal static class DevelopCpu
             return new RasterBuffer(dst, dw, dh);
 
         // Local contrast (step 8)
-        // ref: bilateral filter & local laplacian
+        // ref: bilateral filter
         if (hasLocalContrast)
         {
-            ApplyLocalContrast(look, dw, dh, s.LocalContrastDetail, s.LocalContrastMidtones, s.LocalContrastShadows, s.LocalContrastHighlights, s.Texture / 100f, fast);
+            ApplyLocalContrast(look, dw, dh, s.LocalContrastDetail, s.Texture / 100f, fast);
         }
 
         // Denoise (step 9) + Tone curve (step 12)
@@ -436,54 +433,54 @@ internal static class DevelopCpu
         if (lum < 1e-5f) lum = 1e-5f;
         float evVal = MathF.Log2(lum / 0.18f);
 
-        // Highlights: Compressive rational shoulder to recover texture without muddy flat gray
+        // Highlights: Compressive rational shoulder for recovery, smooth lift for boost
         if (MathF.Abs(hi) > 0.001f)
         {
-            if (evVal > 0f)
+            if (evVal > -0.2f)
             {
                 if (hi < 0f)
                 {
                     float hlAmt = -hi;
-                    evVal = evVal / (1f + hlAmt * 0.40f * evVal);
+                    float excess = evVal + 0.2f;
+                    float compressed = excess / (1f + hlAmt * 0.65f * excess);
+                    evVal = -0.2f + compressed;
                 }
                 else
                 {
-                    evVal += hi * 0.45f * Smooth(evVal, 0f, 3.5f);
+                    evVal += hi * 1.80f * Smooth(evVal, -0.2f, 3.0f);
                 }
             }
         }
 
-        // Shadows: Grounded lift/drop with pinned black anchor (prevents milky haze)
+        // Shadows: Broad, organic lift/drop with anchored black point (no flat milky noise)
         if (MathF.Abs(shd) > 0.001f)
         {
-            if (evVal < 0f)
-            {
-                float t = MathF.Max(1f + evVal / 7f, 0f);
-                float w = 1f - Smooth(evVal, -6f, 0f);
-                if (shd > 0f)
-                    evVal += shd * 1.50f * t * w;
-                else
-                    evVal += shd * 1.20f * t * w;
-            }
+            float wUpper = 1f - Smooth(evVal, -2.4f, 1.0f);
+            float wLower = Smooth(evVal, -8.0f, -4.2f);
+            float shdW = wUpper * wLower;
+            if (shd > 0f)
+                evVal += shd * 2.20f * shdW;
+            else
+                evVal += shd * 1.80f * shdW;
         }
 
-        // Whites: Range anchor for extreme highlight/specular rolloff
+        // Whites: Specular shoulder and upper clipping threshold control
         if (MathF.Abs(whites) > 0.001f)
         {
-            if (evVal > 1f)
+            if (evVal > 0f)
             {
-                float ww = Smooth(evVal, 1f, 3.5f);
-                evVal += whites * 1.25f * ww;
+                float ww = Smooth(evVal, 0f, 3.0f);
+                evVal += whites * 1.50f * ww;
             }
         }
 
-        // Blacks: Range anchor for deep toe/shadow threshold
+        // Blacks: Deep toe and black clipping point control
         if (MathF.Abs(blacks) > 0.001f)
         {
-            if (evVal < -1f)
+            if (evVal < -0.5f)
             {
-                float bw = 1f - Smooth(evVal, -5.5f, -1.2f);
-                evVal += blacks * 1.10f * bw;
+                float bw = 1f - Smooth(evVal, -4.5f, -0.5f);
+                evVal += blacks * 1.80f * bw;
             }
         }
 
@@ -1196,16 +1193,12 @@ internal static class DevelopCpu
         if (b < 0f) b = 0f;
     }
 
-    // ref: bilateral filter & local laplacian
+    // ref: bilateral filter
     private static void ApplyLocalContrast(
-        float[] look, int w, int h, float detail, float midtones, float shadows, float highlights, float texture, bool fast)
+        float[] look, int w, int h, float detail, float texture, bool fast)
     {
-        if (Math.Abs(detail) < 1e-4f && Math.Abs(highlights) < 1e-4f && Math.Abs(shadows) < 1e-4f && Math.Abs(midtones - 50f) < 0.1f && Math.Abs(texture) < 1e-4f)
+        if (Math.Abs(detail) < 1e-4f && Math.Abs(texture) < 1e-4f)
             return;
-
-        float sigma = Math.Clamp(midtones / 100f, 0.05f, 1f);
-        float shd = shadows / 100f;
-        float hi = highlights / 100f;
 
         // Precompute perceptual lightness L = cbrt(lum)
         float[] lums = new float[w * h];
@@ -1293,7 +1286,8 @@ internal static class DevelopCpu
                 }
 
                 float gL = sumL / sumW;
-                float newL = CurveScalar(xL, gL, sigma, shd, hi, detail);
+                float c = xL - gL;
+                float newL = xL + detail * c * MathF.Exp(-c * c / 0.04f);
 
                 // Edge-guided halo suppression matching GPU SkSL
                 float edgeFactor = MathF.Exp(-grad * grad / 0.0064f);
@@ -1314,44 +1308,5 @@ internal static class DevelopCpu
                 look[3 * idx + 2] *= gain;
             }
         });
-    }
-
-    // ref: local laplacian
-    private static float CurveScalar(float x, float g, float sigma, float shadows, float highlights, float clarity)
-    {
-        float c = x - g;
-        if (MathF.Abs(clarity) < 1e-4f && MathF.Abs(highlights) < 1e-4f && MathF.Abs(shadows) < 1e-4f)
-            return x;
-
-        float dtShadows = 1.0f + shadows;
-        float dtHighlights = 1.0f + highlights;
-        float effSigma = Math.Clamp(sigma * 0.40f, 0.04f, 0.50f);
-        float val;
-        if (c > 2.0f * effSigma)
-        {
-            val = g + effSigma + dtShadows * (c - effSigma);
-        }
-        else if (c < -2.0f * effSigma)
-        {
-            val = g - effSigma + dtHighlights * (c + effSigma);
-        }
-        else if (c > 0.0f)
-        {
-            float t = Math.Clamp(c / (2.0f * effSigma), 0.0f, 1.0f);
-            float t2 = t * t;
-            float mt = 1.0f - t;
-            val = g + effSigma * 2.0f * mt * t + t2 * (effSigma + effSigma * dtShadows);
-        }
-        else
-        {
-            float t = Math.Clamp(-c / (2.0f * effSigma), 0.0f, 1.0f);
-            float t2 = t * t;
-            float mt = 1.0f - t;
-            val = g - effSigma * 2.0f * mt * t + t2 * (-effSigma - effSigma * dtHighlights);
-        }
-
-        // midtone local contrast (clarity)
-        val += clarity * c * MathF.Exp(-c * c / (0.6666667f * effSigma * effSigma));
-        return Math.Clamp(val, 0.0001f, 2.5f);
     }
 }
