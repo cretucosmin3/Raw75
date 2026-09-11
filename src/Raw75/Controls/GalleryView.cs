@@ -342,7 +342,7 @@ public sealed class GalleryView : ScrollContainer
                 Border = new BorderStyle
                 {
                     Width = active ? 2f : 1f,
-                    Color = active ? Theme.Accent : (_isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline),
+                    Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline),
                     Roundness = Theme.Radius
                 },
                 Shadow = active
@@ -350,7 +350,7 @@ public sealed class GalleryView : ScrollContainer
                     : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70))
             };
 
-            _thumb = new GalleryThumbWell(doc.Preview ?? doc.Thumb)
+            _thumb = new GalleryThumbWell(doc.Look ?? doc.Preview ?? doc.Thumb)
             {
                 Name = $"{Name}_Thumb",
                 IsClickthrough = true
@@ -385,12 +385,12 @@ public sealed class GalleryView : ScrollContainer
                 BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null,
                 Style = new ElementStyle
                 {
-                    BackColor = _isReady ? Theme.Accent : new SKColor(0, 0, 0, 170),
+                    BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 150),
                     Border = new BorderStyle
                     {
                         Width = 1,
-                        Color = _isReady ? Theme.Accent : Theme.HairlineSubtle,
-                        Roundness = 4
+                        Color = _isReady ? Theme.Success : Theme.HairlineSubtle,
+                        Roundness = 11f
                     }
                 }
             };
@@ -471,7 +471,7 @@ public sealed class GalleryView : ScrollContainer
             _active = active;
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 2f : 1f;
-            Style.Border.Color = active ? Theme.Accent : (_isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline);
+            Style.Border.Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline);
             Style.Shadow = active
                 ? new ShadowStyle(0, 3f, 6, 6, new SKColor(255, 153, 51, 90))
                 : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70));
@@ -487,18 +487,19 @@ public sealed class GalleryView : ScrollContainer
 
         public void RefreshThumb()
         {
-            _thumb.SetImage(Doc.Preview ?? Doc.Thumb);
+            _thumb.SetImage(Doc.Look ?? Doc.Preview ?? Doc.Thumb);
         }
 
         private void UpdateReadyStyle()
         {
             _readyBtn.BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null;
-            _readyBtn.Style.BackColor = _isReady ? Theme.Accent : new SKColor(0, 0, 0, 170);
-            _readyBtn.Style.Border.Color = _isReady ? Theme.Accent : Theme.HairlineSubtle;
+            _readyBtn.Style.BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 150);
+            _readyBtn.Style.Border.Color = _isReady ? Theme.Success : Theme.HairlineSubtle;
+            _readyBtn.Style.Border.Roundness = 11f;
             _readyBtn.InvalidatePaint();
             if (!_active)
             {
-                Style.Border.Color = _isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline;
+                Style.Border.Color = _isReady ? Theme.SuccessSoft : Theme.Hairline;
                 InvalidatePaint();
             }
         }
@@ -523,6 +524,12 @@ public sealed class GalleryView : ScrollContainer
 
     private sealed class GalleryThumbWell : VisualElement
     {
+        private static readonly SKPaint SmoothPaint = new()
+        {
+            FilterQuality = SKFilterQuality.Medium,
+            IsAntialias = true
+        };
+
         private SKImage? _image;
 
         public GalleryThumbWell(SKImage? image)
@@ -553,7 +560,7 @@ public sealed class GalleryView : ScrollContainer
             float w = Transform.Computed.Width;
             float h = Transform.Computed.Height;
             var dest = Contain(w, h, _image.Width, _image.Height);
-            cmds.Add(new DrawSkImageCommand(_image, dest));
+            cmds.Add(new DrawSkImageCommand(_image, dest, SmoothPaint));
         }
 
         private static SKRect Contain(float boxW, float boxH, int imgW, int imgH)

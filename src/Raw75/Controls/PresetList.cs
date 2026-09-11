@@ -21,11 +21,15 @@ public class PresetList : VisualElement
 
     private readonly VisualElement _header;
     private readonly VisualElement _headerTitle;
+    private readonly IconButton _copy;
+    private readonly IconButton _paste;
     private readonly IconButton _save;
     private readonly PresetScrollList _list;
     private readonly List<NameRow> _rows = new();
 
     public event Action<string>? Applied;
+    public event Action? CopyClicked;
+    public event Action? PasteClicked;
     public event Action? SaveClicked;
     public event Action<string>? Deleted;
 
@@ -81,6 +85,14 @@ public class PresetList : VisualElement
         _header.AddChild(_headerTitle);
         AddChild(_header);
 
+        _copy = new IconButton("Copy", "copy");
+        _copy.Clicked += () => CopyClicked?.Invoke();
+        AddChild(_copy);
+
+        _paste = new IconButton("Paste", "paste");
+        _paste.Clicked += () => PasteClicked?.Invoke();
+        AddChild(_paste);
+
         _save = new IconButton("Save Preset", "plus");
         _save.Clicked += () => SaveClicked?.Invoke();
         AddChild(_save);
@@ -123,7 +135,7 @@ public class PresetList : VisualElement
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : Theme.LeftW);
-        float h = HeaderH + SaveH + 16f + _rows.Count * RowH + 16f;
+        float h = HeaderH + SaveH + 6f + SaveH + 16f + _rows.Count * RowH + 16f;
         if (maxHeight > 0) h = Math.Min(h, maxHeight);
         return new SKSize(w, h);
     }
@@ -139,14 +151,23 @@ public class PresetList : VisualElement
         _header.Transform.SetAbsoluteFrame(originX, originY, w, HeaderH);
         _headerTitle.Transform.SetAbsoluteFrame(originX + 8f, originY + (HeaderH - 18f) * 0.5f, w - 16f, 18f);
 
+        // Copy and Paste action buttons in a single row
+        float copyPasteY = originY + HeaderH + 6f;
+        float pad = 8f;
+        float gap = 6f;
+        float totalRowW = w - pad * 2f;
+        float halfW = (totalRowW - gap) * 0.5f;
+        _copy.Transform.SetAbsoluteFrame(originX + pad, copyPasteY, halfW, SaveH);
+        _paste.Transform.SetAbsoluteFrame(originX + pad + halfW + gap, copyPasteY, halfW, SaveH);
+
         // Save preset action button
-        float saveY = originY + HeaderH + 6f;
-        _save.Transform.SetAbsoluteFrame(originX + 8f, saveY, w - 16f, SaveH);
+        float saveY = copyPasteY + SaveH + 6f;
+        _save.Transform.SetAbsoluteFrame(originX + pad, saveY, totalRowW, SaveH);
 
         // Recessed presets list well
         float listY = saveY + SaveH + 6f;
         float listH = Math.Max(24f, originY + h - listY - 8f);
-        _list.Transform.SetAbsoluteFrame(originX + 8f, listY, w - 16f, listH);
+        _list.Transform.SetAbsoluteFrame(originX + pad, listY, totalRowW, listH);
     }
 
     private sealed class PresetScrollList : ScrollContainer

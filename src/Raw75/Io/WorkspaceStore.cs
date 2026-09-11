@@ -309,15 +309,91 @@ public static class WorkspaceStore
         SavePrefs(Root, path);
     }
 
-    private static void SavePrefs(string? root, string? active)
+    public static void SaveSession(string? root, string? activePath, IEnumerable<string>? photoPaths)
     {
         try
         {
             string? dir = Path.GetDirectoryName(PrefsPath);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
-            var prefs = new WorkspacePrefs { Root = root, ActivePath = active };
+
+            List<string>? list = null;
+            if (photoPaths != null)
+            {
+                list = new List<string>();
+                foreach (var p in photoPaths)
+                {
+                    if (!string.IsNullOrWhiteSpace(p) && File.Exists(p) && !list.Contains(p))
+                        list.Add(p);
+                }
+            }
+
+            var prefs = new WorkspacePrefs
+            {
+                Root = root,
+                ActivePath = activePath,
+                RecentPhotos = list
+            };
             File.WriteAllText(PrefsPath, JsonSerializer.Serialize(prefs, JsonOptions));
+        }
+        catch (Exception ex)
+        {
+            Blossom.Log.Warning("Workspace prefs: " + ex.Message);
+        }
+    }
+
+    public static bool LoadSession(out string? root, out string? activePath, out List<string> photos)
+    {
+        root = null;
+        activePath = null;
+        photos = new List<string>();
+
+        try
+        {
+            if (!File.Exists(PrefsPath))
+                return false;
+
+            var prefs = JsonSerializer.Deserialize<WorkspacePrefs>(File.ReadAllText(PrefsPath), JsonOptions);
+            if (prefs == null)
+                return false;
+
+            root = (prefs.Root != null && Directory.Exists(prefs.Root)) ? prefs.Root : null;
+            activePath = prefs.ActivePath;
+
+            if (prefs.RecentPhotos != null && prefs.RecentPhotos.Count > 0)
+            {
+                foreach (var p in prefs.RecentPhotos)
+                {
+                    if (File.Exists(p))
+                        photos.Add(p);
+                }
+            }
+
+            return photos.Count > 0 || root != null;
+        }
+        catch (Exception ex)
+        {
+            Blossom.Log.Warning("LoadSession: " + ex.Message);
+            return false;
+        }
+    }
+
+    private static void SavePrefs(string? root, string? active)
+    {
+        try
+        {
+            List<string>? existingPhotos = null;
+            if (File.Exists(PrefsPath))
+            {
+                try
+                {
+                    var old = JsonSerializer.Deserialize<WorkspacePrefs>(File.ReadAllText(PrefsPath), JsonOptions);
+                    existingPhotos = old?.RecentPhotos;
+                }
+                catch { }
+            }
+
+            SaveSession(root, active, existingPhotos);
         }
         catch (Exception ex)
         {
@@ -486,5 +562,6 @@ public static class WorkspaceStore
     {
         public string? Root { get; set; }
         public string? ActivePath { get; set; }
+        public List<string>? RecentPhotos { get; set; }
     }
 }
