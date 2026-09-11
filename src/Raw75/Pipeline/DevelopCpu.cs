@@ -85,12 +85,14 @@ internal static class DevelopCpu
             for (int x = 0; x < dw; x++)
             {
                 int sx, sy;
-                float u = (x + 0.5f) / dw;
-                float v = (y + 0.5f) / dh;
+                float destU = (x + 0.5f) / dw;
+                float destV = (y + 0.5f) / dh;
+                float u = destU;
+                float v = destV;
                 if (hasCrop)
                 {
-                    u = cx + u * cw;
-                    v = cy + v * ch;
+                    u = cx + destU * cw;
+                    v = cy + destV * ch;
                 }
                 if (!remap)
                 {
@@ -114,16 +116,14 @@ internal static class DevelopCpu
                     b = ToLin1(rgba[si + 2] / 255f);
                 }
 
-                // Lens vignetting compensation / creative vignette
+                // Vignette in cropped dest space (same as GPU Stage 3).
                 if (s.EnableGeometry && MathF.Abs(s.VignetteAmount) > 0.001f)
                 {
-                    float aspect = (float)sw / Math.Max(sh, 1);
-                    float su = (sx + 0.5f) / sw;
-                    float sv = (sy + 0.5f) / sh;
-                    float dx = (su - 0.5f) * aspect;
-                    float dy = (sv - 0.5f);
+                    float aspect = (float)dw / Math.Max(dh, 1);
+                    float dx = (destU - 0.5f) * aspect;
+                    float dy = (destV - 0.5f);
                     float maxDist = MathF.Sqrt(0.25f * aspect * aspect + 0.25f);
-                    float d = MathF.Sqrt(dx * dx + dy * dy) / maxDist;
+                    float d = MathF.Sqrt(dx * dx + dy * dy) / Math.Max(maxDist, 1e-6f);
                     float mp = Math.Clamp(s.VignetteMidpoint / 100f, 0.05f, 0.95f);
                     float vFactor = Smooth(d, mp * 0.40f, 1.15f);
                     float gain = MathF.Pow(2f, (s.VignetteAmount / 100f) * 2.5f * vFactor);

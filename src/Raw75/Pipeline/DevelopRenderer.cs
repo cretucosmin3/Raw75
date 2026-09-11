@@ -402,8 +402,6 @@ public static class DevelopRenderer
     {
         Set(u, "u_srcSize", new[] { (float)srcW, (float)srcH });
         Set(u, "u_srcLinear", srcLinear ? 1f : 0f);
-        Set(u, "u_vignette", s.EnableGeometry ? s.VignetteAmount / 100f : 0f);
-        Set(u, "u_vignetteMidpoint", s.EnableGeometry ? s.VignetteMidpoint / 100f : 0.5f);
         float reconMode = (s.EnableReconstruction ? s.ReconstructionMode : HighlightMode.Off) switch
         {
             HighlightMode.Opposed => 1f,
@@ -547,6 +545,8 @@ public static class DevelopRenderer
         GetCurveTexture(s, out float hasCurve, out float curveMode);
         Set(u, "u_hasCurve", hasCurve);
         Set(u, "u_curveMode", curveMode);
+        Set(u, "u_vignette", s.EnableGeometry ? s.VignetteAmount / 100f : 0f);
+        Set(u, "u_vignetteMidpoint", s.EnableGeometry ? s.VignetteMidpoint / 100f : 0.5f);
     }
 
     internal static bool IsStage2Active(DevelopSettings s)
@@ -816,8 +816,6 @@ public static class DevelopRenderer
             uniform shader u_image;
             uniform float2 u_srcSize;
             uniform float u_srcLinear;
-            uniform float u_vignette;
-            uniform float u_vignetteMidpoint;
             uniform float u_reconMode;
             uniform float u_hlThreshold;
             uniform float u_reconFast;
@@ -866,18 +864,6 @@ public static class DevelopRenderer
                 half4 orig = sample(u_image, srcCoord);
 
                 float3 lin = u_srcLinear > 0.5 ? max(orig.rgb, 0.0) : to_lin(orig.rgb);
-
-                // Lens vignetting compensation
-                if (abs(u_vignette) > 0.001) {
-                    float aspect = u_srcSize.x / max(u_srcSize.y, 1.0);
-                    float2 centered = (srcUv - float2(0.5)) * float2(aspect, 1.0);
-                    float maxDist = length(float2(0.5 * aspect, 0.5));
-                    float d = length(centered) / maxDist;
-                    float mp = clamp(u_vignetteMidpoint, 0.05, 0.95);
-                    float vFactor = smoother(d, mp * 0.40, 1.15);
-                    float gain = exp2(u_vignette * 2.5 * vFactor);
-                    lin = max(lin * gain, 0.0);
-                }
 
                 // Highlight reconstruction
                 if (u_reconMode < 0.5) {
@@ -1307,6 +1293,8 @@ public static class DevelopRenderer
             uniform float u_showClipping;
             uniform float u_hasCurve;
             uniform float u_curveMode;
+            uniform float u_vignette;
+            uniform float u_vignetteMidpoint;
 
             float to_srgb_1(float l) {
                 l = clamp(l, 0.0, 1.0);
@@ -1678,7 +1666,8 @@ public static class DevelopRenderer
             }
 
             half4 main(float2 fragCoord) {
-                float2 uv = (fragCoord - u_destOrigin) / u_destSize;
+                float2 destUv = (fragCoord - u_destOrigin) / u_destSize;
+                float2 uv = destUv;
                 if (u_split > 0.001) {
                     if (abs(uv.x - u_split) < 0.002) {
                         return half4(1.0, 1.0, 1.0, 1.0);
@@ -1689,7 +1678,7 @@ public static class DevelopRenderer
                 if (crop.z < 0.001 || crop.w < 0.001) {
                     crop = float4(0.0, 0.0, 1.0, 1.0);
                 }
-                uv = crop.xy + uv * crop.zw;
+                uv = crop.xy + destUv * crop.zw;
                 float2 srcUv = apply_geom(uv);
                 if (srcUv.x < -0.001 || srcUv.x > 1.001 || srcUv.y < -0.001 || srcUv.y > 1.001) {
                     return half4(0.0, 0.0, 0.0, 1.0);
@@ -1699,6 +1688,10 @@ public static class DevelopRenderer
                 if (ts.x < 0.00001) ts.x = 1.0;
                 if (ts.y < 0.00001) ts.y = 1.0;
                 srcUv = (srcUv - t0) / ts;
+                bool isTile = ts.x < 0.999 || ts.y < 0.999 || t0.x > 0.0001 || t0.y > 0.0001;
+                if (isTile && (srcUv.x < 0.0 || srcUv.x > 1.0 || srcUv.y < 0.0 || srcUv.y > 1.0)) {
+                    return half4(0.0, 0.0, 0.0, 0.0);
+                }
                 srcUv = clamp(srcUv, 0.0, 1.0);
                 float2 srcCoord = srcUv * u_srcSize;
                 half4 orig = sample(u_image, srcCoord);
@@ -1710,6 +1703,15 @@ public static class DevelopRenderer
                 lookAmt *= sample(u_mask, fragCoord).r;
 
                 float3 lin = max(orig.rgb, 0.0);
+                if (abs(u_vignette) > 0.001) {
+                    float aspect = (u_frameSize.x * crop.z) / max(u_frameSize.y * crop.w, 1.0);
+                    float2 centered = (destUv - float2(0.5)) * float2(aspect, 1.0);
+                    float maxDist = length(float2(0.5 * aspect, 0.5));
+                    float d = length(centered) / max(maxDist, 1e-6);
+                    float mp = clamp(u_vignetteMidpoint, 0.05, 0.95);
+                    float vFactor = smoother(d, mp * 0.40, 1.15);
+                    lin = max(lin * exp2(u_vignette * 2.5 * vFactor), 0.0);
+                }
                 float3 processed = lin;
                 if (lookAmt > 0.001) {
                     processed = apply_look(lin);
@@ -2239,7 +2241,8 @@ public static class DevelopRenderer
             }
 
             half4 main(float2 fragCoord) {
-                float2 uv = (fragCoord - u_destOrigin) / u_destSize;
+                float2 destUv = (fragCoord - u_destOrigin) / u_destSize;
+                float2 uv = destUv;
                 if (u_split > 0.001) {
                     if (abs(uv.x - u_split) < 0.002) {
                         return half4(1.0, 1.0, 1.0, 1.0);
@@ -2250,7 +2253,7 @@ public static class DevelopRenderer
                 if (crop.z < 0.001 || crop.w < 0.001) {
                     crop = float4(0.0, 0.0, 1.0, 1.0);
                 }
-                uv = crop.xy + uv * crop.zw;
+                uv = crop.xy + destUv * crop.zw;
                 float2 srcUv = apply_geom(uv);
                 if (srcUv.x < -0.001 || srcUv.x > 1.001 || srcUv.y < -0.001 || srcUv.y > 1.001) {
                     return half4(0.0, 0.0, 0.0, 1.0);
@@ -2260,6 +2263,10 @@ public static class DevelopRenderer
                 if (ts.x < 0.00001) ts.x = 1.0;
                 if (ts.y < 0.00001) ts.y = 1.0;
                 srcUv = (srcUv - t0) / ts;
+                bool isTile = ts.x < 0.999 || ts.y < 0.999 || t0.x > 0.0001 || t0.y > 0.0001;
+                if (isTile && (srcUv.x < 0.0 || srcUv.x > 1.0 || srcUv.y < 0.0 || srcUv.y > 1.0)) {
+                    return half4(0.0, 0.0, 0.0, 0.0);
+                }
                 srcUv = clamp(srcUv, 0.0, 1.0);
                 // Image child shaders are sampled in pixel space of the source.
                 float2 srcCoord = srcUv * u_srcSize;
@@ -2273,16 +2280,15 @@ public static class DevelopRenderer
 
                 float3 lin = u_srcLinear > 0.5 ? max(orig.rgb, 0.0) : to_lin(orig.rgb);
 
-                // Lens vignetting compensation / creative vignette
+                // Vignette in cropped dest space so zoom/pan/crop stay glued to the photo.
                 if (abs(u_vignette) > 0.001) {
-                    float aspect = u_srcSize.x / max(u_srcSize.y, 1.0);
-                    float2 centered = (srcUv - float2(0.5)) * float2(aspect, 1.0);
+                    float aspect = (u_frameSize.x * crop.z) / max(u_frameSize.y * crop.w, 1.0);
+                    float2 centered = (destUv - float2(0.5)) * float2(aspect, 1.0);
                     float maxDist = length(float2(0.5 * aspect, 0.5));
-                    float d = length(centered) / maxDist;
+                    float d = length(centered) / max(maxDist, 1e-6);
                     float mp = clamp(u_vignetteMidpoint, 0.05, 0.95);
                     float vFactor = smoother(d, mp * 0.40, 1.15);
-                    float gain = exp2(u_vignette * 2.5 * vFactor);
-                    lin = max(lin * gain, 0.0);
+                    lin = max(lin * exp2(u_vignette * 2.5 * vFactor), 0.0);
                 }
 
                 // Highlight reconstruction (step 2)

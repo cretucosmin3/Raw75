@@ -40,7 +40,7 @@ public sealed class DevelopSettings
     public float Temperature { get; set; } // -100..100 (amber/blue offset)
     public float Tint { get; set; }        // -100..100 (green/magenta)
 
-    public float Exposure { get; set; }    // -2.5..2.5 EV
+    public float Exposure { get; set; }    // -5..+5 EV
     public float Contrast { get; set; }    // -100..100
     public float Highlights { get; set; }  // -100..100
     public float Shadows { get; set; }     // -100..100

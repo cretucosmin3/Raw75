@@ -63,7 +63,7 @@ public sealed class WorkspaceView : View
 
     private SliderRow _temp = null!, _tint = null!, _ev = null!, _con = null!, _sat = null!;
     private SliderRow _hi = null!, _sh = null!, _wh = null!, _bk = null!, _vib = null!;
-    private SliderRow _sharp = null!, _noise = null!, _straight = null!;
+    private SliderRow _sharp = null!, _noise = null!;
 
     // HSL dynamic
     private HslBandSelector _hslSelector = null!;
@@ -303,6 +303,7 @@ public sealed class WorkspaceView : View
             if (d == null) return;
             if (!_restoringView)
                 _photo.CaptureView(d);
+            RequestViewport(d);
         };
         _photo.ViewSettled += () =>
         {
@@ -311,13 +312,6 @@ public sealed class WorkspaceView : View
             RequestViewport(d);
         };
         _photo.Rotate90Clicked += Rotate;
-        _photo.CropChanged += () =>
-        {
-            if (_sync) return;
-            _sync = true;
-            _straight.Value = _photo.StraightenPreview;
-            _sync = false;
-        };
         _photo.ClippingChanged += v => { if (_btnClip != null) _btnClip.Toggled = v; };
         _photo.InfoOverlayChanged += v => { if (_btnInfo != null) _btnInfo.Toggled = v; };
         _photo.ShowBeforeChanged += v => { if (_btnBefore != null) _btnBefore.Toggled = v; };
@@ -368,7 +362,6 @@ public sealed class WorkspaceView : View
             {
                 d.Undo.Push(d.Settings);
                 CopyCropInto(d);
-                _straight.Value = d.Settings.Straighten;
                 WorkspaceStore.SaveSettings(d);
             }
             PushLook(fast: false, settle: true);
@@ -376,11 +369,6 @@ public sealed class WorkspaceView : View
         _photo.CropCancelled += () =>
         {
             if (_btnCropGeom != null) _btnCropGeom.Toggled = false;
-            var d = _session.Active;
-            if (d != null)
-            {
-                _straight.Value = d.Settings.Straighten;
-            }
             PushLook(fast: false, settle: true);
         };
 
@@ -523,7 +511,7 @@ public sealed class WorkspaceView : View
 
         // 2. Exposure
         _exposureGroup = new PanelGroup("Exposure");
-        _ev = BindSlider(_exposureGroup, "Exposure", -2.5f, 2.5f, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
+        _ev = BindSlider(_exposureGroup, "Exposure", -5f, 5f, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
         _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
         _exposureGroup.EnableAuto(AutoExposure, "Auto Exposure");
@@ -672,11 +660,6 @@ public sealed class WorkspaceView : View
 
         // 9. Rotation, Geometry & Lens
         _geomGroup = new PanelGroup("Rotation, Geometry & Lens");
-        _straight = BindSlider(_geomGroup, "Straighten", -45, 45, "0.0", (s, v) =>
-        {
-            s.Straighten = v;
-            _photo.StraightenPreview = v;
-        }, s => s.Straighten);
 
         var rotL = new IconButton("-90°", "rotate_left");
         rotL.Clicked += () => Rotate(-1);
@@ -813,7 +796,6 @@ public sealed class WorkspaceView : View
         d.Settings.CropW = _photo.CropW;
         d.Settings.CropH = _photo.CropH;
         d.Settings.Straighten = _photo.StraightenPreview;
-        _straight.Value = _photo.StraightenPreview;
     }
 
     private void RefreshSession()
@@ -1024,7 +1006,6 @@ public sealed class WorkspaceView : View
         _gradeBalance.Value = s.GradingBalance;
         _sharp.Value = s.Sharpen;
         _noise.Value = s.Noise != 0 ? s.Noise : (s.DenoiseLuma > 0 ? -s.DenoiseLuma : 0);
-        _straight.Value = s.Straighten;
         _photo.StraightenPreview = s.Straighten;
         _vignette.Value = s.VignetteAmount;
         _vignetteMidpoint.Value = s.VignetteMidpoint;
@@ -1230,7 +1211,7 @@ public sealed class WorkspaceView : View
         var d = _session.Active;
         if (d == null) return;
         d.Undo.Push(d.Settings);
-        d.Settings.Exposure = Math.Clamp(d.Settings.Exposure + 0.25f, -2.5f, 2.5f);
+        d.Settings.Exposure = Math.Clamp(d.Settings.Exposure + 0.25f, -5f, 5f);
         PullSliders(d);
         PushLook(fast: false, settle: true);
         SetStatus("Auto Exposure applied");
