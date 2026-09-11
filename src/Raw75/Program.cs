@@ -118,6 +118,10 @@ internal static class Program
         if (s.LooksLike(clone))
             throw new InvalidOperationException("LooksLike failed to detect Dehaze mismatch!");
         clone.Dehaze = s.Dehaze;
+        clone.DehazeDistance = 35f;
+        if (s.LooksLike(clone))
+            throw new InvalidOperationException("LooksLike failed to detect DehazeDistance mismatch!");
+        clone.DehazeDistance = s.DehazeDistance;
         clone.Texture = 10f;
         if (s.LooksLike(clone))
             throw new InvalidOperationException("LooksLike failed to detect Texture mismatch!");
@@ -245,6 +249,105 @@ internal static class Program
                     throw new InvalidOperationException("DevelopLook.Draw unexpectedly returned true without active GPU context!");
             }
         }
+        Console.WriteLine("PASSED.");
+
+        // 6. Checking Curves (Fritsch-Carlson Spline, 2D LUT, and Pipeline evaluation)
+        Console.Write("6. Checking Curve engine (Spline, 2D LUT, and CPU/GPU pipeline)... ");
+        var defaultPoints = Raw75.Pipeline.CurveMath.DefaultCurve();
+        if (!Raw75.Pipeline.CurveMath.IsIdentity(defaultPoints))
+            throw new InvalidOperationException("Default curve must be identity!");
+
+        float[] linearSpline = Raw75.Pipeline.CurveMath.EvaluateSpline(defaultPoints, 256);
+        if (MathF.Abs(linearSpline[0] - 0f) > 0.001f || MathF.Abs(linearSpline[255] - 1f) > 0.001f || MathF.Abs(linearSpline[128] - (128f / 255f)) > 0.005f)
+            throw new InvalidOperationException("Identity spline does not evaluate to linear ramp!");
+
+        // S-Curve test
+        var sCurvePoints = new[]
+        {
+            new Raw75.Pipeline.CurvePoint(0f, 0f),
+            new Raw75.Pipeline.CurvePoint(64f, 40f),
+            new Raw75.Pipeline.CurvePoint(192f, 215f),
+            new Raw75.Pipeline.CurvePoint(255f, 255f)
+        };
+        if (Raw75.Pipeline.CurveMath.IsIdentity(sCurvePoints))
+            throw new InvalidOperationException("S-curve should not be identity!");
+
+        float[] sSpline = Raw75.Pipeline.CurveMath.EvaluateSpline(sCurvePoints, 256);
+        if (sSpline[64] >= linearSpline[64])
+            throw new InvalidOperationException("S-curve darks should be darker than linear!");
+        if (sSpline[192] <= linearSpline[192])
+            throw new InvalidOperationException("S-curve lights should be lighter than linear!");
+
+        // 2D LUT generation
+        byte[] lutBuf = new byte[2048];
+        Raw75.Pipeline.CurveMath.BuildCurveLut2D(sCurvePoints, defaultPoints, defaultPoints, defaultPoints, lutBuf);
+        if (lutBuf[3] != 255 || lutBuf[1024 + 3] != 255)
+            throw new InvalidOperationException("2D curve LUT alpha must be 255!");
+
+        // CPU evaluation with curve
+        var sWithCurve = new Raw75.Develop.DevelopSettings();
+        sWithCurve.CurveRgb = sCurvePoints;
+        var rCurved = Raw75.Pipeline.DevelopCpu.Apply(srcRaster, sWithCurve, fast: true);
+        bool curveAltered = false;
+        for (int i = 0; i < resNeutral.Rgba!.Length; i += 4)
+        {
+            if (Math.Abs(rCurved.Rgba![i] - resNeutral.Rgba[i]) > 2)
+            {
+                curveAltered = true;
+                break;
+            }
+        }
+        if (!curveAltered)
+            throw new InvalidOperationException("DevelopCpu with active curve did not alter pixels!");
+
+        // DevelopRenderer curve texture generation
+        var curveTex = Raw75.Pipeline.DevelopRenderer.GetCurveTexture(sWithCurve, out float hasCurve, out float curveMode);
+        if (curveTex == null || hasCurve < 0.5f || curveMode < 0.5f)
+            throw new InvalidOperationException("DevelopRenderer.GetCurveTexture failed to generate active curve texture!");
+
+        Console.WriteLine("PASSED.");
+
+        // 7. Checking Atmospheric Dehaze & Airlight Estimator
+        Console.Write("7. Checking Dehaze & AtmosphereEstimator... ");
+        Raw75.Pipeline.AtmosphereEstimator.Estimate(srcRaster, out float airR, out float airG, out float airB, out float depthMax);
+        if (airR <= 0f || airG <= 0f || airB <= 0f || depthMax <= 0f)
+            throw new InvalidOperationException("AtmosphereEstimator failed to calculate valid atmosphere parameters!");
+
+        var sDehazePos = new Raw75.Develop.DevelopSettings
+        {
+            Dehaze = 50f,
+            DehazeDistance = 20f,
+            AtmosphereR = airR,
+            AtmosphereG = airG,
+            AtmosphereB = airB,
+            AtmosphereDepthMax = depthMax
+        };
+        var rDehazePos = Raw75.Pipeline.DevelopCpu.Apply(srcRaster, sDehazePos, fast: true);
+
+        var sDehazeNeg = new Raw75.Develop.DevelopSettings
+        {
+            Dehaze = -50f,
+            DehazeDistance = 20f,
+            AtmosphereR = airR,
+            AtmosphereG = airG,
+            AtmosphereB = airB,
+            AtmosphereDepthMax = depthMax
+        };
+        var rDehazeNeg = Raw75.Pipeline.DevelopCpu.Apply(srcRaster, sDehazeNeg, fast: true);
+
+        bool posAltered = false;
+        bool negAltered = false;
+        for (int i = 0; i < resNeutral.Rgba!.Length; i += 4)
+        {
+            if (Math.Abs(rDehazePos.Rgba![i] - resNeutral.Rgba[i]) > 0) posAltered = true;
+            if (Math.Abs(rDehazeNeg.Rgba![i] - resNeutral.Rgba[i]) > 0) negAltered = true;
+            if (posAltered && negAltered) break;
+        }
+        if (!posAltered)
+            throw new InvalidOperationException("Positive Dehaze did not alter pixels!");
+        if (!negAltered)
+            throw new InvalidOperationException("Negative Dehaze (haze addition) did not alter pixels!");
+
         Console.WriteLine("PASSED.");
 
         Console.WriteLine("=== All Raw75 Pipeline Smoke Tests Passed Successfully ===");

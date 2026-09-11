@@ -59,39 +59,38 @@ internal static class SliderChrome
             canvas.DrawRoundRect(track, radius, radius, stroke);
         }
 
+        float travel = Math.Max(1f, width - ThumbW);
+        float hx = (ThumbW * 0.5f) + t * travel;
+
         // 3. Inset Fill Bar (Unipolar or Bipolar)
         // Only draw fill bar if not using an explicit full-track gradient (like Kelvin/Tint)
         if (trackGradient == null)
         {
             float fillTop = cy - FillH * 0.5f;
-            float insetX = Theme.InsetX;
-            var inner = new SKRect(track.Left + insetX, fillTop, track.Right - insetX, fillTop + FillH);
-            if (inner.Width > 1f && inner.Height > 1f)
+            float fillLeft;
+            float fillRight;
+            if (bipolar)
             {
-                float fillLeft;
-                float fillRight;
-                if (bipolar)
-                {
-                    fillLeft = inner.Left + inner.Width * Math.Min(t, zeroT);
-                    fillRight = inner.Left + inner.Width * Math.Max(t, zeroT);
-                }
-                else
-                {
-                    fillLeft = inner.Left;
-                    fillRight = inner.Left + inner.Width * t;
-                }
+                float zeroX = (ThumbW * 0.5f) + zeroT * travel;
+                fillLeft = Math.Min(hx, zeroX);
+                fillRight = Math.Max(hx, zeroX);
+            }
+            else
+            {
+                float minX = ThumbW * 0.5f;
+                fillLeft = minX;
+                fillRight = hx;
+            }
 
-                if (fillRight - fillLeft > 0.5f)
-                {
-                    float ir = inner.Height * 0.5f;
-                    using var fill = new SKPaint { Color = Theme.TrackFill, IsAntialias = true };
-                    canvas.DrawRoundRect(new SKRect(fillLeft, inner.Top, fillRight, inner.Bottom), ir, ir, fill);
-                }
+            if (fillRight - fillLeft > 0.5f)
+            {
+                float ir = FillH * 0.5f;
+                using var fill = new SKPaint { Color = Theme.TrackFill, IsAntialias = true };
+                canvas.DrawRoundRect(new SKRect(fillLeft, fillTop, fillRight, fillTop + FillH), ir, ir, fill);
             }
         }
 
         // 4. Proud Vertical Pill Thumb
-        float hx = Math.Clamp(width * t, ThumbW * 0.5f, width - ThumbW * 0.5f);
         float thumbScale = active ? 1.10f : hover ? 1.05f : 1f;
         float tw = ThumbW * thumbScale;
         float th = ThumbH * thumbScale;

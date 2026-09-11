@@ -49,7 +49,7 @@ public class SliderRow : VisualElement
         float w = Math.Max(1f, Transform.Computed.Width);
         if (_inline)
         {
-            return Math.Max(1f, w - LabelW - ValueW - (TrackMarginX * 2f));
+            return Math.Max(10f, w - LabelW - ValueW - (TrackMarginX * 2f));
         }
         return w;
     }
@@ -264,17 +264,26 @@ public class SliderRow : VisualElement
         }
         args.Handled = true;
 
-        float deltaX = args.Global.X - _lastGlobalX;
-        _lastGlobalX = args.Global.X;
+        if (IsShiftHeld)
+        {
+            float deltaX = args.Global.X - _lastGlobalX;
+            _lastGlobalX = args.Global.X;
 
-        if (Math.Abs(deltaX) < 1e-5f)
-            return;
+            if (Math.Abs(deltaX) < 1e-5f)
+                return;
 
-        float trackW = GetTrackWidth();
-        float speed = IsShiftHeld ? 0.30f : 1.0f;
-        float deltaV = (deltaX / trackW) * (_max - _min) * speed;
+            float trackW = GetTrackWidth();
+            float travel = Math.Max(1f, trackW - Theme.ThumbW);
+            float speed = 0.25f;
+            float deltaV = (deltaX / travel) * (_max - _min) * speed;
 
-        SetValue(_value + deltaV, fire: true);
+            SetValue(_value + deltaV, fire: true);
+        }
+        else
+        {
+            _lastGlobalX = args.Global.X;
+            SetValueFromGlobal(args.Global.X);
+        }
     }
 
     private void OnTrackScroll(object sender, MouseScrollEventArgs args)
@@ -373,17 +382,22 @@ public class SliderRow : VisualElement
         var local = PointToClient(globalX, 0);
         float w = Math.Max(1f, Transform.Computed.Width);
 
-        float t;
+        float trackX;
+        float trackW;
         if (_inline)
         {
-            float trackX = LabelW + TrackMarginX;
-            float trackW = Math.Max(1f, w - LabelW - ValueW - (TrackMarginX * 2f));
-            t = Math.Clamp((local.X - trackX) / trackW, 0f, 1f);
+            trackX = LabelW + TrackMarginX;
+            trackW = Math.Max(10f, w - LabelW - ValueW - (TrackMarginX * 2f));
         }
         else
         {
-            t = Math.Clamp(local.X / w, 0f, 1f);
+            trackX = 0f;
+            trackW = w;
         }
+
+        float thumbRadius = Theme.ThumbW * 0.5f;
+        float travel = Math.Max(1f, trackW - Theme.ThumbW);
+        float t = Math.Clamp((local.X - trackX - thumbRadius) / travel, 0f, 1f);
 
         SetValue(_min + t * (_max - _min), fire: true);
     }
