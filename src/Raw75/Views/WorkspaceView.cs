@@ -91,9 +91,6 @@ public sealed class WorkspaceView : View
     private SliderRow _localDetail = null!;
     private SliderRow _texture = null!;
     private SliderRow _dehaze = null!;
-    private SliderRow _localHighlights = null!;
-    private SliderRow _localShadows = null!;
-    private SliderRow _localMidtones = null!;
 
     // Color grading (split toning)
     private SliderRow _gradeShadowHue = null!;
@@ -449,8 +446,8 @@ public sealed class WorkspaceView : View
 
         // 2. Exposure
         _exposureGroup = new PanelGroup("Exposure");
-        _ev = BindSlider(_exposureGroup, "Exposure", -5, 5, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
-        _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
+        _ev = BindSlider(_exposureGroup, "Exposure", -2.5f, 2.5f, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
+        _con = BindSlider(_exposureGroup, "Contrast", -50, 50, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
         _exposureGroup.EnableAuto(AutoExposure, "Auto Exposure");
         _exposureGroup.EnableReset(ResetExposure, "Reset Exposure");
@@ -469,26 +466,11 @@ public sealed class WorkspaceView : View
         // 4. Clarity & Atmosphere
         _localGroup = new PanelGroup("Clarity & Atmosphere");
         _localDetail = BindSlider(_localGroup, "Detail", -1.0f, 4.0f, "0.00",
-            (s, v) =>
-            {
-                s.LocalContrastDetail = v;
-                UpdateLocalContrastUi(s);
-            }, s => s.LocalContrastDetail, 0.0f);
+            (s, v) => s.LocalContrastDetail = v, s => s.LocalContrastDetail, 0.0f);
         _texture = BindSlider(_localGroup, "Texture", -100f, 100f, "0",
             (s, v) => s.Texture = v, s => s.Texture, 0f);
         _dehaze = BindSlider(_localGroup, "Dehaze", -100f, 100f, "0",
             (s, v) => s.Dehaze = v, s => s.Dehaze, 0f);
-        _localHighlights = BindSlider(_localGroup, "Highlights", -100f, 100f, "0",
-            (s, v) => s.LocalContrastHighlights = v, s => s.LocalContrastHighlights, 0f);
-        _localShadows = BindSlider(_localGroup, "Shadows", -100f, 100f, "0",
-            (s, v) => s.LocalContrastShadows = v, s => s.LocalContrastShadows, 0f);
-        _localMidtones = BindSlider(_localGroup, "Midtones", 0f, 100f, "0",
-            (s, v) => s.LocalContrastMidtones = v, s => s.LocalContrastMidtones, 50f);
-        _localGroup.ExpandedChanged += exp =>
-        {
-            if (exp && _session.Active != null)
-                UpdateLocalContrastUi(_session.Active.Settings);
-        };
         _localGroup.EnableReset(ResetLocalContrast, "Reset Clarity & Atmosphere");
         _localGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableLocalContrast = en);
 
@@ -627,7 +609,6 @@ public sealed class WorkspaceView : View
         });
 
         UpdateReconModeUi(new DevelopSettings());
-        UpdateLocalContrastUi(new DevelopSettings());
 
         host.AddBody(_wbGroup);
         host.AddBody(_exposureGroup);
@@ -692,13 +673,7 @@ public sealed class WorkspaceView : View
         _reconGroup.InvalidateLayout();
     }
 
-    private void UpdateLocalContrastUi(DevelopSettings s)
-    {
-        _localHighlights.Visible = true;
-        _localShadows.Visible = true;
-        _localMidtones.Visible = true;
-        _localGroup.InvalidateLayout();
-    }
+
 
     private SliderRow BindSlider(PanelGroup group, string label, float min, float max, string fmt,
         Action<DevelopSettings, float> set, Func<DevelopSettings, float> get, float def = 0f)
@@ -944,10 +919,6 @@ public sealed class WorkspaceView : View
         _localDetail.Value = s.LocalContrastDetail;
         _texture.Value = s.Texture;
         _dehaze.Value = s.Dehaze;
-        _localHighlights.Value = s.LocalContrastHighlights;
-        _localShadows.Value = s.LocalContrastShadows;
-        _localMidtones.Value = s.LocalContrastMidtones;
-        UpdateLocalContrastUi(s);
         _gradeShadowHue.Value = s.GradingShadowHue;
         _gradeShadowSat.Value = s.GradingShadowSat;
         _gradeHighlightHue.Value = s.GradingHighlightHue;
@@ -1155,7 +1126,7 @@ public sealed class WorkspaceView : View
         var d = _session.Active;
         if (d == null) return;
         d.Undo.Push(d.Settings);
-        d.Settings.Exposure = Math.Clamp(d.Settings.Exposure + 0.25f, -5f, 5f);
+        d.Settings.Exposure = Math.Clamp(d.Settings.Exposure + 0.25f, -2.5f, 2.5f);
         PullSliders(d);
         PushLook(fast: false, settle: true);
         SetStatus("Auto Exposure applied");

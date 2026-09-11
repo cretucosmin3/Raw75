@@ -36,6 +36,8 @@ internal static class Program
         {
             if (arg.Equals("--smoke-test", StringComparison.OrdinalIgnoreCase))
             {
+                using var stdout = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
+                Console.SetOut(stdout);
                 RunSmokeTest();
                 return;
             }
@@ -56,14 +58,44 @@ internal static class Program
         Console.WriteLine("=== Running Raw75 Pipeline Smoke Tests ===");
 
         // 1. SkSL compilation check
-        Console.Write("1. Checking SkSL Shader compilation... ");
+        Console.WriteLine("1. Checking SkSL Shader compilation (Monolithic + Staged 1, 2, 3)... ");
+        Console.Out.Flush();
         var effect = Raw75.Pipeline.DevelopRenderer.EnsureEffect();
         if (effect == null)
         {
-            Console.WriteLine("FAILED!");
+            Console.WriteLine("FAILED on monolithic!");
             throw new InvalidOperationException("DevelopRenderer.EnsureEffect() failed to compile SkSL runtime effect!");
         }
-        Console.WriteLine("PASSED.");
+        Console.WriteLine("  Monolithic OK.");
+        Console.Out.Flush();
+
+        var eff1 = Raw75.Pipeline.DevelopRenderer.EnsureStage1Effect();
+        if (eff1 == null)
+        {
+            Console.WriteLine("FAILED on Stage 1!");
+            throw new InvalidOperationException("DevelopRenderer.EnsureStage1Effect() failed to compile Stage 1 SkSL!");
+        }
+        Console.WriteLine("  Stage 1 OK.");
+        Console.Out.Flush();
+
+        var eff2 = Raw75.Pipeline.DevelopRenderer.EnsureStage2Effect();
+        if (eff2 == null)
+        {
+            Console.WriteLine("FAILED on Stage 2!");
+            throw new InvalidOperationException("DevelopRenderer.EnsureStage2Effect() failed to compile Stage 2 SkSL!");
+        }
+        Console.WriteLine("  Stage 2 OK.");
+        Console.Out.Flush();
+
+        var eff3 = Raw75.Pipeline.DevelopRenderer.EnsureStage3Effect();
+        if (eff3 == null)
+        {
+            Console.WriteLine("FAILED on Stage 3!");
+            throw new InvalidOperationException("DevelopRenderer.EnsureStage3Effect() failed to compile Stage 3 SkSL!");
+        }
+        Console.WriteLine("  Stage 3 OK.");
+        Console.WriteLine("1. PASSED.");
+        Console.Out.Flush();
 
         // 2. DevelopSettings validation
         Console.Write("2. Checking DevelopSettings Clone & LooksLike... ");
@@ -137,6 +169,82 @@ internal static class Program
         }
         if (!hasDelta)
             throw new InvalidOperationException("Active adjustments produced zero difference compared to neutral!");
+        Console.WriteLine("PASSED.");
+
+        // 5. Staged 3-pass Pipeline execution check
+        Console.Write("5. Checking Staged 3-pass Pipeline uniform bindings, activation, and lifecycle... ");
+        var u1 = new SkiaSharp.SKRuntimeEffectUniforms(eff1);
+        Raw75.Pipeline.DevelopRenderer.BindStage1Uniforms(u1, s, w, h, fast: false, srcLinear: false);
+
+        var u2 = new SkiaSharp.SKRuntimeEffectUniforms(eff2);
+        Raw75.Pipeline.DevelopRenderer.BindStage2Uniforms(u2, s, w, h, fast: false);
+
+        var u3 = new SkiaSharp.SKRuntimeEffectUniforms(eff3);
+        Raw75.Pipeline.DevelopRenderer.BindStage3Uniforms(
+            u3, s, w, h,
+            dstX: 0f, dstY: 0f, dstW: 1f, dstH: 1f,
+            split: 0f, before: false, lutSize: 2f, lutAmount: 0f,
+            applyCrop: false, showClipping: false,
+            tileX: 0f, tileY: 0f, tileW: 1f, tileH: 1f,
+            viewCropX: float.NaN, viewCropY: float.NaN, viewCropW: float.NaN, viewCropH: float.NaN,
+            frameW: 0, frameH: 0);
+
+        // Verify Stage 2 activation bypass helper
+        var sStage2 = new Raw75.Develop.DevelopSettings();
+        if (Raw75.Pipeline.DevelopRenderer.IsStage2Active(sStage2))
+            throw new InvalidOperationException("Neutral settings should bypass Stage 2!");
+        sStage2.Texture = 25f;
+        if (!Raw75.Pipeline.DevelopRenderer.IsStage2Active(sStage2))
+            throw new InvalidOperationException("Active Texture should activate Stage 2!");
+        sStage2.Texture = 0f;
+        sStage2.DenoiseLuma = 30f;
+        if (!Raw75.Pipeline.DevelopRenderer.IsStage2Active(sStage2))
+            throw new InvalidOperationException("Active DenoiseLuma should activate Stage 2!");
+
+        // Verify DevelopLook instantiation and invalidation
+        using (var look = new Raw75.Pipeline.DevelopLook())
+        using (var bmp = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(w, h, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Premul)))
+        {
+            System.Runtime.InteropServices.Marshal.Copy(pixels, 0, bmp.GetPixels(), pixels.Length);
+            using var img = SkiaSharp.SKImage.FromBitmap(bmp);
+            using var outSurface = SkiaSharp.SKSurface.Create(new SkiaSharp.SKImageInfo(w, h, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Premul));
+            if (outSurface == null)
+                throw new InvalidOperationException("Failed to allocate test SKSurface for DevelopLook!");
+
+            var testDest = new SkiaSharp.SKRect(0, 0, w, h);
+
+            if (Blossom.Core.Gpu.IsReady)
+            {
+                bool drawn = look.Draw(outSurface.Canvas, testDest, testDest, img, s, fast: false);
+                if (!drawn)
+                    throw new InvalidOperationException("DevelopLook.Draw failed on staged pipeline test!");
+
+                s.Exposure = 1.2f;
+                look.Invalidate();
+                bool drawn2 = look.Draw(outSurface.Canvas, testDest, testDest, img, s, fast: false);
+                if (!drawn2)
+                    throw new InvalidOperationException("DevelopLook.Draw failed after Stage 3 slider invalidation!");
+
+                s.Texture = 25f;
+                look.Invalidate();
+                bool drawn3 = look.Draw(outSurface.Canvas, testDest, testDest, img, s, fast: false);
+                if (!drawn3)
+                    throw new InvalidOperationException("DevelopLook.Draw failed after Stage 2 slider invalidation!");
+
+                s.VignetteAmount = -40f;
+                look.Invalidate();
+                bool drawn4 = look.Draw(outSurface.Canvas, testDest, testDest, img, s, fast: false);
+                if (!drawn4)
+                    throw new InvalidOperationException("DevelopLook.Draw failed after Stage 1 slider invalidation!");
+            }
+            else
+            {
+                // In headless mode without GPU context, Draw must safely return false and not crash
+                bool drawn = look.Draw(outSurface.Canvas, testDest, testDest, img, s, fast: false);
+                if (drawn)
+                    throw new InvalidOperationException("DevelopLook.Draw unexpectedly returned true without active GPU context!");
+            }
+        }
         Console.WriteLine("PASSED.");
 
         Console.WriteLine("=== All Raw75 Pipeline Smoke Tests Passed Successfully ===");

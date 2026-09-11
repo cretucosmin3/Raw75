@@ -38,8 +38,21 @@ public class SliderRow : VisualElement
     private readonly bool _inline;
     private bool _dragging;
     private bool _hovered;
+    private float _lastGlobalX;
     private DateTime _lastDownUtc = DateTime.MinValue;
     private SliderGradientMode _gradientMode = SliderGradientMode.None;
+
+    private bool IsShiftHeld => (ParentView?.Events.IsShiftDown ?? false) || Events.IsShiftDown;
+
+    private float GetTrackWidth()
+    {
+        float w = Math.Max(1f, Transform.Computed.Width);
+        if (_inline)
+        {
+            return Math.Max(1f, w - LabelW - ValueW - (TrackMarginX * 2f));
+        }
+        return w;
+    }
 
     public float DefaultValue { get; set; }
 
@@ -114,6 +127,7 @@ public class SliderRow : VisualElement
         Events.OnMouseMove += OnTrackMove;
         Events.OnMouseUp += OnTrackUp;
         Events.OnMouseDoubleClick += OnResetClick;
+        Events.OnScroll += OnTrackScroll;
         Events.OnMouseEnter += _ => { _hovered = true; UpdateValueColor(); InvalidatePaint(); };
         Events.OnMouseLeave += _ => { _hovered = false; UpdateValueColor(); InvalidatePaint(); };
     }
@@ -228,11 +242,16 @@ public class SliderRow : VisualElement
 
         _lastDownUtc = now;
         _dragging = true;
+        _lastGlobalX = args.Global.X;
         CapturePointer();
         UpdateValueColor();
         args.Handled = true;
         DragStarted?.Invoke();
-        SetValueFromGlobal(args.Global.X);
+
+        if (!IsShiftHeld)
+        {
+            SetValueFromGlobal(args.Global.X);
+        }
     }
 
     private void OnTrackMove(object sender, MouseEventArgs args)
@@ -244,7 +263,82 @@ public class SliderRow : VisualElement
             return;
         }
         args.Handled = true;
-        SetValueFromGlobal(args.Global.X);
+
+        float deltaX = args.Global.X - _lastGlobalX;
+        _lastGlobalX = args.Global.X;
+
+        if (Math.Abs(deltaX) < 1e-5f)
+            return;
+
+        float trackW = GetTrackWidth();
+        float speed = IsShiftHeld ? 0.30f : 1.0f;
+        float deltaV = (deltaX / trackW) * (_max - _min) * speed;
+
+        SetValue(_value + deltaV, fire: true);
+    }
+
+    private void OnTrackScroll(object sender, MouseScrollEventArgs args)
+    {
+        if (!IsShiftHeld)
+            return;
+
+        float delta = Math.Abs(args.Offset.Y) >= Math.Abs(args.Offset.X) ? args.Offset.Y : args.Offset.X;
+        if (Math.Abs(delta) < 1e-5f)
+            return;
+
+        args.Handled = true;
+
+        float range = Math.Max(0.0001f, _max - _min);
+        float step;
+
+        if (_valueFormat == "0" || _valueFormat.Contains('°'))
+        {
+            step = 1f;
+            if (Math.Abs(delta) >= 0.8f)
+            {
+                float next = MathF.Round(_value) + MathF.Sign(delta) * step;
+                ApplyScrollDelta(next);
+                return;
+            }
+        }
+        else if (_valueFormat == "0.0")
+        {
+            step = 0.1f;
+            if (Math.Abs(delta) >= 0.8f)
+            {
+                float next = MathF.Round((_value + MathF.Sign(delta) * step) * 10f) / 10f;
+                ApplyScrollDelta(next);
+                return;
+            }
+        }
+        else if (_valueFormat == "0.00")
+        {
+            step = range <= 2.0f ? 0.01f : (range <= 5.0f ? 0.02f : 0.05f);
+            if (Math.Abs(delta) >= 0.8f)
+            {
+                float next = MathF.Round((_value + MathF.Sign(delta) * step) * 100f) / 100f;
+                ApplyScrollDelta(next);
+                return;
+            }
+        }
+        else
+        {
+            step = Math.Max(0.01f, range * 0.005f);
+        }
+
+        ApplyScrollDelta(_value + delta * step);
+    }
+
+    private void ApplyScrollDelta(float targetValue)
+    {
+        bool wasDragging = _dragging;
+        if (!wasDragging)
+            DragStarted?.Invoke();
+
+        SetValue(targetValue, fire: true);
+
+        if (!wasDragging)
+            DragEnded?.Invoke();
     }
 
     private void OnTrackUp(object sender, MouseEventArgs args)
