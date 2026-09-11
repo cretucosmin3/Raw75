@@ -67,6 +67,13 @@ public class Filmstrip : VisualElement
         InvalidatePaint();
     }
 
+    public void RefreshThumbs()
+    {
+        for (int i = 0; i < _cells.Count; i++)
+            _cells[i].RefreshThumb();
+        InvalidatePaint();
+    }
+
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : 400f);
@@ -106,6 +113,7 @@ public class Filmstrip : VisualElement
         private readonly VisualElement _caption;
         private readonly VisualElement _ready;
         private readonly VisualElement _close;
+        private readonly PhotoDocument _doc;
         private bool _active;
         private bool _isReady;
 
@@ -113,6 +121,7 @@ public class Filmstrip : VisualElement
         {
             _owner = owner;
             _index = index;
+            _doc = doc;
             _active = active;
             _isReady = doc.IsReady;
             Name = $"FilmstripCell_{index}";
@@ -123,13 +132,13 @@ public class Filmstrip : VisualElement
                 Border = new BorderStyle
                 {
                     Width = active ? 1.5f : 1f,
-                    Color = active ? Theme.Accent : (_isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline),
+                    Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline),
                     Roundness = Theme.RadiusSm
                 },
                 Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60))
             };
 
-            _thumb = new ThumbWell(doc.Preview ?? doc.Thumb)
+            _thumb = new ThumbWell(doc.Look ?? doc.Preview ?? doc.Thumb)
             {
                 Name = $"{Name}_Thumb",
                 IsClickthrough = true
@@ -164,12 +173,12 @@ public class Filmstrip : VisualElement
                 BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null,
                 Style = new ElementStyle
                 {
-                    BackColor = _isReady ? Theme.Accent : new SKColor(0, 0, 0, 160),
+                    BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 140),
                     Border = new BorderStyle
                     {
                         Width = 1,
-                        Color = _isReady ? Theme.Accent : Theme.HairlineSubtle,
-                        Roundness = 3
+                        Color = _isReady ? Theme.Success : Theme.HairlineSubtle,
+                        Roundness = 9f
                     }
                 }
             };
@@ -256,7 +265,7 @@ public class Filmstrip : VisualElement
             _active = active;
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 1.5f : 1f;
-            Style.Border.Color = active ? Theme.Accent : (_isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline);
+            Style.Border.Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline);
             Style.Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
             _caption.Style.Text.Color = active ? Theme.Accent : Theme.TextDim;
             InvalidatePaint();
@@ -268,15 +277,21 @@ public class Filmstrip : VisualElement
             UpdateReadyStyle();
         }
 
+        public void RefreshThumb()
+        {
+            _thumb.SetImage(_doc.Look ?? _doc.Preview ?? _doc.Thumb);
+        }
+
         private void UpdateReadyStyle()
         {
             _ready.BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null;
-            _ready.Style.BackColor = _isReady ? Theme.Accent : new SKColor(0, 0, 0, 160);
-            _ready.Style.Border.Color = _isReady ? Theme.Accent : Theme.HairlineSubtle;
+            _ready.Style.BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 140);
+            _ready.Style.Border.Color = _isReady ? Theme.Success : Theme.HairlineSubtle;
+            _ready.Style.Border.Roundness = 9f;
             _ready.InvalidatePaint();
             if (!_active)
             {
-                Style.Border.Color = _isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline;
+                Style.Border.Color = _isReady ? Theme.SuccessSoft : Theme.Hairline;
                 InvalidatePaint();
             }
         }
@@ -291,14 +306,20 @@ public class Filmstrip : VisualElement
 
             _thumb.Transform.SetAbsoluteFrame(originX + 4, originY + 4, w - 8, thumbH);
             _caption.Transform.SetAbsoluteFrame(originX + 2, originY + 4 + thumbH, w - 4, NameH);
-            _ready.Transform.SetAbsoluteFrame(originX + 6, originY + 6, 16, 16);
+            _ready.Transform.SetAbsoluteFrame(originX + 6, originY + 6, 18, 18);
             _close.Transform.SetAbsoluteFrame(originX + w - 20, originY + 6, 14, 14);
         }
     }
 
     private sealed class ThumbWell : VisualElement
     {
-        private readonly SKImage? _image;
+        private static readonly SKPaint SmoothPaint = new()
+        {
+            FilterQuality = SKFilterQuality.Medium,
+            IsAntialias = true
+        };
+
+        private SKImage? _image;
 
         public ThumbWell(SKImage? image)
         {
@@ -316,13 +337,19 @@ public class Filmstrip : VisualElement
             Overflow = OverflowMode.Clip;
         }
 
+        public void SetImage(SKImage? img)
+        {
+            _image = img;
+            InvalidatePaint();
+        }
+
         protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
         {
             if (_image == null || _image.Handle == IntPtr.Zero) return;
             float w = Transform.Computed.Width;
             float h = Transform.Computed.Height;
             var dest = Contain(w, h, _image.Width, _image.Height);
-            cmds.Add(new DrawSkImageCommand(_image, dest));
+            cmds.Add(new DrawSkImageCommand(_image, dest, SmoothPaint));
         }
 
         private static SKRect Contain(float boxW, float boxH, int imgW, int imgH)

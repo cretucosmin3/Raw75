@@ -249,7 +249,7 @@ public sealed class DevelopEngine
                         buf = raster.Value;
                     }
 
-                    buf = RawDecoder.Limit(buf, 160);
+                    buf = RawDecoder.Limit(buf, 480);
                     int n = Interlocked.Increment(ref processed);
                     PhotoDocument target = doc;
                     RasterBuffer shot = buf;
@@ -263,8 +263,6 @@ public sealed class DevelopEngine
                             Assign(target, thumb: image);
                             ThumbLoaded?.Invoke(target);
                             ThumbProgress?.Invoke(n, missing);
-                            if (n % 4 == 0 || n == missing)
-                                Updated?.Invoke(target);
                         }
                         catch (Exception ex)
                         {
@@ -283,9 +281,6 @@ public sealed class DevelopEngine
             Browser.Post(() =>
             {
                 ThumbProgress?.Invoke(missing, missing);
-                PhotoDocument? current = Volatile.Read(ref _current);
-                if (current != null)
-                    Updated?.Invoke(current);
             });
         });
     }
@@ -474,13 +469,29 @@ public sealed class DevelopEngine
                 return;
             }
 
-            try
+            if (doc.Thumb == null)
             {
-                Publish(doc, gen, RawDecoder.DecodeThumbnail(doc.Path), asThumb: true, asProxy: false, kind: "thumbnail");
-            }
-            catch (Exception ex)
-            {
-                Log.Warning($"Thumbnail failed: {ex.Message}");
+                try
+                {
+                    RasterBuffer thumbBuf = RawDecoder.DecodeThumbnail(doc.Path);
+                    thumbBuf = RawDecoder.Limit(thumbBuf, 480);
+                    Browser.Post(() =>
+                    {
+                        if (Stale(gen) || doc.IsDisposed || doc.Thumb != null)
+                            return;
+                        try
+                        {
+                            SKImage thumbImg = RawDecoder.Upload(thumbBuf, out _);
+                            Assign(doc, thumb: thumbImg);
+                            ThumbLoaded?.Invoke(doc);
+                        }
+                        catch { }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Thumbnail failed: {ex.Message}");
+                }
             }
 
             if (Stale(gen))
@@ -545,7 +556,7 @@ public sealed class DevelopEngine
                     Assign(doc, thumb: image);
                 if (asProxy)
                     Assign(doc, proxy: image);
-                if (asProxy || (doc.Display == null && doc.Look == null && doc.Preview == null))
+                if (asProxy || doc.Display == null)
                     Assign(doc, display: image);
 
                 if (doc.SourceWidth <= 0 || asProxy)

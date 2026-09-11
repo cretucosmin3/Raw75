@@ -165,6 +165,7 @@ public class IconButton : VisualElement
             if (args.Button != (int)MouseButton.Left) return;
             _pressed = true;
             ApplyChrome();
+            args.Handled = true;
         };
         Events.OnMouseUp += (_, args) =>
         {
@@ -174,6 +175,7 @@ public class IconButton : VisualElement
                 _pressed = false;
                 ApplyChrome();
                 Clicked?.Invoke();
+                args.Handled = true;
             }
         };
 
