@@ -28,7 +28,11 @@ public static class Theme
     public static readonly SKColor HairlineSubtle = new(255, 255, 255, 14);// Inner cell dividers & header bottom lines
     public static readonly SKColor HairlineStrong = new(255, 255, 255, 52);// Active boundary / focused frame
 
-    // Typography
+    // Typography & Font Tokens
+    public const string FontFamily = "Liberation Sans, Noto Sans, sans-serif";
+    public static SKTypeface GetTypeface(int weight = 400, int width = 5, SKFontStyleSlant slant = SKFontStyleSlant.Upright)
+        => Blossom.Utils.Fonts.GetTypeface(FontFamily, weight, width, slant);
+
     public static readonly SKColor Text = new(248, 250, 252);             // Primary high-contrast labels
     public static readonly SKColor TextSecondary = new(205, 210, 222);     // Module titles, secondary info
     public static readonly SKColor TextDim = new(165, 170, 184);          // Value readouts, units, hints

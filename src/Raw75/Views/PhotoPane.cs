@@ -132,6 +132,15 @@ public sealed class PhotoPane : VisualElement
         sb.AppendLine($"  lookFailed={_look.Failed}  showBefore={_showBefore}  split={_splitBefore}");
     }
 
+    public event Action<bool>? ShowBeforeChanged;
+    public event Action<bool>? SplitBeforeChanged;
+
+    private float _beforeProgress = 0f;
+    private float _beforeTarget = 0f;
+    private float _beforeAnimStartProgress = 0f;
+    private long _beforeAnimStartTime = 0;
+    private float _beforeAnimDurationSec = 1.0f;
+
     public bool ShowBefore
     {
         get => _showBefore;
@@ -139,9 +148,50 @@ public sealed class PhotoPane : VisualElement
         {
             if (_showBefore == value) return;
             _showBefore = value;
+            if (_showBefore && _splitBefore)
+            {
+                _splitBefore = false;
+                SplitBeforeChanged?.Invoke(false);
+            }
+            StartBeforeTransition(_showBefore);
             _beforeLook.Invalidate();
             _tileBeforeLook.Invalidate();
             InvalidatePaint();
+            ShowBeforeChanged?.Invoke(_showBefore);
+        }
+    }
+
+    private void StartBeforeTransition(bool showBefore)
+    {
+        _beforeTarget = showBefore ? 1f : 0f;
+        _beforeAnimStartProgress = _beforeProgress;
+        _beforeAnimStartTime = System.Diagnostics.Stopwatch.GetTimestamp();
+        float dist = Math.Abs(_beforeTarget - _beforeAnimStartProgress);
+        _beforeAnimDurationSec = Math.Max(0.05f, 1.0f * (dist > 0.01f ? dist : 1.0f));
+    }
+
+    private void UpdateBeforeAnimation()
+    {
+        if (Math.Abs(_beforeProgress - _beforeTarget) > 0.0005f)
+        {
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            double elapsedSec = (double)(now - _beforeAnimStartTime) / System.Diagnostics.Stopwatch.Frequency;
+            float t = (float)(elapsedSec / _beforeAnimDurationSec);
+            if (t >= 1f)
+            {
+                _beforeProgress = _beforeTarget;
+            }
+            else
+            {
+                // Quintic smootherstep (6t^5 - 15t^4 + 10t^3)
+                float s = t * t * t * (t * (t * 6f - 15f) + 10f);
+                _beforeProgress = _beforeAnimStartProgress + (_beforeTarget - _beforeAnimStartProgress) * s;
+                InvalidatePaint();
+            }
+        }
+        else
+        {
+            _beforeProgress = _beforeTarget;
         }
     }
 
@@ -185,9 +235,17 @@ public sealed class PhotoPane : VisualElement
         {
             if (_splitBefore == value) return;
             _splitBefore = value;
+            if (_splitBefore && _showBefore)
+            {
+                _showBefore = false;
+                _beforeProgress = 0f;
+                _beforeTarget = 0f;
+                ShowBeforeChanged?.Invoke(false);
+            }
             _beforeLook.Invalidate();
             _tileBeforeLook.Invalidate();
             InvalidatePaint();
+            SplitBeforeChanged?.Invoke(_splitBefore);
         }
     }
 
@@ -635,6 +693,8 @@ public sealed class PhotoPane : VisualElement
 
     private void DrawGpuLook(SKCanvas canvas)
     {
+        UpdateBeforeAnimation();
+
         if (_source == null || _settings == null || _source.Handle == IntPtr.Zero)
             return;
 
@@ -701,25 +761,87 @@ public sealed class PhotoPane : VisualElement
         var vis = _drawClip;
         GetFrameSize(out int fwSingle, out int fhSingle);
 
-        var activeSettings = _showBefore ? GetBaselineSettings() : _settings;
-        var activeLook = _showBefore ? _beforeLook : _look;
-        var activeTileLook = _showBefore ? _tileBeforeLook : _tileLook;
+        if (_beforeProgress >= 0.999f)
+        {
+            var baseSettings = GetBaselineSettings();
+            if (!_beforeLook.Draw(canvas, dest, vis, _source, baseSettings, isFast, applyCrop: true,
+                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle))
+                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
 
-        if (!activeLook.Draw(canvas, dest, vis, _source, activeSettings, isFast, applyCrop: true,
-                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping))
-            canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
+            if (_tile != null && _tile.Handle != IntPtr.Zero && _tileW >= 1e-5f && _tileH >= 1e-5f)
+            {
+                var tileSrcSingle = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
+                var tileDestSingle = DevelopGeom.SourceAabbToDest(tileSrcSingle, dest, baseSettings, fwSingle, fhSingle);
+                tileDestSingle.Intersect(vis);
+                if (tileDestSingle.Width >= 1f && tileDestSingle.Height >= 1f)
+                {
+                    _tileBeforeLook.Draw(canvas, dest, tileDestSingle, _tile, baseSettings, isFast, applyCrop: true,
+                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle);
+                }
+            }
+        }
+        else if (_beforeProgress <= 0.001f)
+        {
+            if (!_look.Draw(canvas, dest, vis, _source, _settings, isFast, applyCrop: true,
+                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping))
+                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
 
-        if (_tile == null || _tile.Handle == IntPtr.Zero || _tileW < 1e-5f || _tileH < 1e-5f)
-            return;
+            if (_tile != null && _tile.Handle != IntPtr.Zero && _tileW >= 1e-5f && _tileH >= 1e-5f)
+            {
+                var tileSrcSingle = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
+                var tileDestSingle = DevelopGeom.SourceAabbToDest(tileSrcSingle, dest, _settings, fwSingle, fhSingle);
+                tileDestSingle.Intersect(vis);
+                if (tileDestSingle.Width >= 1f && tileDestSingle.Height >= 1f)
+                {
+                    _tileLook.Draw(canvas, dest, tileDestSingle, _tile, _settings, isFast, applyCrop: true,
+                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping);
+                }
+            }
+        }
+        else
+        {
+            // Morph transition between After and Before over 1 second
+            // 1. Draw After (base)
+            if (!_look.Draw(canvas, dest, vis, _source, _settings, isFast, applyCrop: true,
+                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping))
+                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
 
-        var tileSrcSingle = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
-        var tileDestSingle = DevelopGeom.SourceAabbToDest(tileSrcSingle, dest, activeSettings, fwSingle, fhSingle);
-        tileDestSingle.Intersect(vis);
-        if (tileDestSingle.Width < 1f || tileDestSingle.Height < 1f)
-            return;
+            if (_tile != null && _tile.Handle != IntPtr.Zero && _tileW >= 1e-5f && _tileH >= 1e-5f)
+            {
+                var tileSrcSingle = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
+                var tileDestSingle = DevelopGeom.SourceAabbToDest(tileSrcSingle, dest, _settings, fwSingle, fhSingle);
+                tileDestSingle.Intersect(vis);
+                if (tileDestSingle.Width >= 1f && tileDestSingle.Height >= 1f)
+                {
+                    _tileLook.Draw(canvas, dest, tileDestSingle, _tile, _settings, isFast, applyCrop: true,
+                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping);
+                }
+            }
 
-        activeTileLook.Draw(canvas, dest, tileDestSingle, _tile, activeSettings, isFast, applyCrop: true,
-            _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping);
+            // 2. Draw Before on top with opacity = _beforeProgress
+            byte blendAlpha = (byte)Math.Clamp((int)(_beforeProgress * 255f), 0, 255);
+            using var alphaPaint = new SKPaint { Color = new SKColor(255, 255, 255, blendAlpha) };
+            canvas.SaveLayer(vis, alphaPaint);
+
+            var baseSettings = GetBaselineSettings();
+            if (!_beforeLook.Draw(canvas, dest, vis, _source, baseSettings, isFast, applyCrop: true,
+                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle))
+                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
+
+            if (_tile != null && _tile.Handle != IntPtr.Zero && _tileW >= 1e-5f && _tileH >= 1e-5f)
+            {
+                var tileSrcSingle = new SKRect(_tileX, _tileY, _tileX + _tileW, _tileY + _tileH);
+                var tileDestSingle = DevelopGeom.SourceAabbToDest(tileSrcSingle, dest, baseSettings, fwSingle, fhSingle);
+                tileDestSingle.Intersect(vis);
+                if (tileDestSingle.Width >= 1f && tileDestSingle.Height >= 1f)
+                {
+                    _tileBeforeLook.Draw(canvas, dest, tileDestSingle, _tile, baseSettings, isFast, applyCrop: true,
+                        _tileX, _tileY, _tileW, _tileH, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle);
+                }
+            }
+
+            canvas.Restore();
+        }
     }
 
     private void DrawOverlay(SKCanvas canvas)
@@ -800,9 +922,9 @@ public sealed class PhotoPane : VisualElement
             // Badges: "BEFORE" on left side, "AFTER" on right side
             DrawSplitBadges(canvas, x, w, h);
         }
-        else if (_showBefore)
+        else if (_beforeProgress > 0.01f)
         {
-            DrawBeforeBadge(canvas, w);
+            DrawBeforeBadge(canvas, w, _beforeProgress);
         }
 
         if (_showInfoOverlay && HasPhoto && _metadata != null)
@@ -842,7 +964,7 @@ public sealed class PhotoPane : VisualElement
             LcdRenderText = true,
             HintingLevel = SKPaintHinting.Normal,
             TextSize = 14,
-            Typeface = SKTypeface.Default
+            Typeface = Theme.GetTypeface(400)
         };
         canvas.DrawText(line, 16, h - 16, text);
     }
@@ -865,12 +987,12 @@ public sealed class PhotoPane : VisualElement
         using var badgeText = new SKPaint
         {
             Color = Theme.Text,
+            Typeface = Theme.GetTypeface(600),
             IsAntialias = true,
             SubpixelText = true,
             LcdRenderText = true,
             HintingLevel = SKPaintHinting.Normal,
             TextSize = 11,
-            FakeBoldText = true,
             TextAlign = SKTextAlign.Center
         };
 
@@ -896,30 +1018,32 @@ public sealed class PhotoPane : VisualElement
         }
     }
 
-    private void DrawBeforeBadge(SKCanvas canvas, float w)
+    private void DrawBeforeBadge(SKCanvas canvas, float w, float alpha = 1f)
     {
+        byte bgA = (byte)Math.Clamp((int)(220 * alpha), 0, 255);
+        byte fgA = (byte)Math.Clamp((int)(255 * alpha), 0, 255);
         using var badgeBg = new SKPaint
         {
-            Color = new SKColor(20, 20, 23, 220),
+            Color = new SKColor(20, 20, 23, bgA),
             IsAntialias = true,
             Style = SKPaintStyle.Fill
         };
         using var badgeBorder = new SKPaint
         {
-            Color = Theme.Accent,
+            Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, fgA),
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
             StrokeWidth = 1.5f
         };
         using var badgeText = new SKPaint
         {
-            Color = Theme.Accent,
+            Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, fgA),
+            Typeface = Theme.GetTypeface(600),
             IsAntialias = true,
             SubpixelText = true,
             LcdRenderText = true,
             HintingLevel = SKPaintHinting.Normal,
             TextSize = 12,
-            FakeBoldText = true,
             TextAlign = SKTextAlign.Center
         };
 
@@ -932,7 +1056,24 @@ public sealed class PhotoPane : VisualElement
 
     private void DrawInfoOverlay(SKCanvas canvas, SKRect pane)
     {
+        if (_metadata == null)
+        {
+            if (!string.IsNullOrEmpty(_droppedPath) && System.IO.File.Exists(_droppedPath))
+            {
+                try { _metadata = RawDecoder.ReadMetadata(_droppedPath); } catch { }
+            }
+        }
         if (_metadata == null) return;
+
+        if (_metadata.Width <= 0 && _nativeW > 0)
+        {
+            _metadata.Width = _nativeW;
+            _metadata.Height = _nativeH;
+        }
+        if (_metadata.FileSizeBytes <= 0 && !string.IsNullOrEmpty(_droppedPath) && System.IO.File.Exists(_droppedPath))
+        {
+            try { _metadata.FileSizeBytes = new System.IO.FileInfo(_droppedPath).Length; } catch { }
+        }
 
         var rows = new List<(string Label, string Value, SKColor Color)>(10);
 
@@ -969,8 +1110,8 @@ public sealed class PhotoPane : VisualElement
 
         if (rows.Count == 0) return;
 
-        var tfSemiBold = Blossom.Utils.Fonts.GetTypeface("Liberation Sans, Noto Sans, sans-serif", 600);
-        var tfMedium = Blossom.Utils.Fonts.GetTypeface("Liberation Sans, Noto Sans, sans-serif", 500);
+        var tfSemiBold = Theme.GetTypeface(600);
+        var tfMedium = Theme.GetTypeface(500);
 
         using var labelPaint = new SKPaint
         {
@@ -1781,7 +1922,7 @@ public sealed class PhotoPane : VisualElement
             LcdRenderText = true,
             HintingLevel = SKPaintHinting.Normal,
             TextSize = 12,
-            Typeface = SKTypeface.Default,
+            Typeface = Theme.GetTypeface(500),
             TextAlign = SKTextAlign.Center
         };
         float barH = ids.Length * (h + gap) + 8f;
