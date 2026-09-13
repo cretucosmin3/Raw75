@@ -144,11 +144,12 @@ public class Filmstrip : VisualElement
                 IsClickthrough = true
             };
 
-            _caption = new VisualElement
+            _caption = new RichBox
             {
                 Name = $"{Name}_Name",
                 Text = doc.Name,
                 IsClickthrough = true,
+                Overflow = OverflowMode.Clip,
                 Style = new ElementStyle
                 {
                     BackColor = SKColors.Transparent,
@@ -158,7 +159,9 @@ public class Filmstrip : VisualElement
                         Size = 11.5f,
                         Weight = 400,
                         Alignment = TextAlign.Center,
-                        Padding = 2
+                        Padding = 2,
+                        Overflow = TextOverflow.Ellipsis,
+                        MaxLines = 1
                     }
                 }
             };

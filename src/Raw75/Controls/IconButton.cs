@@ -121,12 +121,14 @@ public class IconButton : VisualElement
             }
         };
 
-        _labelElement = new VisualElement
+        _labelElement = new RichBox
         {
             Name = $"{Name}_Label",
             IsClickthrough = true,
+            Interactive = false,
             Text = _caption,
             Visible = !string.IsNullOrEmpty(_caption),
+            Overflow = OverflowMode.Clip,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -136,7 +138,9 @@ public class IconButton : VisualElement
                     Size = 12,
                     Weight = 500,
                     Alignment = TextAlign.Center,
-                    Padding = 0
+                    Padding = 0,
+                    Overflow = TextOverflow.Ellipsis,
+                    MaxLines = 1
                 }
             }
         };
@@ -210,6 +214,7 @@ public class IconButton : VisualElement
             {
                 Name = $"{Name}_Icon",
                 IsClickthrough = true,
+                Interactive = false,
                 BackgroundImageScale = ImageScaleMode.Contain,
                 BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
                 BackgroundImageTintColor = Theme.Text,
@@ -325,9 +330,12 @@ public class IconButton : VisualElement
             border = accent ? Theme.Lighten(Theme.Accent, 24) : Theme.HairlineStrong;
         }
 
+        bool fillChanged = Style.BackColor != fill;
+        bool borderChanged = Style.Border.Color != border;
         Style.BackColor = fill;
         Style.Border.Color = border;
 
+        bool textChanged = false;
         if (_labelElement.Style?.Text != null)
         {
             if (Style?.Text != null && Math.Abs(_labelElement.Style.Text.Size - Style.Text.Size) > 0.1f)
@@ -335,17 +343,22 @@ public class IconButton : VisualElement
                 _labelElement.Style.Text.Size = Style.Text.Size;
             }
 
-            _labelElement.Style.Text.Color = text;
-            _labelElement.Style.Text.Weight = accent ? 600 : 500;
-            _labelElement.InvalidatePaint();
+            textChanged = _labelElement.Style.Text.Color != text;
+            int weight = accent ? 600 : 500;
+            if (_labelElement.Style.Text.Weight != weight)
+                _labelElement.Style.Text.Weight = weight;
+            if (textChanged)
+                _labelElement.Style.Text.Color = text;
         }
 
-        if (_iconElement != null)
+        bool iconChanged = false;
+        if (_iconElement != null && _iconElement.BackgroundImageTintColor != text)
         {
             _iconElement.BackgroundImageTintColor = text;
-            _iconElement.InvalidatePaint();
+            iconChanged = true;
         }
 
-        InvalidatePaint();
+        if (fillChanged || borderChanged || textChanged || iconChanged)
+            InvalidatePaint();
     }
 }

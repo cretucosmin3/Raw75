@@ -330,11 +330,12 @@ public sealed class ExportDialog : VisualElement
 
     private static VisualElement Label(string name, string text, SKColor color, float size, int weight, TextAlign align)
     {
-        return new VisualElement
+        return new RichBox
         {
             Name = name,
             Text = text,
             IsClickthrough = true,
+            Overflow = OverflowMode.Clip,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -344,7 +345,9 @@ public sealed class ExportDialog : VisualElement
                     Size = size,
                     Weight = weight,
                     Alignment = align,
-                    Padding = 2
+                    Padding = 2,
+                    Overflow = TextOverflow.Ellipsis,
+                    MaxLines = 1
                 }
             }
         };

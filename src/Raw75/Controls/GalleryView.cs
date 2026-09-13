@@ -356,11 +356,12 @@ public sealed class GalleryView : ScrollContainer
                 IsClickthrough = true
             };
 
-            _caption = new VisualElement
+            _caption = new RichBox
             {
                 Name = $"{Name}_Caption",
                 Text = doc.Name,
                 IsClickthrough = true,
+                Overflow = OverflowMode.Clip,
                 Style = new ElementStyle
                 {
                     BackColor = SKColors.Transparent,
@@ -370,7 +371,9 @@ public sealed class GalleryView : ScrollContainer
                         Size = 12,
                         Weight = 500,
                         Alignment = TextAlign.Center,
-                        Padding = 4
+                        Padding = 4,
+                        Overflow = TextOverflow.Ellipsis,
+                        MaxLines = 1
                     }
                 }
             };

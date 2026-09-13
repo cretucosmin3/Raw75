@@ -646,6 +646,9 @@ public sealed class PhotoPane : VisualElement
 
     protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
     {
+        if (!Visible || !EffectiveVisible || ComputedVisibility == Visibility.Hidden)
+            return;
+
         float w = Transform.Computed.Width;
         float h = Transform.Computed.Height;
         if (w <= 1 || h <= 1)
@@ -698,6 +701,9 @@ public sealed class PhotoPane : VisualElement
 
     private void DrawGpuLook(SKCanvas canvas)
     {
+        if (!Visible || !EffectiveVisible || ComputedVisibility == Visibility.Hidden)
+            return;
+
         UpdateBeforeAnimation();
 
         if (_source == null || _settings == null || _source.Handle == IntPtr.Zero)
@@ -833,6 +839,8 @@ public sealed class PhotoPane : VisualElement
 
     private void DrawOverlay(SKCanvas canvas)
     {
+        if (!Visible || !EffectiveVisible || ComputedVisibility == Visibility.Hidden)
+            return;
         float w = Transform.Computed.Width;
         float h = Transform.Computed.Height;
         var pane = new SKRect(0, 0, w, h);

@@ -103,6 +103,8 @@ public sealed class SettingsDialog : VisualElement
         _dumpBtn = new IconButton("Dump Memory Inventory", "save");
         _dumpBtn.Clicked += Dump;
         _dumpSummary = Label("DumpSummary", "No dump yet.", Theme.Text, 13, 500, TextAlign.Left);
+        if (_dumpSummary is RichBox dumpBox)
+            dumpBox.Scrollable = true;
         _dumpPath = Label("DumpPath", "", Theme.TextDim, 12, 400, TextAlign.Left);
         _panelDev.AddChild(_dumpHint);
         _panelDev.AddChild(_dumpBtn);
@@ -186,7 +188,7 @@ public sealed class SettingsDialog : VisualElement
         try
         {
             var result = MemoryInventory.Write(_session, _pane);
-            _dumpSummary.Text = result.Summary.Replace("\n", "  ·  ", StringComparison.Ordinal);
+            _dumpSummary.Text = result.Summary;
             _dumpPath.Text = result.FilePath;
             Log.Info("Memory dump " + result.FilePath + "  process=" + MemSize.Bytes(result.ProcessBytes)
                      + "  named=" + MemSize.Bytes(result.NamedBytes));
@@ -301,11 +303,12 @@ public sealed class SettingsDialog : VisualElement
 
     private static VisualElement Label(string name, string text, SKColor color, float size, int weight, TextAlign align)
     {
-        return new VisualElement
+        return new RichBox
         {
             Name = name,
             Text = text,
             IsClickthrough = true,
+            Overflow = OverflowMode.Clip,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -315,7 +318,9 @@ public sealed class SettingsDialog : VisualElement
                     Size = size,
                     Weight = weight,
                     Alignment = align,
-                    Padding = 2
+                    Padding = 2,
+                    Overflow = TextOverflow.Ellipsis,
+                    MaxLines = name is "DumpPath" or "DumpHint" or "DumpSummary" or "ClearCacheHint" ? 2 : 1
                 }
             }
         };
