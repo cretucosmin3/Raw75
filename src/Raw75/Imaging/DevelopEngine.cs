@@ -235,11 +235,12 @@ public sealed class DevelopEngine
                 try
                 {
                     RasterBuffer buf;
+                    Develop.PhotoMetadata? meta = null;
                     if (RawDecoder.IsRawPath(doc.Path))
-                        buf = RawDecoder.DecodeThumbnail(doc.Path);
+                        buf = RawDecoder.DecodeThumbnail(doc.Path, out meta);
                     else
                     {
-                        RasterBuffer? raster = RawDecoder.TryDecodeRaster(doc.Path);
+                        RasterBuffer? raster = RawDecoder.TryDecodeRaster(doc.Path, out meta);
                         if (raster == null)
                         {
                             int cur = Interlocked.Increment(ref processed);
@@ -253,12 +254,19 @@ public sealed class DevelopEngine
                     int n = Interlocked.Increment(ref processed);
                     PhotoDocument target = doc;
                     RasterBuffer shot = buf;
+                    Develop.PhotoMetadata? shotMeta = meta;
                     Browser.Post(() =>
                     {
                         if (target.IsDisposed || target.Preview != null || target.Thumb != null)
                             return;
                         try
                         {
+                            if (shotMeta != null)
+                            {
+                                target.Metadata ??= shotMeta;
+                                if (!string.IsNullOrEmpty(shotMeta.CameraName) && string.IsNullOrEmpty(target.Camera))
+                                    target.Camera = shotMeta.CameraName;
+                            }
                             SKImage image = RawDecoder.Upload(shot, out _);
                             Assign(target, thumb: image);
                             ThumbLoaded?.Invoke(target);
