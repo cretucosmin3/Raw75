@@ -19,6 +19,7 @@ public sealed class PhotoMetadata
     public DateTime? CaptureTime { get; set; }
     public int Width { get; set; }
     public int Height { get; set; }
+    public int Orientation { get; set; } = 1;
     public long FileSizeBytes { get; set; }
 
     public string CameraName

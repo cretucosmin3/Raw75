@@ -85,19 +85,162 @@ internal static class RawDecoder
         return !RasterExt.Contains(ext);
     }
 
+    public static int ExifOrientationToLibRawFlip(int exifOrientation)
+    {
+        return exifOrientation switch
+        {
+            1 => 0,
+            2 => 1,
+            3 => 3,
+            4 => 2,
+            5 => 4,
+            6 => 6,
+            7 => 7,
+            8 => 5,
+            _ => 0
+        };
+    }
+
+    public static int LibRawFlipToExifOrientation(int flip)
+    {
+        return (flip & 7) switch
+        {
+            0 => 1,
+            1 => 2,
+            2 => 4,
+            3 => 3,
+            4 => 5,
+            5 => 8,
+            6 => 6,
+            7 => 7,
+            _ => 1
+        };
+    }
+
+    public static RasterBuffer RotateAndFlip(RasterBuffer src, int flip)
+    {
+        flip &= 7;
+        if (!src.HasPixels || flip == 0)
+            return src;
+
+        int inW = src.Width;
+        int inH = src.Height;
+        bool swap = (flip & 4) != 0;
+        int dstW = swap ? inH : inW;
+        int dstH = swap ? inW : inH;
+
+        int baseIdx = MapCoords(0, 0, inW, inH, flip);
+        int dCol = dstW > 1 ? MapCoords(1, 0, inW, inH, flip) - baseIdx : 0;
+        int dRow = dstH > 1 ? MapCoords(0, 1, inW, inH, flip) - baseIdx : 0;
+
+        float[]? dstLin = src.Linear != null ? new float[dstW * dstH * 4] : null;
+        byte[]? dstRgba = src.Rgba != null ? new byte[dstW * dstH * 4] : null;
+        float[]? srcLin = src.Linear;
+        byte[]? srcRgba = src.Rgba;
+
+        int di = 0;
+        for (int y = 0; y < dstH; y++)
+        {
+            int si = (baseIdx + y * dRow) * 4;
+            int step = dCol * 4;
+            for (int x = 0; x < dstW; x++)
+            {
+                if (dstLin != null && srcLin != null)
+                {
+                    dstLin[di] = srcLin[si];
+                    dstLin[di + 1] = srcLin[si + 1];
+                    dstLin[di + 2] = srcLin[si + 2];
+                    dstLin[di + 3] = srcLin[si + 3];
+                }
+                if (dstRgba != null && srcRgba != null)
+                {
+                    dstRgba[di] = srcRgba[si];
+                    dstRgba[di + 1] = srcRgba[si + 1];
+                    dstRgba[di + 2] = srcRgba[si + 2];
+                    dstRgba[di + 3] = srcRgba[si + 3];
+                }
+                di += 4;
+                si += step;
+            }
+        }
+
+        if (dstLin != null)
+            return new RasterBuffer(dstLin, dstW, dstH, dstRgba);
+        return new RasterBuffer(dstRgba!, dstW, dstH);
+    }
+
+    private static int MapCoords(int dstX, int dstY, int inW, int inH, int flip)
+    {
+        int srcY = dstY;
+        int srcX = dstX;
+        if ((flip & 4) != 0)
+        {
+            int t = srcY;
+            srcY = srcX;
+            srcX = t;
+        }
+        if ((flip & 2) != 0)
+        {
+            srcY = inH - 1 - srcY;
+        }
+        if ((flip & 1) != 0)
+        {
+            srcX = inW - 1 - srcX;
+        }
+        return srcY * inW + srcX;
+    }
+
     public static RasterBuffer? TryDecodeRaster(string path)
     {
+        return TryDecodeRaster(path, out _);
+    }
+
+    public static RasterBuffer? TryDecodeRaster(string path, out Develop.PhotoMetadata? metadata)
+    {
+        metadata = null;
         if (IsRawPath(path))
             return null;
 
         try
         {
             byte[] bytes = File.ReadAllBytes(path);
-            using var bmp = SKBitmap.Decode(bytes);
+            SKBitmap? bmp = null;
+            SKEncodedOrigin origin = SKEncodedOrigin.TopLeft;
+            using (var stream = new MemoryStream(bytes))
+            using (var codec = SKCodec.Create(stream))
+            {
+                if (codec != null)
+                {
+                    origin = codec.EncodedOrigin;
+                    bmp = SKBitmap.Decode(codec);
+                }
+            }
+
+            bmp ??= SKBitmap.Decode(bytes);
             if (bmp == null || bmp.Width <= 0)
                 return null;
-            RasterBuffer full = FromBitmap(bmp);
-            return Limit(full, ProxyLongEdge(full.Width, full.Height));
+
+            using (bmp)
+            {
+                RasterBuffer full = FromBitmap(bmp);
+                int flip = 0;
+                if (origin != SKEncodedOrigin.TopLeft)
+                {
+                    flip = ExifOrientationToLibRawFlip((int)origin);
+                    if (flip != 0)
+                        full = RotateAndFlip(full, flip);
+                }
+
+                metadata = new Develop.PhotoMetadata
+                {
+                    Width = full.Width,
+                    Height = full.Height,
+                    Orientation = (int)origin,
+                    FileSizeBytes = bytes.Length
+                };
+
+                return Limit(full, ProxyLongEdge(full.Width, full.Height));
+            }
         }
         catch
         {
@@ -113,10 +256,33 @@ internal static class RawDecoder
         try
         {
             byte[] bytes = File.ReadAllBytes(path);
-            using var bmp = SKBitmap.Decode(bytes);
+            SKBitmap? bmp = null;
+            SKEncodedOrigin origin = SKEncodedOrigin.TopLeft;
+            using (var stream = new MemoryStream(bytes))
+            using (var codec = SKCodec.Create(stream))
+            {
+                if (codec != null)
+                {
+                    origin = codec.EncodedOrigin;
+                    bmp = SKBitmap.Decode(codec);
+                }
+            }
+
+            bmp ??= SKBitmap.Decode(bytes);
             if (bmp == null || bmp.Width <= 0)
                 return null;
-            return FromBitmap(bmp);
+
+            using (bmp)
+            {
+                RasterBuffer full = FromBitmap(bmp);
+                if (origin != SKEncodedOrigin.TopLeft)
+                {
+                    int flip = ExifOrientationToLibRawFlip((int)origin);
+                    if (flip != 0)
+                        full = RotateAndFlip(full, flip);
+                }
+                return full;
+            }
         }
         catch
         {
@@ -126,14 +292,49 @@ internal static class RawDecoder
 
     public static RasterBuffer DecodeThumbnail(string path)
     {
+        return DecodeThumbnail(path, out _);
+    }
+
+    public static RasterBuffer DecodeThumbnail(string path, out Develop.PhotoMetadata? metadata)
+    {
+        metadata = null;
         LibRawNative.EnsureLoaded();
         lock (LibRawGate)
         {
             using var raw = RawContext.OpenFile(path);
-            using ProcessedImage image = raw.ExportThumbnail(0);
-            var buf = ToBuffer(image, maxEdge: 0);
-            Log.Info($"Thumb {buf.Width}x{buf.Height} type={image.ImageType} bits={image.Bits} ch={image.Channels}");
-            return buf;
+            IntPtr handle = raw.UnsafeGetHandle();
+            int flip = Marshal.ReadInt32(handle, 40);
+
+            int nw = raw.Width > 0 ? raw.Width : raw.RawWidth;
+            int nh = raw.Height > 0 ? raw.Height : raw.RawHeight;
+            if ((flip & 4) != 0)
+            {
+                int temp = nw;
+                nw = nh;
+                nh = temp;
+            }
+            metadata = ExtractMetadata(raw, path, nw, nh, flip);
+
+            try
+            {
+                using ProcessedImage image = raw.ExportThumbnail(0);
+                var buf = ToBuffer(image, maxEdge: 0);
+                if (flip != 0)
+                    buf = RotateAndFlip(buf, flip);
+                Log.Info($"Thumb {buf.Width}x{buf.Height} (flip={flip}) type={image.ImageType} bits={image.Bits} ch={image.Channels}");
+                return buf;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"ExportThumbnail failed for {path}: {ex.Message}; fallback to half-size raw export");
+                using ProcessedImage image = raw.ExportRawImage(c =>
+                {
+                    c.HalfSize = true;
+                    c.OutputBps = 8;
+                });
+                var buf = ToBuffer(image, maxEdge: 480);
+                return buf;
+            }
         }
     }
 
@@ -153,6 +354,9 @@ internal static class RawDecoder
         lock (LibRawGate)
         {
             using var raw = RawContext.OpenFile(path);
+            IntPtr handle = raw.UnsafeGetHandle();
+            int flip = Marshal.ReadInt32(handle, 40);
+
             bool camWb = false;
             try
             {
@@ -160,9 +364,17 @@ internal static class RawDecoder
             }
             catch { }
 
-            nativeW = raw.Width > 0 ? raw.Width : raw.RawWidth;
-            nativeH = raw.Height > 0 ? raw.Height : raw.RawHeight;
-            metadata = ExtractMetadata(raw, path, nativeW, nativeH);
+            int nw = raw.Width > 0 ? raw.Width : raw.RawWidth;
+            int nh = raw.Height > 0 ? raw.Height : raw.RawHeight;
+            if ((flip & 4) != 0)
+            {
+                int temp = nw;
+                nw = nh;
+                nh = temp;
+            }
+            nativeW = nw;
+            nativeH = nh;
+            metadata = ExtractMetadata(raw, path, nativeW, nativeH, flip);
             int edge = ProxyLongEdge(nativeW, nativeH);
             bool half = Math.Max(nativeW, nativeH) > ProxyMaxEdge;
             using ProcessedImage image = raw.ExportRawImage(c => ConfigureLinear(c, camWb, half));
@@ -172,12 +384,13 @@ internal static class RawDecoder
         }
     }
 
-    public static Develop.PhotoMetadata ExtractMetadata(RawContext raw, string path, int w, int h)
+    public static Develop.PhotoMetadata ExtractMetadata(RawContext raw, string path, int w, int h, int flip = 0)
     {
         var meta = new Develop.PhotoMetadata
         {
             Width = w,
-            Height = h
+            Height = h,
+            Orientation = LibRawFlipToExifOrientation(flip)
         };
         try
         {
@@ -246,9 +459,17 @@ internal static class RawDecoder
                 try
                 {
                     using var raw = RawContext.OpenFile(path);
+                    IntPtr handle = raw.UnsafeGetHandle();
+                    int flip = Marshal.ReadInt32(handle, 40);
                     int nw = raw.Width > 0 ? raw.Width : raw.RawWidth;
                     int nh = raw.Height > 0 ? raw.Height : raw.RawHeight;
-                    return ExtractMetadata(raw, path, nw, nh);
+                    if ((flip & 4) != 0)
+                    {
+                        int temp = nw;
+                        nw = nh;
+                        nh = temp;
+                    }
+                    return ExtractMetadata(raw, path, nw, nh, flip);
                 }
                 catch { }
             }
@@ -265,6 +486,17 @@ internal static class RawDecoder
                 var exif = info.Metadata.ExifProfile;
                 if (exif != null)
                 {
+                    var orientVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Orientation)?.Value;
+                    if (orientVal is ushort o)
+                    {
+                        meta.Orientation = o;
+                        if (o >= 5 && o <= 8)
+                        {
+                            meta.Width = info.Height;
+                            meta.Height = info.Width;
+                        }
+                    }
+
                     meta.CameraMake = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Make)?.Value?.ToString() ?? "";
                     meta.CameraModel = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Model)?.Value?.ToString() ?? "";
                     meta.LensModel = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.LensModel)?.Value?.ToString() ?? "";

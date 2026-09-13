@@ -1943,14 +1943,15 @@ public sealed class WorkspaceView : View
 
             var cts = new CancellationTokenSource();
             _statusDismissCts = cts;
+            var token = cts.Token;
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await Task.Delay(3500, cts.Token);
+                    await Task.Delay(3500, token);
                     Browser.Post(() =>
                     {
-                        if (!cts.IsCancellationRequested && _status != null)
+                        if (!token.IsCancellationRequested && _status != null)
                         {
                             _status.Text = string.Empty;
                             _status.Visible = false;
@@ -1959,6 +1960,7 @@ public sealed class WorkspaceView : View
                     });
                 }
                 catch (OperationCanceledException) { }
+                catch (ObjectDisposedException) { }
             });
         }
         else
