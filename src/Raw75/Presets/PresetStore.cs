@@ -57,6 +57,17 @@ public static class PresetStore
                 settings.CurveGreen = Raw75.Pipeline.CurveMath.DefaultCurve();
             if (settings.CurveBlue == null || settings.CurveBlue.Length < 2)
                 settings.CurveBlue = Raw75.Pipeline.CurveMath.DefaultCurve();
+
+            // Presets never carry transforms or crop/rotation
+            settings.CropX = 0;
+            settings.CropY = 0;
+            settings.CropW = 0;
+            settings.CropH = 0;
+            settings.Straighten = 0;
+            settings.Rotate90 = 0;
+            settings.FlipH = false;
+            settings.FlipV = false;
+
             return settings;
         }
 
@@ -87,8 +98,20 @@ public static class PresetStore
         if (!TryFileName(name, out var file))
             throw new ArgumentException("Invalid preset name.", nameof(name));
 
+        var clean = s.Clone();
+        // Remove transform adjustments from presets (crop, rotation, flips, straighten)
+        clean.CropX = 0;
+        clean.CropY = 0;
+        clean.CropW = 0;
+        clean.CropH = 0;
+        clean.Straighten = 0;
+        clean.Rotate90 = 0;
+        clean.FlipH = false;
+        clean.FlipV = false;
+        clean.EnableGeometry = true;
+
         Directory.CreateDirectory(UserDir);
-        var json = JsonSerializer.Serialize(s, JsonOptions);
+        var json = JsonSerializer.Serialize(clean, JsonOptions);
         File.WriteAllText(Path.Combine(UserDir, file), json);
     }
 
