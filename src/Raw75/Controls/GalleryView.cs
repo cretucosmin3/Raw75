@@ -19,7 +19,7 @@ public enum GalleryFilter
 /// <summary>
 /// Full-canvas lightbox / gallery grid view:
 /// Displays a multi-column contact sheet with ready checkboxes, filter tabs,
-/// and double-click to open in develop view.
+/// and double-click to open in develop view. Virtualized for fast rendering.
 /// </summary>
 public sealed class GalleryView : ScrollContainer
 {
@@ -37,10 +37,21 @@ public sealed class GalleryView : ScrollContainer
     private readonly IconButton _btnClearAll;
     private readonly VisualElement _countLabel;
 
-    private readonly List<GalleryCard> _cards = new();
+    private readonly Dictionary<int, GalleryCard> _activeCards = new();
+    private readonly Stack<GalleryCard> _cardPool = new();
+    private readonly List<int> _recycledKeys = new();
+    private readonly List<int> _filteredIndices = new();
+
     private IReadOnlyList<PhotoDocument> _docs = Array.Empty<PhotoDocument>();
     private int _activeIndex = -1;
     private GalleryFilter _filter = GalleryFilter.All;
+
+    private int _lastFirstRow = -1;
+    private int _lastLastRow = -1;
+    private float _lastOx = float.NaN;
+    private float _lastOy = float.NaN;
+    private float _lastW = float.NaN;
+    private int _lastCols = -1;
 
     public event Action<int>? PhotoSelected;
     public event Action<int>? PhotoDoubleClicked;
@@ -125,54 +136,60 @@ public sealed class GalleryView : ScrollContainer
     {
         _docs = docs ?? Array.Empty<PhotoDocument>();
         _activeIndex = activeIndex;
+        _lastFirstRow = -1;
+        _lastLastRow = -1;
 
-        var prev = _cards.ToArray();
-        _cards.Clear();
-        for (int i = 0; i < prev.Length; i++)
-        {
-            RemoveChild(prev[i]);
-            prev[i].Dispose();
-        }
-
-        for (int i = 0; i < _docs.Count; i++)
-        {
-            var card = new GalleryCard(this, i, _docs[i], i == _activeIndex);
-            _cards.Add(card);
-            AddChild(card);
-        }
-
+        UpdateFilteredIndices();
         UpdateFilterCounts();
-        ApplyFilterVisibility();
-        InvalidateLayout();
+
+        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
+        float h = Math.Max(1f, Transform.Computed.Height > 0 ? Transform.Computed.Height : Transform.Height);
+        float startY = TopBarH + Pad;
+        float availW = Math.Max(1f, w - Pad * 2f);
+        int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
+        int totalRows = (_filteredIndices.Count + cols - 1) / cols;
+        float totalH = startY + totalRows * (CardH + Gap) + Pad;
+
+        SetContentSize(w, Math.Max(totalH, h));
+        UpdateVirtualCards(force: true);
         InvalidatePaint();
     }
 
     public void SetSelected(int index)
     {
         _activeIndex = index;
-        for (int i = 0; i < _cards.Count; i++)
-            _cards[i].SetActive(_cards[i].Index == index);
+        foreach (var card in _activeCards.Values)
+            card.SetActive(card.Index == index);
         InvalidatePaint();
     }
 
     public void SetReady(int index, bool ready)
     {
-        for (int i = 0; i < _cards.Count; i++)
+        if (index >= 0 && index < _docs.Count)
+            _docs[index].IsReady = ready;
+
+        foreach (var card in _activeCards.Values)
         {
-            if (_cards[i].Index == index)
+            if (card.Index == index)
             {
-                _cards[i].SetReady(ready);
+                card.SetReady(ready);
                 break;
             }
         }
         UpdateFilterCounts();
-        ApplyFilterVisibility();
+
+        if (_filter != GalleryFilter.All)
+        {
+            UpdateFilteredIndices();
+            InvalidateLayout();
+        }
+        InvalidatePaint();
     }
 
     public void RefreshThumbs()
     {
-        for (int i = 0; i < _cards.Count; i++)
-            _cards[i].RefreshThumb();
+        foreach (var card in _activeCards.Values)
+            card.RefreshThumb();
         InvalidatePaint();
     }
 
@@ -182,7 +199,8 @@ public sealed class GalleryView : ScrollContainer
         _btnFilterAll.Toggled = filter == GalleryFilter.All;
         _btnFilterReady.Toggled = filter == GalleryFilter.ReadyOnly;
         _btnFilterUnmarked.Toggled = filter == GalleryFilter.UnmarkedOnly;
-        ApplyFilterVisibility();
+        UpdateFilteredIndices();
+        ScrollY = 0f;
         InvalidateLayout();
         InvalidatePaint();
     }
@@ -201,43 +219,62 @@ public sealed class GalleryView : ScrollContainer
         _countLabel.Text = $"{total} photos · {ready} ready";
     }
 
-    private void ApplyFilterVisibility()
+    private void UpdateFilteredIndices()
     {
-        for (int i = 0; i < _cards.Count; i++)
+        _filteredIndices.Clear();
+        for (int i = 0; i < _docs.Count; i++)
         {
-            var card = _cards[i];
-            bool visible = _filter switch
+            bool match = _filter switch
             {
-                GalleryFilter.ReadyOnly => card.Doc.IsReady,
-                GalleryFilter.UnmarkedOnly => !card.Doc.IsReady,
+                GalleryFilter.ReadyOnly => _docs[i].IsReady,
+                GalleryFilter.UnmarkedOnly => !_docs[i].IsReady,
                 _ => true
             };
-            card.Visible = visible;
+            if (match)
+                _filteredIndices.Add(i);
         }
     }
 
     private void MarkAllReady()
     {
         for (int i = 0; i < _docs.Count; i++)
-        {
             _docs[i].IsReady = true;
-            if (i < _cards.Count) _cards[i].SetReady(true);
-        }
+
+        foreach (var card in _activeCards.Values)
+            card.SetReady(true);
+
         UpdateFilterCounts();
-        ApplyFilterVisibility();
+        if (_filter != GalleryFilter.All)
+        {
+            UpdateFilteredIndices();
+            InvalidateLayout();
+        }
+        InvalidatePaint();
         BatchReadyChanged?.Invoke();
     }
 
     private void ClearAllReady()
     {
         for (int i = 0; i < _docs.Count; i++)
-        {
             _docs[i].IsReady = false;
-            if (i < _cards.Count) _cards[i].SetReady(false);
-        }
+
+        foreach (var card in _activeCards.Values)
+            card.SetReady(false);
+
         UpdateFilterCounts();
-        ApplyFilterVisibility();
+        if (_filter != GalleryFilter.All)
+        {
+            UpdateFilteredIndices();
+            InvalidateLayout();
+        }
+        InvalidatePaint();
         BatchReadyChanged?.Invoke();
+    }
+
+    protected override void OnScrollOffsetChanged()
+    {
+        base.OnScrollOffsetChanged();
+        UpdateVirtualCards(force: false);
     }
 
     protected override void LayoutChildren()
@@ -262,32 +299,120 @@ public sealed class GalleryView : ScrollContainer
 
         _countLabel.Transform.SetAbsoluteFrame(ox + w - Pad - 200f, hy + 6f, 200f, 20f);
 
-        // Grid layout for cards
+        // Grid layout calculations
+        float startY = TopBarH + Pad;
+        float availW = Math.Max(1f, w - Pad * 2f);
+        int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
+        int totalRows = (_filteredIndices.Count + cols - 1) / cols;
+        float totalH = startY + totalRows * (CardH + Gap) + Pad;
+
+        SetContentSize(w, Math.Max(totalH, h));
+        base.LayoutChildren();
+
+        UpdateVirtualCards(force: true);
+    }
+
+    private void UpdateVirtualCards(bool force = false)
+    {
+        if (_filteredIndices.Count == 0)
+        {
+            foreach (var card in _activeCards.Values)
+            {
+                card.Visible = false;
+                _cardPool.Push(card);
+            }
+            _activeCards.Clear();
+            _lastFirstRow = -1;
+            _lastLastRow = -1;
+            return;
+        }
+
+        float ox = Transform.Computed.X;
+        float oy = Transform.Computed.Y;
+        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
+        float h = Math.Max(1f, Transform.Computed.Height > 0 ? Transform.Computed.Height : Transform.Height);
+
         float startY = TopBarH + Pad;
         float availW = Math.Max(1f, w - Pad * 2f);
         int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
         float actualCellW = (availW - (cols - 1) * Gap) / cols;
 
-        int visibleIndex = 0;
-        for (int i = 0; i < _cards.Count; i++)
-        {
-            var card = _cards[i];
-            if (!card.Visible) continue;
+        int totalCount = _filteredIndices.Count;
+        int totalRows = (totalCount + cols - 1) / cols;
+        float rowStride = CardH + Gap;
 
-            int col = visibleIndex % cols;
-            int row = visibleIndex / cols;
+        float scrollY = ScrollY;
+        int firstRow = Math.Max(0, (int)Math.Floor((scrollY - startY - CardH) / rowStride) - 1);
+        int lastRow = Math.Min(totalRows - 1, (int)Math.Ceiling((scrollY + h - startY) / rowStride) + 1);
+
+        bool boundsChanged = ox != _lastOx || oy != _lastOy || w != _lastW || cols != _lastCols;
+        if (!force && !boundsChanged && firstRow == _lastFirstRow && lastRow == _lastLastRow)
+        {
+            return;
+        }
+
+        _lastFirstRow = firstRow;
+        _lastLastRow = lastRow;
+        _lastOx = ox;
+        _lastOy = oy;
+        _lastW = w;
+        _lastCols = cols;
+
+        int minItem = firstRow * cols;
+        int maxItem = Math.Min(totalCount - 1, (lastRow + 1) * cols - 1);
+
+        // Recycle cards no longer in range
+        _recycledKeys.Clear();
+        foreach (var kvp in _activeCards)
+        {
+            int itemIdx = kvp.Key;
+            if (itemIdx < minItem || itemIdx > maxItem)
+            {
+                var card = kvp.Value;
+                card.Visible = false;
+                _cardPool.Push(card);
+                _recycledKeys.Add(itemIdx);
+            }
+        }
+        for (int i = 0; i < _recycledKeys.Count; i++)
+            _activeCards.Remove(_recycledKeys[i]);
+
+        // Position and rebind
+        for (int itemIdx = minItem; itemIdx <= maxItem; itemIdx++)
+        {
+            int docIdx = _filteredIndices[itemIdx];
+            int col = itemIdx % cols;
+            int row = itemIdx / cols;
 
             float cx = ox + Pad + col * (actualCellW + Gap);
             float cy = oy + startY + row * (CardH + Gap);
 
-            card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
-            visibleIndex++;
-        }
+            if (_activeCards.TryGetValue(itemIdx, out var card))
+            {
+                if (force || boundsChanged)
+                {
+                    card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
+                }
+                card.Visible = true;
+            }
+            else
+            {
+                if (_cardPool.Count > 0)
+                {
+                    card = _cardPool.Pop();
+                }
+                else
+                {
+                    card = new GalleryCard(this);
+                    AddChild(card);
+                }
 
-        int totalRows = (visibleIndex + cols - 1) / cols;
-        float totalH = startY + totalRows * (CardH + Gap) + Pad;
-        SetContentSize(w, Math.Max(totalH, h));
-        base.LayoutChildren();
+                card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
+                card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
+                card.Visible = true;
+                _activeCards[itemIdx] = card;
+            }
+        }
     }
 
     internal void OnCardClicked(int index)
@@ -305,61 +430,64 @@ public sealed class GalleryView : ScrollContainer
     internal void OnCardReadyToggled(int index, bool ready)
     {
         ReadyToggled?.Invoke(index, ready);
-        UpdateFilterCounts();
-        if (_filter != GalleryFilter.All)
-            ApplyFilterVisibility();
     }
 
-    public sealed class GalleryCard : VisualElement
+    public override void Dispose()
+    {
+        base.Dispose();
+        foreach (var card in _activeCards.Values)
+            card.Dispose();
+        _activeCards.Clear();
+
+        while (_cardPool.Count > 0)
+            _cardPool.Pop().Dispose();
+    }
+
+    private sealed class GalleryCard : VisualElement
     {
         private static readonly TimeSpan DoubleClickThreshold = TimeSpan.FromMilliseconds(300);
 
         private readonly GalleryView _owner;
-        public int Index { get; }
-        public PhotoDocument Doc { get; }
+        private int _index;
+        private PhotoDocument? _doc;
         private bool _active;
         private bool _isReady;
         private DateTime _lastClickTime = DateTime.MinValue;
 
         private readonly GalleryThumbWell _thumb;
-        private readonly VisualElement _caption;
+        private readonly RichBox _caption;
         private readonly VisualElement _readyBtn;
         private readonly VisualElement _indexBadge;
 
-        public GalleryCard(GalleryView owner, int index, PhotoDocument doc, bool active)
+        public int Index => _index;
+        public PhotoDocument? Doc => _doc;
+
+        public GalleryCard(GalleryView owner)
         {
             _owner = owner;
-            Index = index;
-            Doc = doc;
-            _active = active;
-            _isReady = doc.IsReady;
-
-            Name = $"GalleryCard_{index}";
             Cursor = StandardCursor.Hand;
             Style = new ElementStyle
             {
-                BackColor = active ? Theme.Selected : Theme.Section,
+                BackColor = Theme.Section,
                 Border = new BorderStyle
                 {
-                    Width = active ? 2f : 1f,
-                    Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline),
+                    Width = 1f,
+                    Color = Theme.Hairline,
                     Roundness = Theme.Radius
                 },
-                Shadow = active
-                    ? new ShadowStyle(0, 3f, 6, 6, new SKColor(255, 153, 51, 90))
-                    : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70))
+                Shadow = new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70))
             };
 
-            _thumb = new GalleryThumbWell(doc.Look ?? doc.Preview ?? doc.Thumb)
+            _thumb = new GalleryThumbWell(null)
             {
-                Name = $"{Name}_Thumb",
+                Name = "GalleryCard_Thumb",
                 IsClickthrough = true
             };
 
             _caption = new RichBox
             {
-                Name = $"{Name}_Caption",
-                Text = doc.Name,
+                Name = "GalleryCard_Caption",
+                Text = "",
                 IsClickthrough = true,
                 Overflow = OverflowMode.Clip,
                 Style = new ElementStyle
@@ -367,7 +495,7 @@ public sealed class GalleryView : ScrollContainer
                     BackColor = SKColors.Transparent,
                     Text = new TextStyle
                     {
-                        Color = active ? Theme.Accent : Theme.Text,
+                        Color = Theme.Text,
                         Size = 12,
                         Weight = 500,
                         Alignment = TextAlign.Center,
@@ -380,19 +508,18 @@ public sealed class GalleryView : ScrollContainer
 
             _readyBtn = new VisualElement
             {
-                Name = $"{Name}_Ready",
+                Name = "GalleryCard_Ready",
                 Cursor = StandardCursor.Hand,
                 BackgroundImageScale = ImageScaleMode.Contain,
                 BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
                 BackgroundImageTintColor = SKColors.White,
-                BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null,
                 Style = new ElementStyle
                 {
-                    BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 150),
+                    BackColor = new SKColor(0, 0, 0, 150),
                     Border = new BorderStyle
                     {
                         Width = 1,
-                        Color = _isReady ? Theme.Success : Theme.HairlineSubtle,
+                        Color = Theme.HairlineSubtle,
                         Roundness = 11f
                     }
                 }
@@ -400,17 +527,18 @@ public sealed class GalleryView : ScrollContainer
             _readyBtn.Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
+                if (_doc == null) return;
                 _isReady = !_isReady;
-                Doc.IsReady = _isReady;
+                _doc.IsReady = _isReady;
                 UpdateReadyStyle();
-                _owner.OnCardReadyToggled(Index, _isReady);
+                _owner.OnCardReadyToggled(_index, _isReady);
                 args.Handled = true;
             };
 
             _indexBadge = new VisualElement
             {
-                Name = $"{Name}_Badge",
-                Text = $"#{index + 1}",
+                Name = "GalleryCard_Badge",
+                Text = "",
                 IsClickthrough = true,
                 Style = new ElementStyle
                 {
@@ -446,7 +574,7 @@ public sealed class GalleryView : ScrollContainer
                 if (!_active)
                 {
                     Style.BackColor = Theme.Section;
-                    Style.Border.Color = _isReady ? new SKColor(255, 153, 51, 140) : Theme.Hairline;
+                    Style.Border.Color = _isReady ? Theme.SuccessSoft : Theme.Hairline;
                     InvalidatePaint();
                 }
             };
@@ -458,15 +586,49 @@ public sealed class GalleryView : ScrollContainer
                 if (now - _lastClickTime < DoubleClickThreshold)
                 {
                     _lastClickTime = DateTime.MinValue;
-                    _owner.OnCardDoubleClicked(Index);
+                    _owner.OnCardDoubleClicked(_index);
                 }
                 else
                 {
                     _lastClickTime = now;
-                    _owner.OnCardClicked(Index);
+                    _owner.OnCardClicked(_index);
                 }
                 args.Handled = true;
             };
+        }
+
+        public void Rebind(int index, PhotoDocument doc, bool active)
+        {
+            _index = index;
+            _doc = doc;
+            _active = active;
+            _isReady = doc.IsReady;
+            Name = $"GalleryCard_{index}";
+
+            Style.BackColor = active ? Theme.Selected : Theme.Section;
+            Style.Border.Width = active ? 2f : 1f;
+            Style.Border.Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline);
+            Style.Shadow = active
+                ? new ShadowStyle(0, 3f, 6, 6, new SKColor(255, 153, 51, 90))
+                : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70));
+
+            _caption.Name = $"{Name}_Caption";
+            _caption.Text = doc.Name;
+            _caption.Style.Text.Color = active ? Theme.Accent : Theme.Text;
+            _caption.InvalidatePaint();
+
+            _thumb.Name = $"{Name}_Thumb";
+            _thumb.SetImage(doc.Look ?? doc.Preview ?? doc.Thumb);
+
+            _indexBadge.Name = $"{Name}_Badge";
+            _indexBadge.Text = $"#{index + 1}";
+            _indexBadge.InvalidatePaint();
+
+            _readyBtn.Name = $"{Name}_Ready";
+            UpdateReadyStyle();
+
+            InvalidateLayout();
+            InvalidatePaint();
         }
 
         public void SetActive(bool active)
@@ -490,7 +652,8 @@ public sealed class GalleryView : ScrollContainer
 
         public void RefreshThumb()
         {
-            _thumb.SetImage(Doc.Look ?? Doc.Preview ?? Doc.Thumb);
+            if (_doc != null)
+                _thumb.SetImage(_doc.Look ?? _doc.Preview ?? _doc.Thumb);
         }
 
         private void UpdateReadyStyle()
