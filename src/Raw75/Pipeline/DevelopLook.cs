@@ -261,15 +261,22 @@ internal sealed class DevelopLook : IDisposable
             using SKShader? fx = eff3.ToShader(!tilePartial, u3, ch3);
             if (fx == null) return false;
 
-            _paint.Shader = fx;
-            _paint.BlendMode = SKBlendMode.SrcOver;
+            try
+            {
+                _paint.Shader = fx;
+                _paint.BlendMode = SKBlendMode.SrcOver;
 
-            canvas.Save();
-            canvas.ClipRect(clip);
-            canvas.Translate(dest.Left, dest.Top);
-            canvas.Scale(dest.Width, dest.Height);
-            canvas.DrawRect(new SKRect(0, 0, 1, 1), _paint);
-            canvas.Restore();
+                canvas.Save();
+                canvas.ClipRect(clip);
+                canvas.Translate(dest.Left, dest.Top);
+                canvas.Scale(dest.Width, dest.Height);
+                canvas.DrawRect(new SKRect(0, 0, 1, 1), _paint);
+                canvas.Restore();
+            }
+            finally
+            {
+                _paint.Shader = null;
+            }
 
             if (!_loggedOk)
             {
@@ -380,15 +387,22 @@ internal sealed class DevelopLook : IDisposable
                 activeFx = fx;
             }
 
-            _paint.Shader = activeFx;
-            _paint.BlendMode = SKBlendMode.SrcOver;
+            try
+            {
+                _paint.Shader = activeFx;
+                _paint.BlendMode = SKBlendMode.SrcOver;
 
-            canvas.Save();
-            canvas.ClipRect(clip);
-            canvas.Translate(dest.Left, dest.Top);
-            canvas.Scale(dest.Width, dest.Height);
-            canvas.DrawRect(new SKRect(0, 0, 1, 1), _paint);
-            canvas.Restore();
+                canvas.Save();
+                canvas.ClipRect(clip);
+                canvas.Translate(dest.Left, dest.Top);
+                canvas.Scale(dest.Width, dest.Height);
+                canvas.DrawRect(new SKRect(0, 0, 1, 1), _paint);
+                canvas.Restore();
+            }
+            finally
+            {
+                _paint.Shader = null;
+            }
 
             if (!_loggedOk)
             {
@@ -423,10 +437,9 @@ internal sealed class DevelopLook : IDisposable
         _lut = lut.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
     }
 
-    public void Dispose()
+    public void Reset()
     {
         _paint.Shader = null;
-        _paint.Dispose();
         if (_stage1Image != null) GpuRetain.Retire(_stage1Image);
         if (_stage2Image != null) GpuRetain.Retire(_stage2Image);
         _stage1Image = null;
@@ -440,5 +453,15 @@ internal sealed class DevelopLook : IDisposable
         _mask?.Dispose();
         _img = _lut = _mask = null;
         _source = null;
+        _dirty = true;
+        _stage1Dirty = true;
+        _stage2Dirty = true;
+        _loggedOk = false;
+    }
+
+    public void Dispose()
+    {
+        Reset();
+        _paint.Dispose();
     }
 }

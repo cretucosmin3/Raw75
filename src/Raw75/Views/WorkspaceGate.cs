@@ -138,11 +138,12 @@ public sealed class WorkspaceGate : VisualElement
 
     private static VisualElement Label(string name, string text, SKColor color, float size, int weight)
     {
-        return new VisualElement
+        return new RichBox
         {
             Name = name,
             Text = text,
             IsClickthrough = true,
+            Overflow = OverflowMode.Clip,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -152,7 +153,9 @@ public sealed class WorkspaceGate : VisualElement
                     Size = size,
                     Weight = weight,
                     Alignment = TextAlign.Left,
-                    Padding = 0
+                    Padding = 0,
+                    Overflow = TextOverflow.Ellipsis,
+                    MaxLines = name == "GateBody" ? 3 : 1
                 }
             }
         };

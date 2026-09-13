@@ -104,10 +104,11 @@ public class PanelGroup : VisualElement
         };
         _header.AddChild(_chevronEl);
 
-        _titleEl = new VisualElement
+        _titleEl = new RichBox
         {
             Name = $"{Name}_Title",
             IsClickthrough = true,
+            Overflow = OverflowMode.Clip,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -117,7 +118,9 @@ public class PanelGroup : VisualElement
                     Size = 12,
                     Weight = 600,
                     Alignment = TextAlign.Left,
-                    Padding = 0
+                    Padding = 0,
+                    Overflow = TextOverflow.Ellipsis,
+                    MaxLines = 1
                 }
             }
         };
@@ -134,14 +137,12 @@ public class PanelGroup : VisualElement
         {
             if (_header.Style != null)
                 _header.Style.BackColor = Theme.SectionHeaderHover;
-            InvalidatePaint();
         };
 
         _header.Events.OnMouseLeave += _ =>
         {
             if (_header.Style != null)
                 _header.Style.BackColor = Theme.SectionHeader;
-            InvalidatePaint();
         };
 
         AddChild(_header);

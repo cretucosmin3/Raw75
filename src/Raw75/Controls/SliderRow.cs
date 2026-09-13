@@ -109,6 +109,7 @@ public class SliderRow : VisualElement
             Name = $"{Name}_Label",
             Text = _label,
             IsClickthrough = true,
+            Overflow = OverflowMode.Clip,
             Style = LabelStyle(TextAlign.Left, isValue: false)
         };
 
@@ -116,6 +117,7 @@ public class SliderRow : VisualElement
         {
             Name = $"{Name}_Value",
             IsClickthrough = true,
+            Overflow = OverflowMode.Clip,
             Style = LabelStyle(TextAlign.Right, isValue: true)
         };
 
@@ -444,7 +446,9 @@ public class SliderRow : VisualElement
             Size = 12,
             Weight = 500,
             Alignment = align,
-            Padding = 0
+            Padding = 0,
+            Overflow = TextOverflow.Ellipsis,
+            MaxLines = 1
         }
     };
 }

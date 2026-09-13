@@ -469,30 +469,9 @@ public sealed class DevelopEngine
                 return;
             }
 
-            if (doc.Thumb == null)
-            {
-                try
-                {
-                    RasterBuffer thumbBuf = RawDecoder.DecodeThumbnail(doc.Path);
-                    thumbBuf = RawDecoder.Limit(thumbBuf, 480);
-                    Browser.Post(() =>
-                    {
-                        if (Stale(gen) || doc.IsDisposed || doc.Thumb != null)
-                            return;
-                        try
-                        {
-                            SKImage thumbImg = RawDecoder.Upload(thumbBuf, out _);
-                            Assign(doc, thumb: thumbImg);
-                            ThumbLoaded?.Invoke(doc);
-                        }
-                        catch { }
-                    });
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning($"Thumbnail failed: {ex.Message}");
-                }
-            }
+            // Don't ExportThumbnail here — LibRaw SIGSEGV'd on Bitmap thumb dispose
+            // right after this log when switching gallery photos. DecodePreview is next
+            // and Publish already supplies a proxy/thumb-sized image.
 
             if (Stale(gen))
                 return;

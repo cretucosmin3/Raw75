@@ -32,8 +32,8 @@ public sealed class Session : IDisposable
         if (select)
         {
             ActiveIndex = Documents.Count - 1;
-            EvictWorking();
             Changed?.Invoke();
+            EvictWorking();
         }
         return doc;
     }
@@ -51,8 +51,8 @@ public sealed class Session : IDisposable
     {
         if (index < 0 || index >= Documents.Count) return;
         ActiveIndex = index;
-        EvictWorking();
         Changed?.Invoke();
+        EvictWorking();
     }
 
     public void EvictWorking()

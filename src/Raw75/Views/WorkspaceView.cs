@@ -303,7 +303,6 @@ public sealed class WorkspaceView : View
             if (d == null) return;
             if (!_restoringView)
                 _photo.CaptureView(d);
-            RequestViewport(d);
         };
         _photo.ViewSettled += () =>
         {
@@ -477,7 +476,16 @@ public sealed class WorkspaceView : View
         AddElement(_film);
 
         _status = Bar("Status", Theme.Filmstrip, 0, H - st, W, st, Anchor.Left | Anchor.Right | Anchor.Bottom);
-        _status.Style.Text = new TextStyle { Color = Theme.TextDim, Size = 12, Padding = 10, Alignment = TextAlign.Left };
+        _status.Overflow = OverflowMode.Clip;
+        _status.Style.Text = new TextStyle
+        {
+            Color = Theme.TextDim,
+            Size = 12,
+            Padding = 10,
+            Alignment = TextAlign.Left,
+            Overflow = TextOverflow.Ellipsis,
+            MaxLines = 1
+        };
         _status.Text = "Drop a RAW or Open.";
 
         _export = new ExportDialog();
@@ -821,7 +829,8 @@ public sealed class WorkspaceView : View
         BindPhoto(d);
         _photo.RestoreView(d);
         _restoringView = false;
-        RequestViewport(d);
+        if (!_isGalleryMode)
+            RequestViewport(d);
         _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
         SaveCurrentSession();
         _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
@@ -958,8 +967,11 @@ public sealed class WorkspaceView : View
 
         SKImage? placeholder = d.Look ?? d.Preview ?? d.Display ?? d.Thumb;
         _photo.SetLook(null, d.Settings, fast: false);
+        _photo.ClearViewportTile();
         if (placeholder != null)
             _photo.SetDeveloped(placeholder, owns: false);
+        else
+            _photo.SetDeveloped(null, owns: false);
         _photo.RefreshGeometry();
     }
 
@@ -1265,7 +1277,7 @@ public sealed class WorkspaceView : View
 
     private void RequestViewport(PhotoDocument d)
     {
-        if (d == null || _photo == null)
+        if (_isGalleryMode || d == null || _photo == null)
             return;
         if (!_photo.TryGetViewportRequest(out SKRect aabb, out int sw, out int sh))
         {
@@ -1876,6 +1888,7 @@ public sealed class WorkspaceView : View
         var e = new VisualElement
         {
             Name = name,
+            ZIndex = -1,
             Style = new ElementStyle { BackColor = color },
             Transform = new Transform(x, y, w, h) { Anchor = a }
         };
@@ -1900,6 +1913,7 @@ public sealed class WorkspaceView : View
     private IconButton Chip(string caption, float x, float y, float w, float h, bool primary = false, string? iconName = null)
     {
         var e = new IconButton(caption, iconName, primary);
+        e.ZIndex = 1;
         e.Transform = new Transform(x, y, w, h) { Anchor = Anchor.Top };
         AddElement(e);
         return e;

@@ -61,7 +61,7 @@ internal static class GpuRetain
         if (image == null || image.Handle == IntPtr.Zero)
             return;
         Bitmaps.Remove(image, out SKBitmap? bitmap);
-        Grave.Add(new Item(image, bitmap, null, 3));
+        Grave.Add(new Item(image, bitmap, null, 8));
         Pump();
     }
 
