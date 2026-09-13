@@ -119,7 +119,7 @@ public sealed class WorkspaceView : View
 
     public override void Init()
     {
-        _engine = new DevelopEngine(t => { if (_status != null) _status.Text = t; });
+        _engine = new DevelopEngine(t => Browser.Post(() => SetStatus(t)));
         _engine.Updated += OnDeveloped;
         _engine.LiveUpdated += OnLivePreview;
         _engine.HistogramUpdated += OnHistogram;
@@ -183,7 +183,6 @@ public sealed class WorkspaceView : View
         float R = Theme.RightW;
         float top = Theme.TopBarH;
         float film = Theme.FilmH;
-        float st = Theme.StatusH;
 
         AddElement(Bar("Top", Theme.TopBar, 0, 0, W, top, Anchor.Left | Anchor.Right | Anchor.Top));
         var brand = new BrandMark
@@ -218,7 +217,7 @@ public sealed class WorkspaceView : View
         exp.Clicked += StartExport;
 
         // Left dock background + cards
-        AddElement(Bar("LeftDock", Theme.Window, 0, top, L, H - top - film - st, Anchor.Left | Anchor.Top | Anchor.Bottom));
+        AddElement(Bar("LeftDock", Theme.Window, 0, top, L, H - top - film, Anchor.Left | Anchor.Top | Anchor.Bottom));
 
         float leftInset = 10f;
         _nav = new NavigatorBox
@@ -249,7 +248,7 @@ public sealed class WorkspaceView : View
         float presetTop = top + leftInset + 168 + 14f;
         _presets = new PresetList
         {
-            Transform = new Transform(leftInset, presetTop, L - leftInset * 2, H - presetTop - leftInset - film - st)
+            Transform = new Transform(leftInset, presetTop, L - leftInset * 2, H - presetTop - leftInset - film)
             {
                 Anchor = Anchor.Left | Anchor.Top | Anchor.Bottom
             }
@@ -262,7 +261,7 @@ public sealed class WorkspaceView : View
         AddElement(_presets);
 
         // Right dock background + cards
-        AddElement(Bar("RightDock", Theme.Window, W - R, top, R, H - top - film - st, Anchor.Right | Anchor.Top | Anchor.Bottom));
+        AddElement(Bar("RightDock", Theme.Window, W - R, top, R, H - top - film, Anchor.Right | Anchor.Top | Anchor.Bottom));
 
         float rightInset = 10f;
         _histogram = new HistogramView
@@ -277,7 +276,7 @@ public sealed class WorkspaceView : View
         float rightDockTop = top + rightInset + 96 + 14f;
         var rightDock = new RightColumn
         {
-            Transform = new Transform(W - R, rightDockTop, R, H - rightDockTop - film - st)
+            Transform = new Transform(W - R, rightDockTop, R, H - rightDockTop - film)
             {
                 Anchor = Anchor.Right | Anchor.Top | Anchor.Bottom
             }
@@ -288,7 +287,7 @@ public sealed class WorkspaceView : View
         float photoX = L;
         float photoY = top;
         float photoW = W - L - R;
-        float photoH = H - top - film - st;
+        float photoH = H - top - film;
         _photo = new PhotoPane
         {
             Transform = new Transform(photoX, photoY, photoW, photoH)
@@ -319,7 +318,7 @@ public sealed class WorkspaceView : View
 
         _gallery = new GalleryView
         {
-            Transform = new Transform(photoX, photoY, photoW, H - top - st)
+            Transform = new Transform(photoX, photoY, photoW, H - top)
             {
                 Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
             },
@@ -447,7 +446,7 @@ public sealed class WorkspaceView : View
 
         _film = new Filmstrip
         {
-            Transform = new Transform(0, H - film - st, W, film)
+            Transform = new Transform(0, H - film, W, film)
             {
                 Anchor = Anchor.Left | Anchor.Right | Anchor.Bottom
             }
@@ -475,18 +474,42 @@ public sealed class WorkspaceView : View
         };
         AddElement(_film);
 
-        _status = Bar("Status", Theme.Filmstrip, 0, H - st, W, st, Anchor.Left | Anchor.Right | Anchor.Bottom);
-        _status.Overflow = OverflowMode.Clip;
-        _status.Style.Text = new TextStyle
+        // Status badge: floating pill overlaying the image at the bottom, visible only when showing a message
+        _status = new VisualElement
         {
-            Color = Theme.TextDim,
-            Size = 12,
-            Padding = 10,
-            Alignment = TextAlign.Left,
-            Overflow = TextOverflow.Ellipsis,
-            MaxLines = 1
+            Name = "StatusBadge",
+            Visible = false,
+            IsClickthrough = true,
+            ZIndex = 100,
+            Transform = new Transform(photoX + (photoW - 320f) * 0.5f, H - film - 38f, 320f, 26f)
+            {
+                Anchor = Anchor.Bottom,
+                FixedWidth = true,
+                FixedHeight = true
+            },
+            Style = new ElementStyle
+            {
+                BackColor = new SKColor(20, 20, 24, 220),
+                Border = new BorderStyle
+                {
+                    Width = 1f,
+                    Color = new SKColor(255, 255, 255, 30),
+                    Roundness = 13f
+                },
+                Shadow = new ShadowStyle(0, 2f, 4, 4, new SKColor(0, 0, 0, 140)),
+                Text = new TextStyle
+                {
+                    Color = Theme.Text,
+                    Size = 11.5f,
+                    Weight = 400,
+                    Alignment = TextAlign.Center,
+                    Overflow = TextOverflow.Ellipsis,
+                    MaxLines = 1,
+                    Padding = 6
+                }
+            }
         };
-        _status.Text = "Drop a RAW or Open.";
+        AddElement(_status);
 
         _export = new ExportDialog();
         _export.Confirmed += OnExportConfirmed;
@@ -1398,9 +1421,32 @@ public sealed class WorkspaceView : View
         bool keepWb = Math.Abs(p.Temperature) < 0.01f && Math.Abs(p.Tint) < 0.01f;
         bool keepEv = Math.Abs(p.Exposure) < 0.001f;
         float t = d.Settings.Temperature, ti = d.Settings.Tint, ev = d.Settings.Exposure;
+
+        // Preserve active photo's geometry and crop (presets never modify transforms)
+        float cropX = d.Settings.CropX;
+        float cropY = d.Settings.CropY;
+        float cropW = d.Settings.CropW;
+        float cropH = d.Settings.CropH;
+        float straighten = d.Settings.Straighten;
+        int rotate90 = d.Settings.Rotate90;
+        bool flipH = d.Settings.FlipH;
+        bool flipV = d.Settings.FlipV;
+        bool enableGeom = d.Settings.EnableGeometry;
+
         d.Settings.CopyFrom(p);
         if (keepWb) { d.Settings.Temperature = t; d.Settings.Tint = ti; }
         if (keepEv) d.Settings.Exposure = ev;
+
+        d.Settings.CropX = cropX;
+        d.Settings.CropY = cropY;
+        d.Settings.CropW = cropW;
+        d.Settings.CropH = cropH;
+        d.Settings.Straighten = straighten;
+        d.Settings.Rotate90 = rotate90;
+        d.Settings.FlipH = flipH;
+        d.Settings.FlipV = flipV;
+        d.Settings.EnableGeometry = enableGeom;
+
         PullSliders(d);
         PushLook(fast: false, settle: true);
     }
@@ -1878,9 +1924,65 @@ public sealed class WorkspaceView : View
         }
     }
 
-    private void SetStatus(string t)
+    private CancellationTokenSource? _statusDismissCts;
+
+    private void SetStatus(string? t)
     {
-        if (_status != null) _status.Text = t;
+        if (_status == null) return;
+        _statusDismissCts?.Cancel();
+        _statusDismissCts?.Dispose();
+        _statusDismissCts = null;
+
+        bool hasText = !string.IsNullOrWhiteSpace(t);
+        _status.Text = t ?? string.Empty;
+        _status.Visible = hasText;
+        if (hasText)
+        {
+            UpdateStatusPosition();
+            _status.InvalidatePaint();
+
+            var cts = new CancellationTokenSource();
+            _statusDismissCts = cts;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(3500, cts.Token);
+                    Browser.Post(() =>
+                    {
+                        if (!cts.IsCancellationRequested && _status != null)
+                        {
+                            _status.Text = string.Empty;
+                            _status.Visible = false;
+                            _status.InvalidatePaint();
+                        }
+                    });
+                }
+                catch (OperationCanceledException) { }
+            });
+        }
+        else
+        {
+            _status.InvalidatePaint();
+        }
+    }
+
+    private void UpdateStatusPosition()
+    {
+        if (_status == null) return;
+        float L = Theme.LeftW;
+        float R = Theme.RightW;
+        float film = Theme.FilmH;
+        float photoW = Math.Max(200f, Width - L - R);
+        string text = _status.Text ?? string.Empty;
+
+        float textW = Math.Max(60f, text.Length * 7.2f);
+        float pillW = Math.Clamp(textW + 40f, 130f, photoW - 40f);
+        float pillH = 26f;
+        float pillX = L + (photoW - pillW) * 0.5f;
+        float pillY = Height - film - pillH - 12f;
+
+        _status.Transform.SetAbsoluteFrame(pillX, pillY, pillW, pillH);
     }
 
     private VisualElement Bar(string name, SKColor color, float x, float y, float w, float h, Anchor a)

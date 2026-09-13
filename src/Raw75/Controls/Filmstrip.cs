@@ -9,14 +9,17 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>Horizontal session strip: thumbs, names, click to select, optional close.</summary>
-public class Filmstrip : VisualElement
+/// <summary>Horizontal session strip: thumbs, names, click to select, optional close, horizontally scrollable.</summary>
+public class Filmstrip : ScrollContainer
 {
     private const float ThumbW = 96f;
     private const float Gap = 6f;
     private const float NameH = 18f;
 
     private readonly List<Cell> _cells = new();
+    private bool _isPanning;
+    private float _panStartX;
+    private float _panStartScroll;
 
     public event Action<int>? Selected;
     public event Action<int>? CloseRequested;
@@ -31,9 +34,20 @@ public class Filmstrip : VisualElement
     public Filmstrip()
     {
         Name = "Filmstrip";
-        OverflowX = OverflowMode.Clip;
+        OverflowX = OverflowMode.Scroll;
         OverflowY = OverflowMode.Clip;
+        ScrollbarVisibilityX = ScrollbarVisibility.Auto;
+        ScrollbarVisibilityY = ScrollbarVisibility.Hidden;
+        ScrollbarThickness = 3.5f;
+        ScrollbarRadius = 2f;
+        ScrollbarPadding = 1f;
+        ScrollbarThumbColor = Theme.HairlineStrong;
+        ScrollbarThumbHoverColor = Theme.TextDim;
+        ScrollbarThumbDragColor = Theme.Accent;
+        ScrollbarTrackColor = SKColors.Transparent;
         Padding = new Thickness(8, 6, 8, 6);
+        SmoothScroll = true;
+        ScrollStepX = ThumbW + Gap;
         Style = new ElementStyle
         {
             BackColor = Theme.Filmstrip,
@@ -42,6 +56,36 @@ public class Filmstrip : VisualElement
                 Width = 0,
                 Color = Theme.Hairline,
                 Roundness = 0
+            }
+        };
+
+        Events.OnMouseDown += (_, args) =>
+        {
+            if (args.Button == (int)MouseButton.Middle)
+            {
+                _isPanning = true;
+                _panStartX = args.Global.X;
+                _panStartScroll = ScrollX;
+                CapturePointer();
+                args.Handled = true;
+            }
+        };
+        Events.OnMouseMove += (_, args) =>
+        {
+            if (_isPanning)
+            {
+                float dx = args.Global.X - _panStartX;
+                ScrollX = _panStartScroll - dx;
+                args.Handled = true;
+            }
+        };
+        Events.OnMouseUp += (_, args) =>
+        {
+            if (_isPanning)
+            {
+                _isPanning = false;
+                ReleasePointer();
+                args.Handled = true;
             }
         };
     }
@@ -65,6 +109,25 @@ public class Filmstrip : VisualElement
 
         InvalidateLayout();
         InvalidatePaint();
+        EnsureVisible(activeIndex);
+    }
+
+    public void EnsureVisible(int index)
+    {
+        if (index < 0 || index >= _cells.Count) return;
+        float cellLeft = Padding.Left + index * (ThumbW + Gap);
+        float cellRight = cellLeft + ThumbW;
+        float viewW = Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width;
+        if (viewW <= 0) return;
+
+        if (cellLeft < ScrollX + Padding.Left)
+        {
+            AnimateScrollTo(Math.Max(0, cellLeft - Padding.Left), 0);
+        }
+        else if (cellRight > ScrollX + viewW - Padding.Right)
+        {
+            AnimateScrollTo(Math.Max(0, cellRight - viewW + Padding.Right), 0);
+        }
     }
 
     public void RefreshThumbs()
@@ -86,6 +149,7 @@ public class Filmstrip : VisualElement
     {
         float originX = Transform.Computed.X;
         float originY = Transform.Computed.Y;
+        float w = Math.Max(1f, Transform.Computed.Width);
         float h = Math.Max(1f, Transform.Height);
         float cellH = Math.Max(1f, h - Padding.Vertical);
         float x = Padding.Left;
@@ -96,12 +160,17 @@ public class Filmstrip : VisualElement
             cell.Transform.SetAbsoluteFrame(originX + x, originY + Padding.Top, ThumbW, cellH);
             x += ThumbW + Gap;
         }
+
+        float totalW = _cells.Count > 0 ? (x - Gap + Padding.Right) : w;
+        SetContentSize(Math.Max(totalW, w), h);
+        base.LayoutChildren();
     }
 
     private void OnCellSelected(int index)
     {
         for (int i = 0; i < _cells.Count; i++)
             _cells[i].SetActive(i == index);
+        EnsureVisible(index);
         Selected?.Invoke(index);
     }
 
