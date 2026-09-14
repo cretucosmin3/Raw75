@@ -57,6 +57,8 @@ public static class PresetStore
                 settings.CurveGreen = Raw75.Pipeline.CurveMath.DefaultCurve();
             if (settings.CurveBlue == null || settings.CurveBlue.Length < 2)
                 settings.CurveBlue = Raw75.Pipeline.CurveMath.DefaultCurve();
+            if (settings.ExposureCurve == null || settings.ExposureCurve.Length < 2)
+                settings.ExposureCurve = Raw75.Pipeline.CurveMath.DefaultExposureCurve();
 
             // Presets never carry transforms or crop/rotation
             settings.CropX = 0;

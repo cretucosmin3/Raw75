@@ -29,6 +29,7 @@ internal static class DevelopCpu
         float temp = s.EnableWhiteBalance ? s.Temperature / 100f : 0f;
         float tint = s.EnableWhiteBalance ? s.Tint / 100f : 0f;
         float ev = s.EnableExposure ? MathF.Pow(2f, s.Exposure) : 1f;
+        float[]? expLut = (s.EnableExposure && s.EnableExposureCurve) ? CurveMath.EvaluateExposureSpline(s.ExposureCurve, 256) : null;
         float contrast = s.EnableExposure ? s.Contrast / 100f : 0f;
         float hi = s.EnableHdr ? s.Highlights / 100f : 0f;
         float shd = s.EnableHdr ? s.Shadows / 100f : 0f;
@@ -185,7 +186,7 @@ internal static class DevelopCpu
                 }
                 else
                 {
-                    ApplyLook(ref r, ref g, ref b, temp, tint, ev, contrast, hi, shd, whites, blacks, vib, sat, s);
+                    ApplyLook(ref r, ref g, ref b, temp, tint, ev, contrast, hi, shd, whites, blacks, vib, sat, s, expLut);
 
                     if (look != null)
                     {
@@ -226,7 +227,7 @@ internal static class DevelopCpu
                     float r = preLook[i];
                     float g = preLook[i + 1];
                     float b = preLook[i + 2];
-                    ApplyLook(ref r, ref g, ref b, temp, tint, ev, contrast, hi, shd, whites, blacks, vib, sat, s);
+                    ApplyLook(ref r, ref g, ref b, temp, tint, ev, contrast, hi, shd, whites, blacks, vib, sat, s, expLut);
                     look![i] = r;
                     look[i + 1] = g;
                     look[i + 2] = b;
@@ -410,7 +411,8 @@ internal static class DevelopCpu
         ref float r, ref float g, ref float b,
         float temp, float tint, float ev, float contrast,
         float hi, float shd, float whites, float blacks,
-        float vib, float sat, DevelopSettings s)
+        float vib, float sat, DevelopSettings s,
+        float[]? expLut)
     {
         // 1. Multiplicative chromatic white balance (preserves black levels and photon ratios)
         float wbR = MathF.Exp(0.55f * temp + 0.18f * tint);
@@ -424,9 +426,22 @@ internal static class DevelopCpu
         if (b < 0f) b = 0f;
 
         // 2. Linear Exposure gain
-        r *= ev;
-        g *= ev;
-        b *= ev;
+        if (expLut != null)
+        {
+            float inLuma = MathF.Max(Luma(r, g, b), 0.00001f);
+            float t = Math.Clamp(MathF.Pow(inLuma, 0.4545f), 0f, 1f);
+            float deltaEv = SampleLut(expLut, t);
+            float gain = MathF.Pow(2f, deltaEv);
+            r *= gain;
+            g *= gain;
+            b *= gain;
+        }
+        else
+        {
+            r *= ev;
+            g *= ev;
+            b *= ev;
+        }
 
         // 3. Match Gray (target middle gray at 0.18)
         if (s.EnableHsl && s.MatchGray)
@@ -439,14 +454,32 @@ internal static class DevelopCpu
             b *= mg;
         }
 
-        // 4. Whites: Dynamic white headroom / white point scaling (RapidRAW)
+        // 4. Whites: Upper-shoulder dynamic white point anchor
         if (MathF.Abs(whites) > 0.001f)
         {
-            float whiteLevel = MathF.Max(1f - whites * 0.833333f, 0.01f);
-            float wMult = 1f / whiteLevel;
-            r *= wMult;
-            g *= wMult;
-            b *= wMult;
+            float pixelLuma = MathF.Max(Luma(r, g, b), 0.00001f);
+            if (pixelLuma > 0.509117f)
+            {
+                float evW = MathF.Log2(pixelLuma / 0.18f);
+                float x = evW - 1.5f;
+                float xNew;
+                if (whites < 0f)
+                {
+                    float kw = -whites * 0.6f;
+                    xNew = x / (1f + kw * x);
+                }
+                else
+                {
+                    float kw = whites * 0.5f;
+                    xNew = x * (1f + kw * (x / (x + 1.5f)));
+                }
+                float newEv = 1.5f + xNew;
+                float newLuma = 0.18f * MathF.Pow(2f, newEv);
+                float ratio = newLuma / pixelLuma;
+                r *= ratio;
+                g *= ratio;
+                b *= ratio;
+            }
         }
 
         // 5. Shadows & Blacks: Perceptual gamma-domain bell curve with anti-mud contrast restoration (RapidRAW)
@@ -485,50 +518,33 @@ internal static class DevelopCpu
             }
         }
 
-        // 6. Highlights: Soft tanh-masked dual-regime compression & desaturation rolloff (RapidRAW)
+        // 6. Highlights: Rational compressive shoulder & highlight recovery
         float hl = hi * 0.833333f;
         if (MathF.Abs(hl) > 0.001f)
         {
             float pixelLuma = MathF.Max(Luma(r, g, b), 0.00001f);
-            float xTanh = pixelLuma * 1.5f;
-            float e2x = MathF.Exp(MathF.Min(2f * xTanh, 20f));
-            float pixelMaskInput = (e2x - 1f) / (e2x + 1f);
-            float highlightMask = Smooth(pixelMaskInput, 0.3f, 0.95f);
-
-            if (highlightMask > 0.001f)
+            if (pixelLuma > 0.18f)
             {
-                float adjR, adjG, adjB;
+                float evH = MathF.Log2(pixelLuma / 0.18f);
+                float targetEv;
                 if (hl < 0f)
                 {
-                    float newLuma;
-                    if (pixelLuma <= 1f)
-                    {
-                        float gamma = 1f - hl * 1.75f;
-                        newLuma = MathF.Pow(pixelLuma, gamma);
-                    }
-                    else
-                    {
-                        float lumaExcess = pixelLuma - 1f;
-                        float compressionStrength = -hl * 6f;
-                        float compressedExcess = lumaExcess / (1f + lumaExcess * compressionStrength);
-                        newLuma = 1f + compressedExcess;
-                    }
-                    float tonallyRatio = newLuma / pixelLuma;
-                    float desat = Smooth(pixelLuma, 1f, 10f);
-                    adjR = (r * tonallyRatio) * (1f - desat) + newLuma * desat;
-                    adjG = (g * tonallyRatio) * (1f - desat) + newLuma * desat;
-                    adjB = (b * tonallyRatio) * (1f - desat) + newLuma * desat;
+                    float k = -hl * 1.0f;
+                    targetEv = evH / (1f + k * evH * 0.35f);
                 }
                 else
                 {
-                    float factor = MathF.Pow(2f, hl * 1.75f);
-                    adjR = r * factor;
-                    adjG = g * factor;
-                    adjB = b * factor;
+                    targetEv = evH * (1f + hl * 0.35f);
                 }
-                r = r * (1f - highlightMask) + adjR * highlightMask;
-                g = g * (1f - highlightMask) + adjG * highlightMask;
-                b = b * (1f - highlightMask) + adjB * highlightMask;
+
+                float wHl = Smooth(evH, 0f, 1.5f);
+                float newEv = evH + (targetEv - evH) * wHl;
+                float newLuma = 0.18f * MathF.Pow(2f, newEv);
+                float lumaRatio = newLuma / pixelLuma;
+                float specDesat = Smooth(pixelLuma, 6f, 15f);
+                r = (r * lumaRatio) * (1f - specDesat) + newLuma * specDesat;
+                g = (g * lumaRatio) * (1f - specDesat) + newLuma * specDesat;
+                b = (b * lumaRatio) * (1f - specDesat) + newLuma * specDesat;
             }
         }
 
@@ -773,7 +789,7 @@ internal static class DevelopCpu
         return p;
     }
 
-    private static float ToLin1(float s)
+    internal static float ToLin1(float s)
     {
         s = Clamp01(s);
         if (s <= 0.04045f) return s / 12.92f;

@@ -335,7 +335,8 @@ public sealed class ExportDialog : VisualElement
             Name = name,
             Text = text,
             IsClickthrough = true,
-            Overflow = OverflowMode.Clip,
+            Overflow = OverflowMode.Visible,
+            TextOverflow = TextOverflow.Visible,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -346,7 +347,7 @@ public sealed class ExportDialog : VisualElement
                     Weight = weight,
                     Alignment = align,
                     Padding = 2,
-                    Overflow = TextOverflow.Ellipsis,
+                    Overflow = TextOverflow.Visible,
                     MaxLines = 1
                 }
             }

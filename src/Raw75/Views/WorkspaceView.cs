@@ -62,6 +62,9 @@ public sealed class WorkspaceView : View
     private PanelGroup _geomGroup = null!;
 
     private SliderRow _temp = null!, _tint = null!, _ev = null!, _con = null!, _sat = null!;
+    private IconButton _btnExpSlider = null!;
+    private IconButton _btnExpCurve = null!;
+    private ExposureCurveControl _exposureCurveControl = null!;
     private SliderRow _hi = null!, _sh = null!, _wh = null!, _bk = null!, _vib = null!;
     private SliderRow _sharp = null!, _noise = null!;
 
@@ -134,10 +137,8 @@ public sealed class WorkspaceView : View
         };
         _engine.ThumbLoaded += doc =>
         {
-            if (_isGalleryMode)
-                _gallery.RefreshThumbs();
-            else
-                _film.RefreshThumbs();
+            _gallery.RefreshThumbs();
+            _film.RefreshThumbs();
         };
         _session.Changed += RefreshSession;
 
@@ -429,10 +430,11 @@ public sealed class WorkspaceView : View
             Name = "ZoomPct",
             Text = "Fit",
             Cursor = StandardCursor.Hand,
+            Overflow = OverflowMode.Visible,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
-                Text = new TextStyle { Color = Theme.TextDim, Size = 12, Weight = 500, Alignment = TextAlign.Center }
+                Text = new TextStyle { Color = Theme.TextDim, Size = 12, Weight = 500, Alignment = TextAlign.Center, Overflow = TextOverflow.Visible }
             },
             Transform = new Transform(curX, 6f, 48f, 20f)
             {
@@ -542,9 +544,41 @@ public sealed class WorkspaceView : View
 
         // 2. Exposure
         _exposureGroup = new PanelGroup("Exposure");
+        _btnExpSlider = new IconButton("Slider");
+        _btnExpCurve = new IconButton("Curve");
+        _btnExpSlider.Clicked += () => SetExposureCurveMode(false);
+        _btnExpCurve.Clicked += () => SetExposureCurveMode(true);
+        _exposureGroup.AddBody(new ModeChipRow([_btnExpSlider, _btnExpCurve]));
+
         _ev = BindSlider(_exposureGroup, "Exposure", -5f, 5f, "0.00", (s, v) => s.Exposure = v, s => s.Exposure);
+
+        _exposureCurveControl = new ExposureCurveControl();
+        _exposureCurveControl.CurveChanged += () =>
+        {
+            if (_sync) return;
+            var d = _session.Active;
+            if (d == null) return;
+            _exposureCurveControl.SaveToSettings(d.Settings);
+            PushLook(fast: true, settle: false);
+        };
+        _exposureCurveControl.DragEnded += () =>
+        {
+            if (_sync) return;
+            var d = _session.Active;
+            if (d == null) return;
+            d.Undo.Push(d.Settings);
+            _exposureCurveControl.SaveToSettings(d.Settings);
+            PushLook(fast: false, settle: true);
+        };
+        _exposureGroup.AddBody(_exposureCurveControl);
+
         _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
+        _exposureGroup.ExpandedChanged += exp =>
+        {
+            if (exp && _session.Active != null)
+                UpdateExposureModeUi(_session.Active.Settings);
+        };
         _exposureGroup.EnableAuto(AutoExposure, "Auto Exposure");
         _exposureGroup.EnableReset(ResetExposure, "Reset Exposure");
         _exposureGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableExposure = en);
@@ -745,6 +779,27 @@ public sealed class WorkspaceView : View
         PushLook(fast: false, settle: true);
     }
 
+    private void SetExposureCurveMode(bool enableCurve)
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        if (d.Settings.EnableExposureCurve == enableCurve) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.EnableExposureCurve = enableCurve;
+        UpdateExposureModeUi(d.Settings);
+        PushLook(fast: false, settle: true);
+    }
+
+    private void UpdateExposureModeUi(DevelopSettings s)
+    {
+        bool useCurve = s.EnableExposureCurve;
+        _btnExpSlider.Toggled = !useCurve;
+        _btnExpCurve.Toggled = useCurve;
+        _ev.Visible = !useCurve;
+        _exposureCurveControl.Visible = useCurve;
+        _exposureGroup.InvalidateLayout();
+    }
+
     private void SetToneMode(ToneMode mode)
     {
         var d = _session.Active;
@@ -858,6 +913,7 @@ public sealed class WorkspaceView : View
         SaveCurrentSession();
         _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
         _curveGraph.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
+        _exposureCurveControl.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
         PullSliders(d);
         _matchGray.Toggled = d.Settings.MatchGray;
         UpdateZoomLabel();
@@ -888,10 +944,12 @@ public sealed class WorkspaceView : View
         if (gallery)
         {
             _gallery.Bind(_session.Documents, _session.ActiveIndex);
+            _gallery.RefreshThumbs();
         }
         else
         {
             RefreshSession();
+            _film.RefreshThumbs();
         }
 
         UpdateTitleBadge();
@@ -924,6 +982,7 @@ public sealed class WorkspaceView : View
     private void OnDeveloped(PhotoDocument doc)
     {
         _film.Bind(_session.Documents, _session.ActiveIndex);
+        _film.RefreshThumbs();
         if (_isGalleryMode) _gallery.RefreshThumbs();
         if (!ReferenceEquals(doc, _session.Active))
             return;
@@ -949,7 +1008,9 @@ public sealed class WorkspaceView : View
         _nav.Image = doc.Preview ?? doc.Look ?? doc.Display ?? doc.Thumb;
         _histogram.SetBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _curveGraph.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
+        _exposureCurveControl.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _filmThumb = doc.Preview ?? doc.Thumb;
+        PullSliders(doc);
         UpdateZoomLabel();
         UpdateTitleBadge();
     }
@@ -1015,6 +1076,8 @@ public sealed class WorkspaceView : View
         _temp.Value = s.Temperature;
         _tint.Value = s.Tint;
         _ev.Value = s.Exposure;
+        UpdateExposureModeUi(s);
+        _exposureCurveControl.LoadFromSettings(s);
         _con.Value = s.Contrast;
         _hi.Value = s.Highlights;
         _sh.Value = s.Shadows;
@@ -1105,6 +1168,7 @@ public sealed class WorkspaceView : View
         if (d == null) return;
         d.Undo.Push(d.Settings);
         d.Settings.Exposure = 0;
+        d.Settings.ExposureCurve = CurveMath.DefaultExposureCurve();
         d.Settings.Contrast = 0;
         d.Settings.Saturation = 0;
         PullSliders(d);
@@ -1245,11 +1309,22 @@ public sealed class WorkspaceView : View
     {
         var d = _session.Active;
         if (d == null) return;
+        RasterBuffer r = d.LiveRgba.HasPixels ? d.LiveRgba : d.SourceRgba;
+        if (!r.HasPixels) return;
+
         d.Undo.Push(d.Settings);
-        d.Settings.Exposure = Math.Clamp(d.Settings.Exposure + 0.25f, -5f, 5f);
+        float autoEv = AutoExposureEstimator.Estimate(r);
+        d.Settings.Exposure = autoEv;
+        if (d.Settings.BaseExposure == 0f)
+            d.Settings.BaseExposure = autoEv;
+        if (d.Settings.EnableExposureCurve)
+        {
+            d.Settings.EnableExposureCurve = false;
+            UpdateExposureModeUi(d.Settings);
+        }
         PullSliders(d);
         PushLook(fast: false, settle: true);
-        SetStatus("Auto Exposure applied");
+        SetStatus($"Auto Exposure applied ({(autoEv >= 0 ? "+" : "")}{autoEv:0.00} EV)");
     }
 
     private void AutoHdr()
@@ -1331,6 +1406,7 @@ public sealed class WorkspaceView : View
             return;
         _histogram.SetBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _curveGraph.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
+        _exposureCurveControl.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
     }
 
     private void ToggleBefore()
@@ -1620,6 +1696,7 @@ public sealed class WorkspaceView : View
             RequestViewport(d);
             _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
             _curveGraph.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
+            _exposureCurveControl.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
             _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
         }
 

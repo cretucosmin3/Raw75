@@ -327,9 +327,9 @@ public sealed class DevelopEngine
         SKImage? old = doc.ViewportTile;
         doc.ViewportTile = null;
         doc.TileW = doc.TileH = 0;
+        ViewportUpdated?.Invoke(doc);
         if (old != null)
             RetireIfUnused(doc, old);
-        ViewportUpdated?.Invoke(doc);
     }
 
     public void EnsureHiRes(PhotoDocument doc)
@@ -424,8 +424,8 @@ public sealed class DevelopEngine
                     doc.TileY = ny;
                     doc.TileW = nw;
                     doc.TileH = nh;
-                    RetireIfUnused(doc, old);
                     ViewportUpdated?.Invoke(doc);
+                    RetireIfUnused(doc, old);
                     Log.Info($"Viewport tile {image.Width}x{image.Height} src=({nx:0.00},{ny:0.00},{nw:0.00},{nh:0.00})");
                 }
                 catch (Exception ex)
@@ -540,6 +540,21 @@ public sealed class DevelopEngine
                     {
                         doc.NativeWidth = raster.Width;
                         doc.NativeHeight = raster.Height;
+                    }
+
+                    if (doc.SourceLinear)
+                    {
+                        if (!doc.HasSavedSettings && Math.Abs(doc.Settings.Exposure) < 0.001f)
+                        {
+                            float autoEv = AutoExposureEstimator.Estimate(doc.LiveRgba.HasPixels ? doc.LiveRgba : raster);
+                            doc.Settings.Exposure = Math.Max(0.5f, autoEv);
+                            doc.Settings.BaseExposure = doc.Settings.Exposure;
+                        }
+                        else if (doc.Settings.BaseExposure == 0f)
+                        {
+                            float autoEv = AutoExposureEstimator.Estimate(doc.LiveRgba.HasPixels ? doc.LiveRgba : raster);
+                            doc.Settings.BaseExposure = Math.Max(0.5f, autoEv);
+                        }
                     }
                 }
 
@@ -672,9 +687,9 @@ public sealed class DevelopEngine
                     SKImage? oldL = doc.Look;
                     doc.Preview = preview;
                     doc.Look = look;
+                    Updated?.Invoke(doc);
                     RetireIfUnused(doc, oldP);
                     RetireIfUnused(doc, oldL);
-                    Updated?.Invoke(doc);
                 }
                 catch (Exception ex)
                 {

@@ -84,6 +84,20 @@ public class IconButton : VisualElement
         }
     }
 
+    public TextOverflow TextOverflow
+    {
+        get => _labelElement.Style?.Text?.Overflow ?? TextOverflow.Visible;
+        set
+        {
+            if (_labelElement.Style?.Text != null)
+                _labelElement.Style.Text.Overflow = value;
+            if (Style?.Text != null)
+                Style.Text.Overflow = value;
+            InvalidateLayout();
+            InvalidatePaint();
+        }
+    }
+
     public VisualElement? IconElement => _iconElement;
     public VisualElement LabelElement => _labelElement;
 
@@ -117,7 +131,8 @@ public class IconButton : VisualElement
                 Size = 12,
                 Weight = 500,
                 Alignment = TextAlign.Center,
-                Padding = 0
+                Padding = 0,
+                Overflow = TextOverflow.Visible
             }
         };
 
@@ -128,7 +143,8 @@ public class IconButton : VisualElement
             Interactive = false,
             Text = _caption,
             Visible = !string.IsNullOrEmpty(_caption),
-            Overflow = OverflowMode.Clip,
+            Overflow = OverflowMode.Visible,
+            TextOverflow = TextOverflow.Visible,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -139,7 +155,7 @@ public class IconButton : VisualElement
                     Weight = 500,
                     Alignment = TextAlign.Center,
                     Padding = 0,
-                    Overflow = TextOverflow.Ellipsis,
+                    Overflow = TextOverflow.Visible,
                     MaxLines = 1
                 }
             }
@@ -241,22 +257,22 @@ public class IconButton : VisualElement
         if (hasIcon && hasText)
         {
             float iconSz = Math.Clamp(Math.Min(15f, h - 8f), 12f, 16f);
-            float iconGap = 6f;
+            float iconGap = 5f;
             float textW = _labelElement.Style?.Text?.Paint?.MeasureText(_caption) ?? (_caption.Length * 7.5f);
             float totalW = iconSz + iconGap + textW;
 
             // Smart centering: center [Icon + Gap + Text] as a unified block within the button width.
-            // When button width is tight, clamp to a safe margin of 6px so the icon never clips.
-            float startX = (w > totalW + 12f)
+            // When button width is tight, allow hugging closer to left margin so the icon and text fit comfortably.
+            float startX = (w > totalW + 8f)
                 ? (w - totalW) * 0.5f
-                : Math.Max(6f, (w - totalW) * 0.5f);
+                : Math.Max(3f, (w - totalW) * 0.5f);
 
             _iconElement!.Transform.SetAbsoluteFrame(ox + startX, oy + (h - iconSz) * 0.5f, iconSz, iconSz);
             _iconElement.Visible = true;
 
             float textX = ox + startX + iconSz + iconGap;
-            float maxTextW = Math.Max(0f, ox + w - textX - 4f);
-            float actualTextW = Math.Min(textW + 2f, maxTextW);
+            float maxTextW = Math.Max(0f, ox + w - textX - 2f);
+            float actualTextW = Math.Max(textW + 2f, maxTextW);
 
             _labelElement.Transform.SetAbsoluteFrame(textX, oy, actualTextW, h);
             if (_labelElement.Style?.Text != null)
@@ -280,7 +296,11 @@ public class IconButton : VisualElement
                 _iconElement.Visible = false;
             }
 
-            _labelElement.Transform.SetAbsoluteFrame(ox, oy, w, h);
+            float textW = _labelElement.Style?.Text?.Paint?.MeasureText(_caption) ?? (_caption.Length * 7.5f);
+            float actualW = Math.Max(w, textW + 4f);
+            float textOx = (w >= actualW) ? ox : ox + (w - actualW) * 0.5f;
+
+            _labelElement.Transform.SetAbsoluteFrame(textOx, oy, actualW, h);
             if (_labelElement.Style?.Text != null)
             {
                 _labelElement.Style.Text.Alignment = TextAlign.Center;

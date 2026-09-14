@@ -136,6 +136,7 @@ public static class WorkspaceStore
                 meta.Settings.Hsl = DevelopSettings.CreateHsl();
             doc.Settings.CopyFrom(meta.Settings);
             doc.IsReady = meta.IsReady;
+            doc.HasSavedSettings = true;
 
             SKImage? preview = LoadJpeg(Path.Combine(dir, "preview.jpg"));
             if (preview != null)
@@ -185,6 +186,7 @@ public static class WorkspaceStore
             var meta = Stamp(doc.Path);
             meta.Settings = doc.Settings.Clone();
             meta.IsReady = doc.IsReady;
+            doc.HasSavedSettings = true;
             File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(meta, JsonOptions));
         }
         catch (Exception ex)
