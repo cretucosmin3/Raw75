@@ -148,6 +148,20 @@ public class Filmstrip : ScrollContainer
         InvalidatePaint();
     }
 
+    public void RefreshThumb(PhotoDocument doc)
+    {
+        if (doc == null) return;
+        foreach (var cell in _activeCells.Values)
+        {
+            if (ReferenceEquals(cell.Doc, doc))
+            {
+                cell.RefreshThumb();
+                break;
+            }
+        }
+        InvalidatePaint();
+    }
+
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : 400f);
@@ -239,7 +253,12 @@ public class Filmstrip : ScrollContainer
 
             if (_activeCells.TryGetValue(i, out var cell))
             {
-                if (force || originChanged)
+                if (force)
+                {
+                    cell.Rebind(i, _docs[i], i == _activeIndex);
+                    cell.Transform.SetAbsoluteFrame(cellAbsX, cellAbsY, ThumbW, cellH);
+                }
+                else if (originChanged)
                 {
                     cell.Transform.SetAbsoluteFrame(cellAbsX, cellAbsY, ThumbW, cellH);
                 }
@@ -316,7 +335,7 @@ public class Filmstrip : ScrollContainer
                 Shadow = new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60))
             };
 
-            _thumb = new ThumbWell(null)
+            _thumb = new ThumbWell(null, () => GetValidImage())
             {
                 Name = "Cell_Thumb",
                 IsClickthrough = true
@@ -463,7 +482,7 @@ public class Filmstrip : ScrollContainer
             _caption.InvalidatePaint();
 
             _thumb.Name = $"{Name}_Thumb";
-            _thumb.SetImage(doc.Look ?? doc.Preview ?? doc.Thumb);
+            _thumb.SetImage(GetValidImage());
 
             _ready.Name = $"{Name}_Ready";
             UpdateReadyStyle();
@@ -474,6 +493,15 @@ public class Filmstrip : ScrollContainer
 
             InvalidateLayout();
             InvalidatePaint();
+        }
+
+        private SKImage? GetValidImage()
+        {
+            if (_doc == null) return null;
+            if (_doc.Look != null && _doc.Look.Handle != IntPtr.Zero) return _doc.Look;
+            if (_doc.Preview != null && _doc.Preview.Handle != IntPtr.Zero) return _doc.Preview;
+            if (_doc.Thumb != null && _doc.Thumb.Handle != IntPtr.Zero) return _doc.Thumb;
+            return null;
         }
 
         public void SetActive(bool active)
@@ -495,8 +523,7 @@ public class Filmstrip : ScrollContainer
 
         public void RefreshThumb()
         {
-            if (_doc != null)
-                _thumb.SetImage(_doc.Look ?? _doc.Preview ?? _doc.Thumb);
+            _thumb.SetImage(GetValidImage());
         }
 
         private void UpdateReadyStyle()
@@ -536,11 +563,13 @@ public class Filmstrip : ScrollContainer
             IsAntialias = true
         };
 
+        private readonly Func<SKImage?>? _imageProvider;
         private SKImage? _image;
 
-        public ThumbWell(SKImage? image)
+        public ThumbWell(SKImage? image, Func<SKImage?>? imageProvider = null)
         {
             _image = image;
+            _imageProvider = imageProvider;
             Style = new ElementStyle
             {
                 BackColor = Theme.Well,
@@ -562,6 +591,10 @@ public class Filmstrip : ScrollContainer
 
         protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
         {
+            if (_image == null || _image.Handle == IntPtr.Zero)
+            {
+                _image = _imageProvider?.Invoke();
+            }
             if (_image == null || _image.Handle == IntPtr.Zero) return;
             float w = Transform.Computed.Width;
             float h = Transform.Computed.Height;

@@ -68,6 +68,12 @@ public sealed class PhotoPane : VisualElement
             b.CropW = _settings.CropW;
             b.CropH = _settings.CropH;
             b.ToneMode = _settings.ToneMode;
+            b.AtmosphereR = _settings.AtmosphereR;
+            b.AtmosphereG = _settings.AtmosphereG;
+            b.AtmosphereB = _settings.AtmosphereB;
+            b.AtmosphereDepthMax = _settings.AtmosphereDepthMax;
+            b.Exposure = _settings.BaseExposure;
+            b.BaseExposure = _settings.BaseExposure;
         }
         return b;
     }

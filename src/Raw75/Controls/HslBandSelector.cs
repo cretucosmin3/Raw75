@@ -55,6 +55,7 @@ public sealed class HslBandSelector : VisualElement
                 Name = $"HslChip_{Names[i]}",
                 Text = Names[i],
                 Cursor = StandardCursor.Hand,
+                Overflow = OverflowMode.Visible,
                 Style = new ElementStyle
                 {
                     BackColor = Theme.Well,
@@ -70,7 +71,8 @@ public sealed class HslBandSelector : VisualElement
                         Size = 12,
                         Weight = 500,
                         Alignment = TextAlign.Center,
-                        Padding = 0
+                        Padding = 0,
+                        Overflow = TextOverflow.Visible
                     }
                 }
             };

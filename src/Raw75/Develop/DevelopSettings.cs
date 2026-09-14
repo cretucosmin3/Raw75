@@ -41,6 +41,9 @@ public sealed class DevelopSettings
     public float Tint { get; set; }        // -100..100 (green/magenta)
 
     public float Exposure { get; set; }    // -5..+5 EV
+    public float BaseExposure { get; set; } // Baseline auto-exposure on import/load
+    public bool EnableExposureCurve { get; set; }
+    public ExposureCurvePoint[] ExposureCurve { get; set; } = Raw75.Pipeline.CurveMath.DefaultExposureCurve();
     public float Contrast { get; set; }    // -100..100
     public float Highlights { get; set; }  // -100..100
     public float Shadows { get; set; }     // -100..100
@@ -132,6 +135,7 @@ public sealed class DevelopSettings
         c.CurveRed = CurveRed != null ? (CurvePoint[])CurveRed.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         c.CurveGreen = CurveGreen != null ? (CurvePoint[])CurveGreen.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         c.CurveBlue = CurveBlue != null ? (CurvePoint[])CurveBlue.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
+        c.ExposureCurve = ExposureCurve != null ? (ExposureCurvePoint[])ExposureCurve.Clone() : Raw75.Pipeline.CurveMath.DefaultExposureCurve();
         return c;
     }
 
@@ -155,6 +159,7 @@ public sealed class DevelopSettings
         Temperature = src.Temperature;
         Tint = src.Tint;
         Exposure = src.Exposure;
+        BaseExposure = src.BaseExposure;
         Contrast = src.Contrast;
         Highlights = src.Highlights;
         Shadows = src.Shadows;
@@ -203,6 +208,8 @@ public sealed class DevelopSettings
         VignetteAmount = src.VignetteAmount;
         VignetteMidpoint = src.VignetteMidpoint;
         EnableCurve = src.EnableCurve;
+        EnableExposureCurve = src.EnableExposureCurve;
+        ExposureCurve = src.ExposureCurve != null ? (ExposureCurvePoint[])src.ExposureCurve.Clone() : Raw75.Pipeline.CurveMath.DefaultExposureCurve();
         CurveRgb = src.CurveRgb != null ? (CurvePoint[])src.CurveRgb.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         CurveRed = src.CurveRed != null ? (CurvePoint[])src.CurveRed.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         CurveGreen = src.CurveGreen != null ? (CurvePoint[])src.CurveGreen.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
@@ -216,6 +223,7 @@ public sealed class DevelopSettings
         if (o == null) return false;
         return EnableWhiteBalance == o.EnableWhiteBalance
             && EnableExposure == o.EnableExposure
+            && EnableExposureCurve == o.EnableExposureCurve
             && EnableHdr == o.EnableHdr
             && EnableLocalContrast == o.EnableLocalContrast
             && EnableTone == o.EnableTone
@@ -225,7 +233,7 @@ public sealed class DevelopSettings
             && EnableGeometry == o.EnableGeometry
             && EnableCurve == o.EnableCurve
             && Temperature == o.Temperature && Tint == o.Tint
-            && Exposure == o.Exposure && Contrast == o.Contrast
+            && Exposure == o.Exposure && BaseExposure == o.BaseExposure && Contrast == o.Contrast
             && Highlights == o.Highlights && Shadows == o.Shadows
             && Whites == o.Whites && Blacks == o.Blacks
             && Vibrance == o.Vibrance && Saturation == o.Saturation
@@ -250,7 +258,21 @@ public sealed class DevelopSettings
             && CurveEqual(CurveRed, o.CurveRed)
             && CurveEqual(CurveGreen, o.CurveGreen)
             && CurveEqual(CurveBlue, o.CurveBlue)
+            && ExposureCurveEqual(ExposureCurve, o.ExposureCurve)
             && HslEqual(o);
+    }
+
+    private static bool ExposureCurveEqual(ExposureCurvePoint[]? a, ExposureCurvePoint[]? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a == null || b == null) return false;
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (MathF.Abs(a[i].X - b[i].X) > 0.01f || MathF.Abs(a[i].Y - b[i].Y) > 0.01f || MathF.Abs(a[i].Curvature - b[i].Curvature) > 0.01f)
+                return false;
+        }
+        return true;
     }
 
     private static bool CurveEqual(CurvePoint[]? a, CurvePoint[]? b)

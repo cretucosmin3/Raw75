@@ -27,11 +27,13 @@ public static class DevelopRenderer
     private static SKImage? _cachedLut;
     private static SKImage? _identityCurve;
     private static SKImage? _cachedCurve;
-    private static readonly byte[] _curveBuffer = new byte[2048];
+    private static readonly byte[] _curveBuffer = new byte[3072];
     private static CurvePoint[]? _cachedCurveRgb;
     private static CurvePoint[]? _cachedCurveRed;
     private static CurvePoint[]? _cachedCurveGreen;
     private static CurvePoint[]? _cachedCurveBlue;
+    private static ExposureCurvePoint[]? _cachedExpCurve;
+    private static bool _cachedEnableExpCurve;
 
     public static SKImage? Apply(SKImage source, DevelopSettings s)
     {
@@ -296,6 +298,7 @@ public static class DevelopRenderer
         Set(u, "u_temp", s.EnableWhiteBalance ? s.Temperature / 100f : 0f);
         Set(u, "u_tint", s.EnableWhiteBalance ? s.Tint / 100f : 0f);
         Set(u, "u_ev", s.EnableExposure ? s.Exposure : 0f);
+        Set(u, "u_expCurveActive", (s.EnableExposure && s.EnableExposureCurve) ? 1f : 0f);
         Set(u, "u_match", (s.EnableHsl && s.MatchGray) ? 1f : 0f);
         Set(u, "u_contrast", s.EnableExposure ? s.Contrast / 100f : 0f);
         Set(u, "u_highlights", s.EnableHdr ? s.Highlights / 100f : 0f);
@@ -474,6 +477,7 @@ public static class DevelopRenderer
         Set(u, "u_temp", s.EnableWhiteBalance ? s.Temperature / 100f : 0f);
         Set(u, "u_tint", s.EnableWhiteBalance ? s.Tint / 100f : 0f);
         Set(u, "u_ev", s.EnableExposure ? s.Exposure : 0f);
+        Set(u, "u_expCurveActive", (s.EnableExposure && s.EnableExposureCurve) ? 1f : 0f);
         Set(u, "u_match", (s.EnableHsl && s.MatchGray) ? 1f : 0f);
         Set(u, "u_contrast", s.EnableExposure ? s.Contrast / 100f : 0f);
         Set(u, "u_highlights", s.EnableHdr ? s.Highlights / 100f : 0f);
@@ -666,17 +670,11 @@ public static class DevelopRenderer
 
     internal static SKImage GetCurveTexture(DevelopSettings s, out float hasCurve, out float curveMode)
     {
-        if (!s.EnableCurve)
-        {
-            hasCurve = 0f;
-            curveMode = 0f;
-            return IdentityCurveImage();
-        }
+        bool expActive = s.EnableExposure && s.EnableExposureCurve && !CurveMath.IsIdentity(s.ExposureCurve);
+        bool rgbActive = s.EnableCurve && (!CurveMath.IsIdentity(s.CurveRed) || !CurveMath.IsIdentity(s.CurveGreen) || !CurveMath.IsIdentity(s.CurveBlue));
+        bool masterActive = s.EnableCurve && !CurveMath.IsIdentity(s.CurveRgb);
 
-        bool rgbActive = !CurveMath.IsIdentity(s.CurveRed) || !CurveMath.IsIdentity(s.CurveGreen) || !CurveMath.IsIdentity(s.CurveBlue);
-        bool masterActive = !CurveMath.IsIdentity(s.CurveRgb);
-
-        if (!rgbActive && !masterActive)
+        if (!rgbActive && !masterActive && !expActive)
         {
             hasCurve = 0f;
             curveMode = 0f;
@@ -692,22 +690,26 @@ public static class DevelopRenderer
                 || !CurvePointArrayEqual(_cachedCurveRgb, s.CurveRgb)
                 || !CurvePointArrayEqual(_cachedCurveRed, s.CurveRed)
                 || !CurvePointArrayEqual(_cachedCurveGreen, s.CurveGreen)
-                || !CurvePointArrayEqual(_cachedCurveBlue, s.CurveBlue))
+                || !CurvePointArrayEqual(_cachedCurveBlue, s.CurveBlue)
+                || _cachedEnableExpCurve != (s.EnableExposure && s.EnableExposureCurve)
+                || !ExposureCurveArrayEqual(_cachedExpCurve, s.ExposureCurve))
             {
                 _cachedCurve?.Dispose();
                 _cachedCurveRgb = (CurvePoint[])s.CurveRgb.Clone();
                 _cachedCurveRed = (CurvePoint[])s.CurveRed.Clone();
                 _cachedCurveGreen = (CurvePoint[])s.CurveGreen.Clone();
                 _cachedCurveBlue = (CurvePoint[])s.CurveBlue.Clone();
+                _cachedEnableExpCurve = s.EnableExposure && s.EnableExposureCurve;
+                _cachedExpCurve = s.ExposureCurve != null ? (ExposureCurvePoint[])s.ExposureCurve.Clone() : null;
 
-                CurveMath.BuildCurveLut2D(s.CurveRgb, s.CurveRed, s.CurveGreen, s.CurveBlue, _curveBuffer);
+                CurveMath.BuildCurveLut3D(s.CurveRgb, s.CurveRed, s.CurveGreen, s.CurveBlue, s.ExposureCurve, _cachedEnableExpCurve, _curveBuffer);
 
-                var info = new SKImageInfo(256, 2, SKColorType.Rgba8888, SKAlphaType.Premul);
+                var info = new SKImageInfo(256, 3, SKColorType.Rgba8888, SKAlphaType.Premul);
                 using var bmp = new SKBitmap(info);
                 IntPtr ptr = bmp.GetPixels();
                 if (ptr != IntPtr.Zero)
                 {
-                    Marshal.Copy(_curveBuffer, 0, ptr, 2048);
+                    Marshal.Copy(_curveBuffer, 0, ptr, 3072);
                     bmp.SetImmutable();
                     _cachedCurve = SKImage.FromBitmap(bmp);
                 }
@@ -719,6 +721,19 @@ public static class DevelopRenderer
 
             return _cachedCurve ?? IdentityCurveImage();
         }
+    }
+
+    private static bool ExposureCurveArrayEqual(ExposureCurvePoint[]? a, ExposureCurvePoint[]? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a == null || b == null) return false;
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (MathF.Abs(a[i].X - b[i].X) > 0.01f || MathF.Abs(a[i].Y - b[i].Y) > 0.01f || MathF.Abs(a[i].Curvature - b[i].Curvature) > 0.01f)
+                return false;
+        }
+        return true;
     }
 
     private static bool CurvePointArrayEqual(CurvePoint[]? a, CurvePoint[]? b)
@@ -743,7 +758,7 @@ public static class DevelopRenderer
             if (_identityCurve != null)
                 return _identityCurve;
 
-            byte[] buf = new byte[2048];
+            byte[] buf = new byte[3072];
             for (int i = 0; i < 256; i++)
             {
                 byte v = (byte)i;
@@ -758,14 +773,20 @@ public static class DevelopRenderer
                 buf[off1 + 1] = v;
                 buf[off1 + 2] = v;
                 buf[off1 + 3] = 255;
+
+                int off2 = 2048 + i * 4;
+                buf[off2] = 128; // 128 = 0.0 EV
+                buf[off2 + 1] = 128;
+                buf[off2 + 2] = 128;
+                buf[off2 + 3] = 255;
             }
 
-            var info = new SKImageInfo(256, 2, SKColorType.Rgba8888, SKAlphaType.Premul);
+            var info = new SKImageInfo(256, 3, SKColorType.Rgba8888, SKAlphaType.Premul);
             using var bmp = new SKBitmap(info);
             IntPtr ptr = bmp.GetPixels();
             if (ptr != IntPtr.Zero)
             {
-                Marshal.Copy(buf, 0, ptr, 2048);
+                Marshal.Copy(buf, 0, ptr, 3072);
                 bmp.SetImmutable();
                 _identityCurve = SKImage.FromBitmap(bmp);
             }
@@ -1256,6 +1277,7 @@ public static class DevelopRenderer
             uniform float u_temp;
             uniform float u_tint;
             uniform float u_ev;
+            uniform float u_expCurveActive;
             uniform float u_match;
             uniform float u_contrast;
             uniform float u_highlights;
@@ -1502,7 +1524,14 @@ public static class DevelopRenderer
                 col = max(col, 0.0);
 
                 // 2. Linear Exposure gain
-                col *= pow(2.0, u_ev);
+                if (u_expCurveActive > 0.5) {
+                    float in_luma = max(luma2020(col), 0.00001);
+                    float t = clamp(pow(in_luma, 0.4545), 0.0, 1.0);
+                    float delta_ev = (sample(u_curve, float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
+                    col *= exp2(delta_ev);
+                } else {
+                    col *= pow(2.0, u_ev);
+                }
 
                 // 3. Match Gray
                 if (u_match > 0.001) {
@@ -1511,10 +1540,24 @@ public static class DevelopRenderer
                     col *= mix(1.0, g, u_match * 0.35);
                 }
 
-                // 4. Whites: Dynamic white headroom / white point scaling
+                // 4. Whites: Upper-shoulder dynamic white point anchor
                 if (abs(u_whites) > 0.001) {
-                    float white_level = max(1.0 - u_whites * 0.833333, 0.01);
-                    col *= (1.0 / white_level);
+                    float pixel_luma = max(luma2020(col), 0.00001);
+                    if (pixel_luma > 0.509117) {
+                        float ev_w = log2(pixel_luma / 0.18);
+                        float x = ev_w - 1.5;
+                        float x_new;
+                        if (u_whites < 0.0) {
+                            float kw = -u_whites * 0.6;
+                            x_new = x / (1.0 + kw * x);
+                        } else {
+                            float kw = u_whites * 0.5;
+                            x_new = x * (1.0 + kw * (x / (x + 1.5)));
+                        }
+                        float new_ev = 1.5 + x_new;
+                        float new_luma = 0.18 * exp2(new_ev);
+                        col *= (new_luma / pixel_luma);
+                    }
                 }
 
                 // 5. Shadows & Blacks: Perceptual gamma-domain bell curve with anti-mud contrast restoration
@@ -1547,36 +1590,25 @@ public static class DevelopRenderer
                     }
                 }
 
-                // 6. Highlights: Soft tanh-masked dual-regime compression & desaturation rolloff
+                // 6. Highlights: Rational compressive shoulder & highlight recovery
                 float hl = u_highlights * 0.833333;
                 if (abs(hl) > 0.001) {
                     float pixel_luma = max(luma2020(col), 0.00001);
-                    float x_tanh = pixel_luma * 1.5;
-                    float e2x = exp(min(2.0 * x_tanh, 20.0));
-                    float pixel_mask_input = (e2x - 1.0) / (e2x + 1.0);
-                    float highlight_mask = smoother(pixel_mask_input, 0.3, 0.95);
-
-                    if (highlight_mask > 0.001) {
-                        float3 adjusted_col;
+                    if (pixel_luma > 0.18) {
+                        float ev_h = log2(pixel_luma / 0.18);
+                        float target_ev;
                         if (hl < 0.0) {
-                            float new_luma;
-                            if (pixel_luma <= 1.0) {
-                                float gamma = 1.0 - hl * 1.75;
-                                new_luma = pow(pixel_luma, gamma);
-                            } else {
-                                float luma_excess = pixel_luma - 1.0;
-                                float compression_strength = -hl * 6.0;
-                                float compressed_excess = luma_excess / (1.0 + luma_excess * compression_strength);
-                                new_luma = 1.0 + compressed_excess;
-                            }
-                            float3 tonally_adjusted = col * (new_luma / pixel_luma);
-                            float desat = smoother(pixel_luma, 1.0, 10.0);
-                            adjusted_col = mix(tonally_adjusted, float3(new_luma), desat);
+                            float k = -hl * 1.0;
+                            target_ev = ev_h / (1.0 + k * ev_h * 0.35);
                         } else {
-                            float factor = pow(2.0, hl * 1.75);
-                            adjusted_col = col * factor;
+                            target_ev = ev_h * (1.0 + hl * 0.35);
                         }
-                        col = mix(col, adjusted_col, highlight_mask);
+                        float w_hl = smoother(ev_h, 0.0, 1.5);
+                        float new_ev = ev_h + (target_ev - ev_h) * w_hl;
+                        float new_luma = 0.18 * exp2(new_ev);
+                        float luma_ratio = new_luma / pixel_luma;
+                        float spec_desat = smoother(pixel_luma, 6.0, 15.0);
+                        col = mix(col * luma_ratio, float3(new_luma), spec_desat);
                     }
                 }
 
@@ -1779,6 +1811,7 @@ public static class DevelopRenderer
             uniform float u_temp;
             uniform float u_tint;
             uniform float u_ev;
+            uniform float u_expCurveActive;
             uniform float u_match;
             uniform float u_contrast;
             uniform float u_highlights;
@@ -2072,7 +2105,14 @@ public static class DevelopRenderer
                 col = max(col, 0.0);
 
                 // 2. Linear Exposure gain
-                col *= pow(2.0, u_ev);
+                if (u_expCurveActive > 0.5) {
+                    float in_luma = max(luma2020(col), 0.00001);
+                    float t = clamp(pow(in_luma, 0.4545), 0.0, 1.0);
+                    float delta_ev = (sample(u_curve, float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
+                    col *= exp2(delta_ev);
+                } else {
+                    col *= pow(2.0, u_ev);
+                }
 
                 // 3. Match Gray (target middle gray at 0.18)
                 if (u_match > 0.001) {
@@ -2081,10 +2121,24 @@ public static class DevelopRenderer
                     col *= mix(1.0, g, u_match * 0.35);
                 }
 
-                // 4. Whites: Dynamic white headroom / white point scaling
+                // 4. Whites: Upper-shoulder dynamic white point anchor
                 if (abs(u_whites) > 0.001) {
-                    float white_level = max(1.0 - u_whites * 0.833333, 0.01);
-                    col *= (1.0 / white_level);
+                    float pixel_luma = max(luma2020(col), 0.00001);
+                    if (pixel_luma > 0.509117) {
+                        float ev_w = log2(pixel_luma / 0.18);
+                        float x = ev_w - 1.5;
+                        float x_new;
+                        if (u_whites < 0.0) {
+                            float kw = -u_whites * 0.6;
+                            x_new = x / (1.0 + kw * x);
+                        } else {
+                            float kw = u_whites * 0.5;
+                            x_new = x * (1.0 + kw * (x / (x + 1.5)));
+                        }
+                        float new_ev = 1.5 + x_new;
+                        float new_luma = 0.18 * exp2(new_ev);
+                        col *= (new_luma / pixel_luma);
+                    }
                 }
 
                 // 5. Shadows & Blacks: Perceptual gamma-domain bell curve with anti-mud contrast restoration
@@ -2117,36 +2171,25 @@ public static class DevelopRenderer
                     }
                 }
 
-                // 6. Highlights: Soft tanh-masked dual-regime compression & desaturation rolloff
+                // 6. Highlights: Rational compressive shoulder & highlight recovery
                 float hl = u_highlights * 0.833333;
                 if (abs(hl) > 0.001) {
                     float pixel_luma = max(luma2020(col), 0.00001);
-                    float x_tanh = pixel_luma * 1.5;
-                    float e2x = exp(min(2.0 * x_tanh, 20.0));
-                    float pixel_mask_input = (e2x - 1.0) / (e2x + 1.0);
-                    float highlight_mask = smoother(pixel_mask_input, 0.3, 0.95);
-
-                    if (highlight_mask > 0.001) {
-                        float3 adjusted_col;
+                    if (pixel_luma > 0.18) {
+                        float ev_h = log2(pixel_luma / 0.18);
+                        float target_ev;
                         if (hl < 0.0) {
-                            float new_luma;
-                            if (pixel_luma <= 1.0) {
-                                float gamma = 1.0 - hl * 1.75;
-                                new_luma = pow(pixel_luma, gamma);
-                            } else {
-                                float luma_excess = pixel_luma - 1.0;
-                                float compression_strength = -hl * 6.0;
-                                float compressed_excess = luma_excess / (1.0 + luma_excess * compression_strength);
-                                new_luma = 1.0 + compressed_excess;
-                            }
-                            float3 tonally_adjusted = col * (new_luma / pixel_luma);
-                            float desat = smoother(pixel_luma, 1.0, 10.0);
-                            adjusted_col = mix(tonally_adjusted, float3(new_luma), desat);
+                            float k = -hl * 1.0;
+                            target_ev = ev_h / (1.0 + k * ev_h * 0.35);
                         } else {
-                            float factor = pow(2.0, hl * 1.75);
-                            adjusted_col = col * factor;
+                            target_ev = ev_h * (1.0 + hl * 0.35);
                         }
-                        col = mix(col, adjusted_col, highlight_mask);
+                        float w_hl = smoother(ev_h, 0.0, 1.5);
+                        float new_ev = ev_h + (target_ev - ev_h) * w_hl;
+                        float new_luma = 0.18 * exp2(new_ev);
+                        float luma_ratio = new_luma / pixel_luma;
+                        float spec_desat = smoother(pixel_luma, 6.0, 15.0);
+                        col = mix(col * luma_ratio, float3(new_luma), spec_desat);
                     }
                 }
 

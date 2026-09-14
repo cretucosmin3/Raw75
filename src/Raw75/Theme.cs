@@ -30,8 +30,10 @@ public static class Theme
 
     // Typography & Font Tokens
     public const string FontFamily = "Liberation Sans, Noto Sans, sans-serif";
+    public const string MonospaceFontFamily = "Liberation Mono, DejaVu Sans Mono, monospace";
     public static SKTypeface GetTypeface(int weight = 400, int width = 5, SKFontStyleSlant slant = SKFontStyleSlant.Upright)
         => Blossom.Utils.Fonts.GetTypeface(FontFamily, weight, width, slant);
+    public static SKTypeface MonospaceTypeface => Blossom.Utils.Fonts.GetTypeface(MonospaceFontFamily, 400);
 
     public static readonly SKColor Text = new(248, 250, 252);             // Primary high-contrast labels
     public static readonly SKColor TextSecondary = new(205, 210, 222);     // Module titles, secondary info

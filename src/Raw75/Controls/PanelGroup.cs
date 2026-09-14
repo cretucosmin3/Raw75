@@ -108,7 +108,8 @@ public class PanelGroup : VisualElement
         {
             Name = $"{Name}_Title",
             IsClickthrough = true,
-            Overflow = OverflowMode.Clip,
+            Overflow = OverflowMode.Visible,
+            TextOverflow = TextOverflow.Visible,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
@@ -119,7 +120,7 @@ public class PanelGroup : VisualElement
                     Weight = 600,
                     Alignment = TextAlign.Left,
                     Padding = 0,
-                    Overflow = TextOverflow.Ellipsis,
+                    Overflow = TextOverflow.Visible,
                     MaxLines = 1
                 }
             }
@@ -174,6 +175,7 @@ public class PanelGroup : VisualElement
             BackgroundImageScale = ImageScaleMode.Contain,
             BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
             BackgroundImageTintColor = Theme.TextSecondary,
+            Overflow = OverflowMode.Visible,
             Style = new ElementStyle
             {
                 BackColor = Theme.Well,
@@ -190,7 +192,8 @@ public class PanelGroup : VisualElement
                     Size = 12,
                     Weight = 600,
                     Alignment = TextAlign.Center,
-                    Padding = 0
+                    Padding = 0,
+                    Overflow = TextOverflow.Visible
                 }
             }
         };

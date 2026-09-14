@@ -193,6 +193,20 @@ public sealed class GalleryView : ScrollContainer
         InvalidatePaint();
     }
 
+    public void RefreshThumb(PhotoDocument doc)
+    {
+        if (doc == null) return;
+        foreach (var card in _activeCards.Values)
+        {
+            if (ReferenceEquals(card.Doc, doc))
+            {
+                card.RefreshThumb();
+                break;
+            }
+        }
+        InvalidatePaint();
+    }
+
     public void SetFilter(GalleryFilter filter)
     {
         _filter = filter;
@@ -389,7 +403,12 @@ public sealed class GalleryView : ScrollContainer
 
             if (_activeCards.TryGetValue(itemIdx, out var card))
             {
-                if (force || boundsChanged)
+                if (force)
+                {
+                    card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
+                    card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
+                }
+                else if (boundsChanged)
                 {
                     card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
                 }
@@ -478,7 +497,7 @@ public sealed class GalleryView : ScrollContainer
                 Shadow = new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70))
             };
 
-            _thumb = new GalleryThumbWell(null)
+            _thumb = new GalleryThumbWell(null, () => GetValidImage())
             {
                 Name = "GalleryCard_Thumb",
                 IsClickthrough = true
@@ -618,7 +637,7 @@ public sealed class GalleryView : ScrollContainer
             _caption.InvalidatePaint();
 
             _thumb.Name = $"{Name}_Thumb";
-            _thumb.SetImage(doc.Look ?? doc.Preview ?? doc.Thumb);
+            _thumb.SetImage(GetValidImage());
 
             _indexBadge.Name = $"{Name}_Badge";
             _indexBadge.Text = $"#{index + 1}";
@@ -629,6 +648,15 @@ public sealed class GalleryView : ScrollContainer
 
             InvalidateLayout();
             InvalidatePaint();
+        }
+
+        private SKImage? GetValidImage()
+        {
+            if (_doc == null) return null;
+            if (_doc.Look != null && _doc.Look.Handle != IntPtr.Zero) return _doc.Look;
+            if (_doc.Preview != null && _doc.Preview.Handle != IntPtr.Zero) return _doc.Preview;
+            if (_doc.Thumb != null && _doc.Thumb.Handle != IntPtr.Zero) return _doc.Thumb;
+            return null;
         }
 
         public void SetActive(bool active)
@@ -652,8 +680,7 @@ public sealed class GalleryView : ScrollContainer
 
         public void RefreshThumb()
         {
-            if (_doc != null)
-                _thumb.SetImage(_doc.Look ?? _doc.Preview ?? _doc.Thumb);
+            _thumb.SetImage(GetValidImage());
         }
 
         private void UpdateReadyStyle()
@@ -696,11 +723,13 @@ public sealed class GalleryView : ScrollContainer
             IsAntialias = true
         };
 
+        private readonly Func<SKImage?>? _imageProvider;
         private SKImage? _image;
 
-        public GalleryThumbWell(SKImage? image)
+        public GalleryThumbWell(SKImage? image, Func<SKImage?>? imageProvider = null)
         {
             _image = image;
+            _imageProvider = imageProvider;
             Style = new ElementStyle
             {
                 BackColor = Theme.Well,
@@ -722,6 +751,10 @@ public sealed class GalleryView : ScrollContainer
 
         protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
         {
+            if (_image == null || _image.Handle == IntPtr.Zero)
+            {
+                _image = _imageProvider?.Invoke();
+            }
             if (_image == null || _image.Handle == IntPtr.Zero) return;
             float w = Transform.Computed.Width;
             float h = Transform.Computed.Height;
