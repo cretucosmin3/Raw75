@@ -98,7 +98,7 @@ public sealed class WorkspaceGate : VisualElement
         InvalidatePaint();
     }
 
-    private void Pick()
+    internal void Pick()
     {
         string? folder = null;
         try { folder = FileDialogs.OpenFolder(); }

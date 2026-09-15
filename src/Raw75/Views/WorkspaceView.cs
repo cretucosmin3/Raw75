@@ -931,6 +931,11 @@ public sealed class WorkspaceView : View
 
     private void SetViewMode(bool gallery)
     {
+        if (gallery && _photo.CropTool)
+        {
+            _photo.CancelCrop();
+        }
+
         _isGalleryMode = gallery;
         _btnViewerMode.Toggled = !gallery;
         _btnGalleryMode.Toggled = gallery;
@@ -1422,6 +1427,9 @@ public sealed class WorkspaceView : View
 
     private void ToggleCrop()
     {
+        if (_isGalleryMode || _session.Active == null)
+            return;
+
         if (_photo.CropTool)
         {
             _photo.CancelCrop();
@@ -1855,6 +1863,45 @@ public sealed class WorkspaceView : View
     {
         var key = (Key)code;
         bool ctrl = Events.IsControlDown;
+
+        // 1. Gated by modal dialogs and active keyboard element (e.g. text inputs):
+        // Single-key shortcuts and view hotkeys MUST NEVER trigger while typing or interacting with modals.
+        bool isModalOrText = ActiveKeyboardElement != null
+            || (_nameDialog != null && _nameDialog.Visible)
+            || (_export != null && _export.Visible)
+            || (_settings != null && _settings.Visible)
+            || (_gate != null && _gate.Visible);
+
+        if (isModalOrText)
+        {
+            if (_nameDialog != null && _nameDialog.Visible)
+            {
+                if (key == Key.Escape) { _nameDialog.Close(); return; }
+                if (key == Key.Enter || key == Key.KeypadEnter) { _nameDialog.Confirm(); return; }
+                if (key == Key.Backspace || (int)key == 259 || (int)key == 8 || (int)key == 127) { _nameDialog.Backspace(); return; }
+                if (key == Key.Delete || (int)key == 261) { _nameDialog.Delete(); return; }
+                if (key == Key.Left) { _nameDialog.MoveLeft(); return; }
+                if (key == Key.Right) { _nameDialog.MoveRight(); return; }
+                if (key == Key.Home) { _nameDialog.MoveHome(); return; }
+                if (key == Key.End) { _nameDialog.MoveEnd(); return; }
+            }
+            else if (_export != null && _export.Visible)
+            {
+                if (key == Key.Escape) { _export.Close(); return; }
+                if (key == Key.Enter) { _export.Confirm(); return; }
+            }
+            else if (_settings != null && _settings.Visible)
+            {
+                if (key == Key.Escape) { _settings.Close(); return; }
+            }
+            else if (_gate != null && _gate.Visible)
+            {
+                if (key == Key.Enter || key == Key.O) { _gate.Pick(); return; }
+            }
+            return;
+        }
+
+        // 2. Global command shortcuts:
         if (ctrl && key == Key.C) { CopyAdjustments(); return; }
         if (ctrl && key == Key.V) { PasteAdjustments(); return; }
         if (ctrl && key == Key.Z && Events.IsShiftDown) { Redo(); return; }
@@ -1862,21 +1909,25 @@ public sealed class WorkspaceView : View
         if (ctrl && key == Key.O) { OpenFiles(); return; }
         if (ctrl && key == Key.E) { StartExport(); return; }
 
-        if (key == Key.I) { ToggleInfoOverlay(); return; }
-        if (key == Key.O && !ctrl) { ToggleClipping(); return; }
-
+        // 3. Mode-specific navigation:
         if (_isGalleryMode)
         {
             if (key == Key.Enter || key == Key.E) { SetViewMode(false); return; }
             if (key == Key.P) { ToggleReady(true); return; }
             if (key == Key.X) { ToggleReady(false); return; }
+            // In gallery mode, NEVER fall through to develop view shortcuts (crop, zoom, rotate, etc.)!
+            return;
         }
-        else
-        {
-            if (key == Key.G) { SetViewMode(true); return; }
-            if (key == Key.P) { ToggleReady(true); return; }
-            if (key == Key.X) { ToggleReady(false); return; }
-        }
+
+        // 4. Develop view navigation & overlays:
+        if (key == Key.G) { SetViewMode(true); return; }
+        if (key == Key.P) { ToggleReady(true); return; }
+        if (key == Key.X) { ToggleReady(false); return; }
+        if (key == Key.I) { ToggleInfoOverlay(); return; }
+        if (key == Key.O && !ctrl) { ToggleClipping(); return; }
+
+        // 5. Develop view photo editing tools (only if active photo is present):
+        if (_session.Active == null) return;
 
         if (_photo.CropTool)
         {

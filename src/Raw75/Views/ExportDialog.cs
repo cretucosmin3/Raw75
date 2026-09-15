@@ -213,7 +213,7 @@ public sealed class ExportDialog : VisualElement
         InvalidatePaint();
     }
 
-    private void Confirm()
+    internal void Confirm()
     {
         Confirmed?.Invoke(new ExportRequest
         {
