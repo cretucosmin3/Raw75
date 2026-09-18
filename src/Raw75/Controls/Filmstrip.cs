@@ -9,14 +9,13 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>Horizontal session strip: thumbs, names, click to select, optional close, horizontally scrollable, virtualized.</summary>
+/// <summary>Horizontal session strip: thumbs, click to select, horizontally scrollable, virtualized.</summary>
 public class Filmstrip : ScrollContainer
 {
     public const float FilterRailW = 56f;
 
     private const float ThumbW = 96f;
     private const float Gap = 6f;
-    private const float NameH = 18f;
 
     private readonly VisualElement _filterRail;
     private readonly IconButton _btnFilterAll;
@@ -42,7 +41,6 @@ public class Filmstrip : ScrollContainer
     private float _panStartScroll;
 
     public event Action<int>? Selected;
-    public event Action<int>? CloseRequested;
     public event Action<int, bool>? ReadyToggled;
     public event Action<int, bool>? FavoriteToggled;
     public event Action<PhotoFilter>? FilterChanged;
@@ -465,10 +463,8 @@ public class Filmstrip : ScrollContainer
         private readonly Filmstrip _owner;
         private int _index;
         private readonly ThumbWell _thumb;
-        private readonly RichBox _caption;
         private readonly VisualElement _ready;
         private readonly VisualElement _star;
-        private readonly VisualElement _close;
         private PhotoDocument? _doc;
         private bool _active;
         private bool _isReady;
@@ -499,28 +495,6 @@ public class Filmstrip : ScrollContainer
                 IsClickthrough = true
             };
 
-            _caption = new RichBox
-            {
-                Name = "Cell_Name",
-                Text = "",
-                IsClickthrough = true,
-                Overflow = OverflowMode.Clip,
-                Style = new ElementStyle
-                {
-                    BackColor = SKColors.Transparent,
-                    Text = new TextStyle
-                    {
-                        Color = Theme.TextDim,
-                        Size = 11.5f,
-                        Weight = 400,
-                        Alignment = TextAlign.Center,
-                        Padding = 2,
-                        Overflow = TextOverflow.Ellipsis,
-                        MaxLines = 1
-                    }
-                }
-            };
-
             _ready = MakeMarkButton("Cell_Ready");
             _ready.Events.OnClick += (_, args) =>
             {
@@ -533,7 +507,22 @@ public class Filmstrip : ScrollContainer
                 args.Handled = true;
             };
 
-            _star = MakeMarkButton("Cell_Star");
+            _star = new VisualElement
+            {
+                Name = "Cell_Star",
+                Cursor = StandardCursor.Hand,
+                IsClickthrough = true,
+                ZIndex = 5,
+                BackgroundImageScale = ImageScaleMode.Contain,
+                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                BackgroundImageTintColor = Theme.Favorite,
+                Padding = new Thickness(0f),
+                Style = new ElementStyle
+                {
+                    BackColor = SKColors.Transparent,
+                    Border = new BorderStyle { Width = 0, Color = SKColors.Transparent, Roundness = 0 }
+                }
+            };
             _star.Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
@@ -545,45 +534,9 @@ public class Filmstrip : ScrollContainer
                 args.Handled = true;
             };
 
-            _close = new VisualElement
-            {
-                Name = "Cell_Close",
-                BackgroundSvg = IconStore.LoadSvg("cross"),
-                BackgroundImageScale = ImageScaleMode.Contain,
-                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
-                BackgroundImageTintColor = Theme.Text,
-                Padding = new Thickness(2.5f),
-                Style = new ElementStyle
-                {
-                    BackColor = new SKColor(0, 0, 0, 160),
-                    Border = new BorderStyle { Width = 1, Color = Theme.HairlineSubtle, Roundness = 6 }
-                }
-            };
-            _close.Cursor = StandardCursor.Hand;
-            _close.Events.OnMouseEnter += _ =>
-            {
-                _close.Style.BackColor = new SKColor(220, 50, 40, 220);
-                _close.BackgroundImageTintColor = SKColors.White;
-                _close.InvalidatePaint();
-            };
-            _close.Events.OnMouseLeave += _ =>
-            {
-                _close.Style.BackColor = new SKColor(0, 0, 0, 160);
-                _close.BackgroundImageTintColor = Theme.Text;
-                _close.InvalidatePaint();
-            };
-            _close.Events.OnClick += (_, args) =>
-            {
-                if (args.Button != (int)MouseButton.Left) return;
-                _owner.CloseRequested?.Invoke(_index);
-                args.Handled = true;
-            };
-
             AddChild(_thumb);
-            AddChild(_caption);
             AddChild(_ready);
             AddChild(_star);
-            AddChild(_close);
 
             Events.OnMouseEnter += _ =>
             {
@@ -591,7 +544,6 @@ public class Filmstrip : ScrollContainer
                 {
                     Style.BackColor = Theme.Hover;
                     Style.Border.Color = Theme.HairlineStrong;
-                    _caption.Style.Text.Color = Theme.Text;
                     InvalidatePaint();
                 }
             };
@@ -601,7 +553,6 @@ public class Filmstrip : ScrollContainer
                 {
                     Style.BackColor = Theme.Section;
                     Style.Border.Color = CellBorderColor();
-                    _caption.Style.Text.Color = Theme.TextDim;
                     InvalidatePaint();
                 }
             };
@@ -638,11 +589,6 @@ public class Filmstrip : ScrollContainer
                 ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80))
                 : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
 
-            _caption.Name = $"{Name}_Name";
-            _caption.Text = doc.Name;
-            _caption.Style.Text.Color = active ? Theme.Accent : Theme.TextDim;
-            _caption.InvalidatePaint();
-
             _thumb.Name = $"{Name}_Thumb";
             _thumb.SetImage(GetValidImage());
 
@@ -650,10 +596,6 @@ public class Filmstrip : ScrollContainer
             UpdateReadyStyle();
             _star.Name = $"{Name}_Star";
             UpdateStarStyle();
-
-            _close.Name = $"{Name}_Close";
-            _close.Style.BackColor = new SKColor(0, 0, 0, 160);
-            _close.BackgroundImageTintColor = Theme.Text;
 
             InvalidateLayout();
             InvalidatePaint();
@@ -675,7 +617,6 @@ public class Filmstrip : ScrollContainer
             Style.Border.Width = active ? 1.5f : 1f;
             Style.Border.Color = active ? Theme.Accent : CellBorderColor();
             Style.Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
-            _caption.Style.Text.Color = active ? Theme.Accent : Theme.TextDim;
             InvalidatePaint();
         }
 
@@ -719,11 +660,12 @@ public class Filmstrip : ScrollContainer
 
         private void UpdateStarStyle()
         {
-            _star.BackgroundSvg = IconStore.LoadSvg(_isFavorite ? "star_filled" : "star");
-            _star.BackgroundImageTintColor = _isFavorite ? Theme.Favorite : Theme.Text;
-            _star.Style.BackColor = _isFavorite ? Theme.AccentSoft : new SKColor(0, 0, 0, 140);
-            _star.Style.Border.Color = _isFavorite ? Theme.Favorite : Theme.HairlineSubtle;
-            _star.Style.Border.Roundness = 9f;
+            _star.BackgroundSvg = _isFavorite ? IconStore.LoadSvg("star_filled") : null;
+            _star.BackgroundImageTintColor = Theme.Favorite;
+            _star.IsClickthrough = !_isFavorite;
+            _star.Style.BackColor = SKColors.Transparent;
+            _star.Style.Border.Width = 0;
+            _star.Style.Border.Color = SKColors.Transparent;
             _star.InvalidatePaint();
             if (!_active)
             {
@@ -738,13 +680,10 @@ public class Filmstrip : ScrollContainer
             float originY = Transform.Computed.Y;
             float w = Math.Max(1f, Transform.Width);
             float h = Math.Max(1f, Transform.Height);
-            float thumbH = Math.Max(8f, h - NameH - 4f);
 
-            _thumb.Transform.SetAbsoluteFrame(originX + 4, originY + 4, w - 8, thumbH);
-            _caption.Transform.SetAbsoluteFrame(originX + 2, originY + 4 + thumbH, w - 4, NameH);
-            _ready.Transform.SetAbsoluteFrame(originX + 6, originY + 6, 18, 18);
-            _star.Transform.SetAbsoluteFrame(originX + 26, originY + 6, 18, 18);
-            _close.Transform.SetAbsoluteFrame(originX + w - 20, originY + 6, 14, 14);
+            _thumb.Transform.SetAbsoluteFrame(originX + 1, originY + 1, w - 2, h - 2);
+            _ready.Transform.SetAbsoluteFrame(originX + 4, originY + 4, 18, 18);
+            _star.Transform.SetAbsoluteFrame(originX + 4, originY + h - 20, 16, 16);
         }
 
         private static VisualElement MakeMarkButton(string name)
@@ -789,12 +728,7 @@ public class Filmstrip : ScrollContainer
             Style = new ElementStyle
             {
                 BackColor = Theme.Well,
-                Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.HairlineSubtle,
-                    Roundness = 2
-                }
+                Border = new BorderStyle { Width = 0, Color = SKColors.Transparent, Roundness = Theme.RadiusSm }
             };
             Overflow = OverflowMode.Clip;
         }

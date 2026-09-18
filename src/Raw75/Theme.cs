@@ -52,8 +52,8 @@ public static class Theme
     public static readonly SKColor ButtonTextOnAccent = new(20, 20, 23);   // High-contrast text on accent pill
     public static readonly SKColor Success = new(46, 180, 80);           // Ready status green circle (#2EB450)
     public static readonly SKColor SuccessSoft = new(46, 180, 80, 140);   // Ready status cell border accent
-    public static readonly SKColor Favorite = Accent;                    // Star / favourite mark (warm amber)
-    public static readonly SKColor FavoriteSoft = AccentSoft;
+    public static readonly SKColor Favorite = new(255, 214, 50);         // Yellow favourite star
+    public static readonly SKColor FavoriteSoft = new(255, 214, 50, 140);
 
     // Slider Specific
     public static readonly SKColor Track = Well;

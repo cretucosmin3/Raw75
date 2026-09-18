@@ -47,7 +47,6 @@ public sealed class WorkspaceView : View
     private VisualElement _zoomLabel = null!;
     private GalleryView _gallery = null!;
     private PhotoMarkMenu _markMenu = null!;
-    private VisualElement _toolsBar = null!;
     private IconButton _btnViewerMode = null!;
     private IconButton _btnGalleryMode = null!;
     private bool _isGalleryMode;
@@ -66,6 +65,7 @@ public sealed class WorkspaceView : View
     private IconButton _btnExpSlider = null!;
     private IconButton _btnExpCurve = null!;
     private ExposureCurveControl _exposureCurveControl = null!;
+    private VisualElement _expCurveRule = null!;
     private SliderRow _hi = null!, _sh = null!, _wh = null!, _bk = null!, _vib = null!;
     private SliderRow _sharp = null!, _noise = null!;
 
@@ -202,14 +202,26 @@ public sealed class WorkspaceView : View
         folder.Transform.Anchor = Anchor.Left | Anchor.Top;
         folder.Clicked += OpenWorkspace;
 
-        _btnViewerMode = Chip("Viewer", 312, (top - 32) * 0.5f, 96, 32, iconName: "viewer");
+        float navY = (top - 32) * 0.5f;
+        AddElement(new VisualElement
+        {
+            Name = "NavSplit",
+            IsClickthrough = true,
+            Style = new ElementStyle { BackColor = Theme.Hairline },
+            Transform = new Transform(318, navY + 6, 1, 20)
+            {
+                Anchor = Anchor.Left | Anchor.Top
+            }
+        });
+
+        _btnGalleryMode = Chip("Gallery", 331, navY, 96, 32, iconName: "gallery");
+        _btnGalleryMode.Transform.Anchor = Anchor.Left | Anchor.Top;
+        _btnGalleryMode.Clicked += () => SetViewMode(true);
+
+        _btnViewerMode = Chip("Develop", 433, navY, 110, 32, iconName: "viewer");
         _btnViewerMode.Transform.Anchor = Anchor.Left | Anchor.Top;
         _btnViewerMode.Toggled = true;
         _btnViewerMode.Clicked += () => SetViewMode(false);
-
-        _btnGalleryMode = Chip("Gallery", 414, (top - 32) * 0.5f, 96, 32, iconName: "gallery");
-        _btnGalleryMode.Transform.Anchor = Anchor.Left | Anchor.Top;
-        _btnGalleryMode.Clicked += () => SetViewMode(true);
 
         var settings = Chip("Settings", W - 222, (top - 32) * 0.5f, 104, 32, iconName: "settings");
         settings.Transform.Anchor = Anchor.Right | Anchor.Top;
@@ -397,48 +409,43 @@ public sealed class WorkspaceView : View
         _btnClip.Clicked += ToggleClipping;
         AddElement(_viewOverlay);
 
-        // Top bar tools panel: centered horizontally to the right of Viewer/Gallery
-        float toolsH = 32f;
-        float toolsY = (top - toolsH) * 0.5f;
-        float toolsW = 118f;
-        float toolsX = (510f + (W - 222f) - toolsW) * 0.5f;
-
-        _toolsBar = new VisualElement
-        {
-            Name = "ToolsBar",
-            Style = new ElementStyle { BackColor = SKColors.Transparent },
-            Transform = new Transform(toolsX, toolsY, toolsW, toolsH)
-            {
-                Anchor = Anchor.Top,
-                FixedWidth = true
-            }
-        };
-        AddElement(_toolsBar);
-
-        float curX = 0f;
-        var hdr = AddBarTool(_toolsBar, "HDR", ref curX, 58f, "hdr");
-        hdr.Clicked += MergeHdr;
-        curX += 4f;
+        float zoomW = 56f;
+        float zoomH = 22f;
+        float zoomMargin = 14f;
         _zoomLabel = new VisualElement
         {
             Name = "ZoomPct",
             Text = "Fit",
             Cursor = StandardCursor.Hand,
+            ZIndex = 110,
             Overflow = OverflowMode.Visible,
             Style = new ElementStyle
             {
-                BackColor = SKColors.Transparent,
-                Text = new TextStyle { Color = Theme.TextDim, Size = 12, Weight = 500, Alignment = TextAlign.Center, Overflow = TextOverflow.Visible }
+                BackColor = new SKColor(20, 20, 24, 191),
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.Hairline,
+                    Roundness = Theme.RadiusSm
+                },
+                Text = new TextStyle
+                {
+                    Color = Theme.Text,
+                    Size = 11,
+                    Weight = 600,
+                    Alignment = TextAlign.Center,
+                    Overflow = TextOverflow.Visible
+                }
             },
-            Transform = new Transform(curX, 6f, 48f, 20f)
+            Transform = new Transform(W - R - zoomMargin - zoomW, H - film - zoomMargin - zoomH, zoomW, zoomH)
             {
-                Anchor = Anchor.Left | Anchor.Top
+                Anchor = Anchor.Right | Anchor.Bottom,
+                FixedWidth = true,
+                FixedHeight = true
             }
         };
         _zoomLabel.Events.OnMouseDown += (_, _) => _photo.ToggleZoom();
-        _toolsBar.AddChild(_zoomLabel);
-        curX += 48f;
-        _toolsBar.Transform.Width = curX;
+        AddElement(_zoomLabel);
 
         _film = new Filmstrip
         {
@@ -448,15 +455,6 @@ public sealed class WorkspaceView : View
             }
         };
         _film.Selected += i => _session.Select(i);
-        _film.CloseRequested += i =>
-        {
-            _session.Close(i);
-            SaveCurrentSession();
-            if (_session.Documents.Count == 0)
-            {
-                _gate.Show();
-            }
-        };
         _film.ReadyToggled += OnReadyToggled;
         _film.FavoriteToggled += OnFavoriteToggled;
         _film.FilterChanged += f => _gallery.SetFilter(f);
@@ -569,6 +567,16 @@ public sealed class WorkspaceView : View
             PushLook(fast: false, settle: true);
         };
         _exposureGroup.AddBody(_exposureCurveControl);
+
+        _expCurveRule = new VisualElement
+        {
+            Name = "ExposureCurveRule",
+            IsClickthrough = true,
+            Style = new ElementStyle { BackColor = Theme.HairlineStrong },
+            Transform = new Transform(0, 0, 0, 1f)
+        };
+        _exposureGroup.AddBody(_expCurveRule);
+        _expCurveRule.Visible = false;
 
         _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
@@ -795,6 +803,8 @@ public sealed class WorkspaceView : View
         _btnExpCurve.Toggled = useCurve;
         _ev.Visible = !useCurve;
         _exposureCurveControl.Visible = useCurve;
+        if (_expCurveRule != null)
+            _expCurveRule.Visible = useCurve;
         _exposureGroup.InvalidateLayout();
     }
 
@@ -940,7 +950,7 @@ public sealed class WorkspaceView : View
 
         _gallery.Visible = gallery;
         _photo.Visible = !gallery;
-        _toolsBar.Visible = !gallery;
+        _zoomLabel.Visible = !gallery;
         _viewOverlay.Visible = !gallery;
         _film.Visible = !gallery;
 
@@ -1472,39 +1482,6 @@ public sealed class WorkspaceView : View
         _photo.NotifyOrientation(dir);
         WorkspaceStore.SaveSettings(d);
         PushLook(fast: false, settle: true);
-    }
-
-    private void MergeHdr()
-    {
-        if (_session.Documents.Count < 2)
-        {
-            SetStatus("Open 2+ photos, then HDR.");
-            return;
-        }
-
-        var bmp = HdrMerge.Average(_session.Documents.ToArray());
-        if (bmp == null)
-        {
-            SetStatus("HDR merge needs matching sizes.");
-            return;
-        }
-
-        string path = Path.Combine(Path.GetTempPath(), "raw75-hdr.png");
-        using (var data = bmp.Encode(SKEncodedImageFormat.Png, 90))
-        using (var fs = File.OpenWrite(path))
-            data.SaveTo(fs);
-
-        var doc = _session.Add(path);
-        doc.SourceWidth = bmp.Width;
-        doc.SourceHeight = bmp.Height;
-        var img = RawDecoder.Upload(bmp);
-        bmp.Dispose();
-        doc.Proxy = img;
-        doc.Display = img;
-        doc.Thumb = img;
-        _engine.Invalidate(doc);
-        RefreshSession();
-        SetStatus("HDR merge (average). Align/de-ghost still to come.");
     }
 
     private void Flip(bool h)
@@ -2195,17 +2172,6 @@ public sealed class WorkspaceView : View
         return e;
     }
 
-    private IconButton AddBarTool(VisualElement bar, string? caption, ref float curX, float w = 62f, string? iconName = null)
-    {
-        var b = new IconButton(caption, iconName);
-        b.Transform = new Transform(curX, 0, w, 32f)
-        {
-            Anchor = Anchor.Left | Anchor.Top
-        };
-        curX += w + 4f;
-        bar.AddChild(b);
-        return b;
-    }
 }
 
 internal sealed class RightColumn : ScrollContainer

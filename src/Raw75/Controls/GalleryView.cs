@@ -680,19 +680,16 @@ public sealed class GalleryView : ScrollContainer
             {
                 Name = "GalleryCard_Star",
                 Cursor = StandardCursor.Hand,
+                IsClickthrough = true,
+                ZIndex = 5,
                 BackgroundImageScale = ImageScaleMode.Contain,
                 BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
-                BackgroundImageTintColor = Theme.Text,
-                Padding = new Thickness(3f),
+                BackgroundImageTintColor = Theme.Favorite,
+                Padding = new Thickness(0f),
                 Style = new ElementStyle
                 {
-                    BackColor = new SKColor(0, 0, 0, 150),
-                    Border = new BorderStyle
-                    {
-                        Width = 1,
-                        Color = Theme.HairlineSubtle,
-                        Roundness = 11f
-                    }
+                    BackColor = SKColors.Transparent,
+                    Border = new BorderStyle { Width = 0, Color = SKColors.Transparent, Roundness = 0 }
                 }
             };
             _starBtn.Events.OnClick += (_, args) =>
@@ -875,11 +872,12 @@ public sealed class GalleryView : ScrollContainer
 
         private void UpdateStarStyle()
         {
-            _starBtn.BackgroundSvg = IconStore.LoadSvg(_isFavorite ? "star_filled" : "star");
-            _starBtn.BackgroundImageTintColor = _isFavorite ? Theme.Favorite : Theme.Text;
-            _starBtn.Style.BackColor = _isFavorite ? Theme.AccentSoft : new SKColor(0, 0, 0, 150);
-            _starBtn.Style.Border.Color = _isFavorite ? Theme.Favorite : Theme.HairlineSubtle;
-            _starBtn.Style.Border.Roundness = 11f;
+            _starBtn.BackgroundSvg = _isFavorite ? IconStore.LoadSvg("star_filled") : null;
+            _starBtn.BackgroundImageTintColor = Theme.Favorite;
+            _starBtn.IsClickthrough = !_isFavorite;
+            _starBtn.Style.BackColor = SKColors.Transparent;
+            _starBtn.Style.Border.Width = 0;
+            _starBtn.Style.Border.Color = SKColors.Transparent;
             _starBtn.InvalidatePaint();
             if (!_active)
             {
@@ -902,7 +900,7 @@ public sealed class GalleryView : ScrollContainer
             _thumb.Transform.SetAbsoluteFrame(ox + pad, oy + pad, w - pad * 2f, thumbH);
             _caption.Transform.SetAbsoluteFrame(ox + pad, oy + pad + thumbH, w - pad * 2f, captionH);
             _readyBtn.Transform.SetAbsoluteFrame(ox + pad + 4f, oy + pad + 4f, 22f, 22f);
-            _starBtn.Transform.SetAbsoluteFrame(ox + pad + 30f, oy + pad + 4f, 22f, 22f);
+            _starBtn.Transform.SetAbsoluteFrame(ox + pad + 4f, oy + pad + thumbH - 22f, 20f, 20f);
             _indexBadge.Transform.SetAbsoluteFrame(ox + w - pad - 34f, oy + pad + 4f, 30f, 20f);
         }
     }

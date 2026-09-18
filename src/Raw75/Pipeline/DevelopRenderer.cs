@@ -1540,23 +1540,22 @@ public static class DevelopRenderer
                     col *= mix(1.0, g, u_match * 0.35);
                 }
 
-                // 4. Whites: Upper-shoulder dynamic white point anchor
-                if (abs(u_whites) > 0.001) {
+                // 4. Whites: bright-end white point, not global exposure and not only speculars.
+                // 0 at middle gray, ramps through light tones / white surfaces, full by ~+2 EV.
+                if (abs(u_whites) > 0.0001) {
                     float pixel_luma = max(luma2020(col), 0.00001);
-                    if (pixel_luma > 0.509117) {
-                        float ev_w = log2(pixel_luma / 0.18);
-                        float x = ev_w - 1.5;
-                        float x_new;
-                        if (u_whites < 0.0) {
-                            float kw = -u_whites * 0.6;
-                            x_new = x / (1.0 + kw * x);
+                    float ev_w = log2(pixel_luma / 0.18);
+                    float w = smoother(ev_w, 0.3, 2.0);
+                    if (w > 0.0001) {
+                        float target_ev;
+                        if (u_whites > 0.0) {
+                            target_ev = ev_w + u_whites * 2.4;
                         } else {
-                            float kw = u_whites * 0.5;
-                            x_new = x * (1.0 + kw * (x / (x + 1.5)));
+                            float k = -u_whites * 1.15;
+                            target_ev = ev_w / (1.0 + k * max(ev_w - 0.3, 0.0));
                         }
-                        float new_ev = 1.5 + x_new;
-                        float new_luma = 0.18 * exp2(new_ev);
-                        col *= (new_luma / pixel_luma);
+                        float new_ev = mix(ev_w, target_ev, w);
+                        col *= (0.18 * exp2(new_ev)) / pixel_luma;
                     }
                 }
 
@@ -2121,23 +2120,22 @@ public static class DevelopRenderer
                     col *= mix(1.0, g, u_match * 0.35);
                 }
 
-                // 4. Whites: Upper-shoulder dynamic white point anchor
-                if (abs(u_whites) > 0.001) {
+                // 4. Whites: bright-end white point, not global exposure and not only speculars.
+                // 0 at middle gray, ramps through light tones / white surfaces, full by ~+2 EV.
+                if (abs(u_whites) > 0.0001) {
                     float pixel_luma = max(luma2020(col), 0.00001);
-                    if (pixel_luma > 0.509117) {
-                        float ev_w = log2(pixel_luma / 0.18);
-                        float x = ev_w - 1.5;
-                        float x_new;
-                        if (u_whites < 0.0) {
-                            float kw = -u_whites * 0.6;
-                            x_new = x / (1.0 + kw * x);
+                    float ev_w = log2(pixel_luma / 0.18);
+                    float w = smoother(ev_w, 0.3, 2.0);
+                    if (w > 0.0001) {
+                        float target_ev;
+                        if (u_whites > 0.0) {
+                            target_ev = ev_w + u_whites * 2.4;
                         } else {
-                            float kw = u_whites * 0.5;
-                            x_new = x * (1.0 + kw * (x / (x + 1.5)));
+                            float k = -u_whites * 1.15;
+                            target_ev = ev_w / (1.0 + k * max(ev_w - 0.3, 0.0));
                         }
-                        float new_ev = 1.5 + x_new;
-                        float new_luma = 0.18 * exp2(new_ev);
-                        col *= (new_luma / pixel_luma);
+                        float new_ev = mix(ev_w, target_ev, w);
+                        col *= (0.18 * exp2(new_ev)) / pixel_luma;
                     }
                 }
 

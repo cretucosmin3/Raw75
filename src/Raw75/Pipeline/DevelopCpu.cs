@@ -454,28 +454,25 @@ internal static class DevelopCpu
             b *= mg;
         }
 
-        // 4. Whites: Upper-shoulder dynamic white point anchor
-        if (MathF.Abs(whites) > 0.001f)
+        // 4. Whites: bright-end white point, not global exposure and not only speculars.
+        // 0 at middle gray, ramps through light tones / white surfaces, full by ~+2 EV.
+        if (MathF.Abs(whites) > 0.0001f)
         {
             float pixelLuma = MathF.Max(Luma(r, g, b), 0.00001f);
-            if (pixelLuma > 0.509117f)
+            float evW = MathF.Log2(pixelLuma / 0.18f);
+            float w = Smooth(evW, 0.3f, 2f);
+            if (w > 0.0001f)
             {
-                float evW = MathF.Log2(pixelLuma / 0.18f);
-                float x = evW - 1.5f;
-                float xNew;
-                if (whites < 0f)
-                {
-                    float kw = -whites * 0.6f;
-                    xNew = x / (1f + kw * x);
-                }
+                float targetEv;
+                if (whites > 0f)
+                    targetEv = evW + whites * 2.4f;
                 else
                 {
-                    float kw = whites * 0.5f;
-                    xNew = x * (1f + kw * (x / (x + 1.5f)));
+                    float k = -whites * 1.15f;
+                    targetEv = evW / (1f + k * MathF.Max(evW - 0.3f, 0f));
                 }
-                float newEv = 1.5f + xNew;
-                float newLuma = 0.18f * MathF.Pow(2f, newEv);
-                float ratio = newLuma / pixelLuma;
+                float newEv = evW + (targetEv - evW) * w;
+                float ratio = (0.18f * MathF.Pow(2f, newEv)) / pixelLuma;
                 r *= ratio;
                 g *= ratio;
                 b *= ratio;

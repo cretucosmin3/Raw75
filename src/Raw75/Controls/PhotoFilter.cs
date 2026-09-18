@@ -17,8 +17,14 @@ public static class PhotoFilterMatch
     {
         if (doc == null) return false;
         if (filter == PhotoFilter.All) return true;
-        if ((filter & PhotoFilter.Ready) != 0 && !doc.IsReady) return false;
-        if ((filter & PhotoFilter.Favorite) != 0 && !doc.IsFavorite) return false;
+        bool wantReady = (filter & PhotoFilter.Ready) != 0;
+        bool wantFavorite = (filter & PhotoFilter.Favorite) != 0;
+        if (wantReady && wantFavorite)
+            return doc.IsReady || doc.IsFavorite;
+        if (wantReady)
+            return doc.IsReady;
+        if (wantFavorite)
+            return doc.IsFavorite;
         return true;
     }
 }
