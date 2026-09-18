@@ -76,14 +76,13 @@ public sealed class CheckToggle : VisualElement
         if (w < 4f || h < 4f) return;
 
         var box = new SKRect(0.5f, 0.5f, w - 0.5f, h - 0.5f);
-        float radius = 3.5f;
+        float radius = Theme.RadiusSm;
 
         if (_checked)
         {
-            // Checked: filled neutral gray box with subtle border (no accent color)
             using var bgPaint = new SKPaint
             {
-                Color = _hovered ? new SKColor(88, 88, 98) : new SKColor(72, 72, 80),
+                Color = _hovered ? Theme.ButtonHover : Theme.Button,
                 Style = SKPaintStyle.Fill,
                 IsAntialias = true
             };
@@ -91,17 +90,16 @@ public sealed class CheckToggle : VisualElement
 
             using var borderPaint = new SKPaint
             {
-                Color = _hovered ? new SKColor(255, 255, 255, 70) : new SKColor(255, 255, 255, 40),
+                Color = _hovered ? Theme.HairlineStrong : Theme.Hairline,
                 Style = SKPaintStyle.Stroke,
                 StrokeWidth = 1f,
                 IsAntialias = true
             };
             canvas.DrawRoundRect(box, radius, radius, borderPaint);
 
-            // Crisp vector checkmark
             using var checkPaint = new SKPaint
             {
-                Color = SKColors.White,
+                Color = Theme.Text,
                 Style = SKPaintStyle.Stroke,
                 StrokeWidth = 2.0f,
                 StrokeCap = SKStrokeCap.Round,

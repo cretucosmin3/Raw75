@@ -394,6 +394,12 @@ public sealed class PhotoPane : VisualElement
         Events.OnScroll += OnWheel;
     }
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.PhotoWell;
+        InvalidatePaint();
+    }
+
     public override void AddedToView()
     {
         AllocateProbe();

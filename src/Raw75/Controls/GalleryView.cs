@@ -165,6 +165,24 @@ public sealed class GalleryView : ScrollContainer
         AddChild(_headerBar);
     }
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.Canvas;
+        if (_headerBar.Style != null)
+        {
+            _headerBar.Style.BackColor = Theme.Window;
+            if (_headerBar.Style.Border != null)
+                _headerBar.Style.Border.Color = Theme.Hairline;
+        }
+        if (_countLabel.Style?.Text != null)
+            _countLabel.Style.Text.Color = Theme.TextDim;
+        foreach (var card in _activeCards.Values)
+            card.RefreshTheme();
+        foreach (var card in _cardPool)
+            card.RefreshTheme();
+        InvalidatePaint();
+    }
+
     public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex)
     {
         _docs = docs ?? Array.Empty<PhotoDocument>();
@@ -785,9 +803,9 @@ public sealed class GalleryView : ScrollContainer
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 2f : 1f;
             Style.Border.Color = active ? Theme.Accent : CardBorderColor();
-            Style.Shadow = active
-                ? new ShadowStyle(0, 3f, 6, 6, new SKColor(255, 153, 51, 90))
-                : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70));
+            Theme.ApplyCardShadow(Style);
+            if (active && Theme.UseShadows && Style.Shadow != null)
+                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 80);
 
             _caption.Name = $"{Name}_Caption";
             _caption.Text = doc.Name;
@@ -825,10 +843,20 @@ public sealed class GalleryView : ScrollContainer
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 2f : 1f;
             Style.Border.Color = active ? Theme.Accent : CardBorderColor();
-            Style.Shadow = active
-                ? new ShadowStyle(0, 3f, 6, 6, new SKColor(255, 153, 51, 90))
-                : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70));
+            Theme.ApplyCardShadow(Style);
+            if (active && Theme.UseShadows && Style.Shadow != null)
+                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 80);
             _caption.Style.Text.Color = active ? Theme.Accent : Theme.Text;
+            InvalidatePaint();
+        }
+
+        public void RefreshTheme()
+        {
+            SetActive(_active);
+            UpdateReadyStyle();
+            UpdateStarStyle();
+            if (_caption.Style?.Text != null)
+                _caption.Style.Text.Color = _active ? Theme.Accent : Theme.Text;
             InvalidatePaint();
         }
 

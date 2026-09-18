@@ -175,6 +175,25 @@ public class Filmstrip : ScrollContainer
         };
     }
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.Filmstrip;
+        if (Style.Border != null)
+            Style.Border.Color = Theme.Hairline;
+        ScrollbarThumbDragColor = Theme.Accent;
+        if (_filterRail.Style != null)
+        {
+            _filterRail.Style.BackColor = Theme.BottomBar;
+            if (_filterRail.Style.Border != null)
+                _filterRail.Style.Border.Color = Theme.Hairline;
+        }
+        foreach (var cell in _activeCells.Values)
+            cell.RefreshTheme();
+        foreach (var cell in _cellPool)
+            cell.RefreshTheme();
+        InvalidatePaint();
+    }
+
     public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex)
     {
         _docs = docs ?? Array.Empty<PhotoDocument>();
@@ -616,7 +635,17 @@ public class Filmstrip : ScrollContainer
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 1.5f : 1f;
             Style.Border.Color = active ? Theme.Accent : CellBorderColor();
-            Style.Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
+            Theme.ApplyCardShadow(Style);
+            if (active && Theme.UseShadows && Style.Shadow != null)
+                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 70);
+            InvalidatePaint();
+        }
+
+        public void RefreshTheme()
+        {
+            SetActive(_active);
+            UpdateReadyStyle();
+            UpdateStarStyle();
             InvalidatePaint();
         }
 

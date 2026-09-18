@@ -73,6 +73,23 @@ public sealed class WorkspaceGate : VisualElement
         };
     }
 
+    public void RefreshTheme()
+    {
+        if (_card.Style != null)
+        {
+            _card.Style.BackColor = Theme.Panel;
+            if (_card.Style.Border != null)
+            {
+                _card.Style.Border.Color = Theme.Hairline;
+                _card.Style.Border.Roundness = Theme.Radius;
+            }
+        }
+        if (_title.Style?.Text != null) _title.Style.Text.Color = Theme.Text;
+        if (_body.Style?.Text != null) _body.Style.Text.Color = Theme.TextSecondary;
+        if (_lastPath.Style?.Text != null) _lastPath.Style.Text.Color = Theme.TextDim;
+        InvalidatePaint();
+    }
+
     public void Show()
     {
         _lastRoot = WorkspaceStore.LoadLastRoot();

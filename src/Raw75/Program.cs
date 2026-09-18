@@ -32,6 +32,8 @@ internal static class Program
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Log.Info("Application exiting");
         NativeCrash.Install();
 
+        Theme.Apply(Theme.Find(Raw75.Io.UiPrefs.LoadThemeId()), persist: false, notify: false);
+
         Browser.MaxFps = 120;
 
         foreach (var arg in Environment.GetCommandLineArgs())

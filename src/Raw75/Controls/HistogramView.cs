@@ -35,6 +35,18 @@ public class HistogramView : VisualElement
         };
     }
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.Section;
+        if (Style.Border != null)
+        {
+            Style.Border.Color = Theme.Hairline;
+            Style.Border.Roundness = Theme.Radius;
+        }
+        Theme.ApplyCardShadow(Style);
+        InvalidatePaint();
+    }
+
     public void SetBins(float[] r, float[] g, float[] b, float[] y)
     {
         _hasData = Copy(r, _r) | Copy(g, _g) | Copy(b, _b) | Copy(y, _y);

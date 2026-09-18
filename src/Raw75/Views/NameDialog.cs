@@ -175,6 +175,33 @@ public sealed class NameDialog : VisualElement
         InvalidatePaint();
     }
 
+    public void RefreshTheme()
+    {
+        if (_card.Style != null)
+        {
+            _card.Style.BackColor = Theme.Panel;
+            if (_card.Style.Border != null)
+            {
+                _card.Style.Border.Color = Theme.Hairline;
+                _card.Style.Border.Roundness = Theme.Radius;
+            }
+        }
+        if (_title.Style?.Text != null)
+            _title.Style.Text.Color = Theme.Text;
+        if (_field.Style != null)
+        {
+            _field.Style.BackColor = Theme.Track;
+            if (_field.Style.Border != null)
+            {
+                _field.Style.Border.Color = Theme.Accent;
+                _field.Style.Border.Roundness = Theme.RadiusSm;
+            }
+            if (_field.Style.Text != null)
+                _field.Style.Text.Color = Theme.Text;
+        }
+        InvalidatePaint();
+    }
+
     public void Close()
     {
         if (!Visible) return;

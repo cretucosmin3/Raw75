@@ -101,6 +101,33 @@ public class PresetList : VisualElement
         AddChild(_list);
     }
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.Section;
+        if (Style.Border != null)
+        {
+            Style.Border.Color = Theme.Hairline;
+            Style.Border.Roundness = Theme.Radius;
+        }
+        Theme.ApplyCardShadow(Style);
+        if (_header.Style != null)
+        {
+            _header.Style.BackColor = Theme.SectionHeader;
+            if (_header.Style.Border != null)
+                _header.Style.Border.Color = Theme.HairlineSubtle;
+        }
+        if (_headerTitle.Style?.Text != null)
+            _headerTitle.Style.Text.Color = Theme.Text;
+        foreach (var row in _rows)
+        {
+            if (row.Style?.Text != null)
+                row.Style.Text.Color = Theme.TextDim;
+            if (row.Style?.Border != null)
+                row.Style.Border.Roundness = Theme.RadiusSm;
+        }
+        InvalidatePaint();
+    }
+
     public void SetItems(IReadOnlyList<string> names)
     {
         names ??= Array.Empty<string>();

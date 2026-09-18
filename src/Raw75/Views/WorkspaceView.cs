@@ -142,6 +142,7 @@ public sealed class WorkspaceView : View
             _film.RefreshThumbs();
         };
         _session.Changed += RefreshSession;
+        Theme.Changed += () => ThemeApplier.Refresh(this);
 
         BuildChrome();
         _presets.SetItems(PresetStore.Names());

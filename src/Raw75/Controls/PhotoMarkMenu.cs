@@ -104,6 +104,21 @@ public sealed class PhotoMarkMenu : VisualElement
         InvalidatePaint();
     }
 
+    public void RefreshTheme()
+    {
+        if (_card.Style != null)
+        {
+            _card.Style.BackColor = Theme.Overlay;
+            if (_card.Style.Border != null)
+            {
+                _card.Style.Border.Color = Theme.HairlineStrong;
+                _card.Style.Border.Roundness = Theme.Radius;
+            }
+            Theme.ApplyCardShadow(_card.Style);
+        }
+        InvalidatePaint();
+    }
+
     public void Close()
     {
         if (!Visible) return;

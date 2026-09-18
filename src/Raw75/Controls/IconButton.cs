@@ -135,6 +135,7 @@ public class IconButton : VisualElement
                 Overflow = TextOverflow.Visible
             }
         };
+        Theme.ApplyButtonShadow(Style);
 
         _labelElement = new RichBox
         {
@@ -335,9 +336,29 @@ public class IconButton : VisualElement
     private void ApplyChrome()
     {
         bool accent = _primary || _toggled;
-        SKColor fill = accent ? Theme.Accent : Theme.Button;
-        SKColor border = accent ? Theme.AccentHover : Theme.Hairline;
-        SKColor text = accent ? Theme.ButtonTextOnAccent : Theme.Text;
+        bool outline = Theme.OutlineAccent && accent;
+        SKColor fill;
+        SKColor border;
+        SKColor text;
+
+        if (outline)
+        {
+            fill = Theme.Button;
+            border = Theme.Accent;
+            text = Theme.Text;
+        }
+        else if (accent)
+        {
+            fill = Theme.Accent;
+            border = Theme.AccentHover;
+            text = Theme.ButtonTextOnAccent;
+        }
+        else
+        {
+            fill = Theme.Button;
+            border = Theme.HairlineStrong;
+            text = Theme.Text;
+        }
 
         if (_pressed)
         {
@@ -346,14 +367,16 @@ public class IconButton : VisualElement
         }
         else if (_hovered)
         {
-            fill = accent ? Theme.Lighten(fill, 16) : Theme.ButtonHover;
-            border = accent ? Theme.Lighten(Theme.Accent, 24) : Theme.HairlineStrong;
+            fill = outline ? Theme.ButtonHover : (accent ? Theme.Lighten(fill, 16) : Theme.ButtonHover);
+            border = outline ? Theme.AccentHover : (accent ? Theme.Lighten(Theme.Accent, 24) : Theme.HairlineStrong);
         }
 
+        float borderW = outline ? 2f : 1f;
         bool fillChanged = Style.BackColor != fill;
-        bool borderChanged = Style.Border.Color != border;
+        bool borderChanged = Style.Border.Color != border || Math.Abs(Style.Border.Width - borderW) > 0.01f;
         Style.BackColor = fill;
         Style.Border.Color = border;
+        Style.Border.Width = borderW;
 
         bool textChanged = false;
         if (_labelElement.Style?.Text != null)
@@ -380,5 +403,13 @@ public class IconButton : VisualElement
 
         if (fillChanged || borderChanged || textChanged || iconChanged)
             InvalidatePaint();
+    }
+
+    public void RefreshTheme()
+    {
+        if (Style?.Border != null)
+            Style.Border.Roundness = Theme.RadiusSm;
+        Theme.ApplyButtonShadow(Style);
+        ApplyChrome();
     }
 }

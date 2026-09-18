@@ -203,6 +203,32 @@ public sealed class ExportDialog : VisualElement
         Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
     }
 
+    public void RefreshTheme()
+    {
+        if (_card.Style != null)
+        {
+            _card.Style.BackColor = Theme.Panel;
+            if (_card.Style.Border != null)
+            {
+                _card.Style.Border.Color = Theme.Hairline;
+                _card.Style.Border.Roundness = Theme.Radius;
+            }
+        }
+        PaintLabel(_title, Theme.Text);
+        PaintLabel(_fileLabel, Theme.TextDim);
+        PaintLabel(_scopeLabel, Theme.TextDim);
+        PaintLabel(_formatLabel, Theme.TextDim);
+        PaintLabel(_qualityLabel, Theme.TextDim);
+        PaintLabel(_edgeLabel, Theme.TextDim);
+        InvalidatePaint();
+    }
+
+    private static void PaintLabel(VisualElement e, SKColor c)
+    {
+        if (e.Style?.Text != null)
+            e.Style.Text.Color = c;
+    }
+
     public void Close()
     {
         if (!Visible)

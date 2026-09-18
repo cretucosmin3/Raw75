@@ -251,6 +251,41 @@ public class PanelGroup : VisualElement
         InvalidateLayout();
     }
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.Section;
+        if (Style.Border != null)
+        {
+            Style.Border.Color = Theme.Hairline;
+            Style.Border.Roundness = Theme.Radius;
+        }
+        Theme.ApplyCardShadow(Style);
+        if (_header.Style != null)
+        {
+            _header.Style.BackColor = Theme.SectionHeader;
+            if (_header.Style.Border != null)
+                _header.Style.Border.Color = Theme.HairlineSubtle;
+        }
+        if (_titleEl.Style?.Text != null)
+            _titleEl.Style.Text.Color = _sectionEnabled ? Theme.Text : Theme.TextDisabled;
+        _chevronEl.BackgroundImageTintColor = _sectionEnabled ? Theme.TextSecondary : Theme.TextDisabled;
+        foreach (var btn in _actions)
+        {
+            if (btn.Style == null) continue;
+            btn.Style.BackColor = Theme.Well;
+            if (btn.Style.Border != null)
+            {
+                btn.Style.Border.Color = Theme.Hairline;
+                btn.Style.Border.Roundness = Theme.RadiusSm;
+            }
+            if (btn.Style.Text != null)
+                btn.Style.Text.Color = Theme.TextSecondary;
+            btn.BackgroundImageTintColor = Theme.TextSecondary;
+            Theme.ApplyButtonShadow(btn.Style);
+        }
+        InvalidatePaint();
+    }
+
     public void AddBody(VisualElement child)
     {
         if (child == null) throw new ArgumentNullException(nameof(child));

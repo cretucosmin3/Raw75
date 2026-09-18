@@ -31,6 +31,18 @@ public class NavigatorBox : VisualElement
 
     public event Action<string>? ModePicked;
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.Section;
+        if (Style.Border != null)
+        {
+            Style.Border.Color = Theme.Hairline;
+            Style.Border.Roundness = Theme.Radius;
+        }
+        Theme.ApplyCardShadow(Style);
+        InvalidatePaint();
+    }
+
     public void SetMode(string mode)
     {
         _fit.Toggled = mode == "Fit";

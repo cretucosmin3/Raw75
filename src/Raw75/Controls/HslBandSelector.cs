@@ -112,6 +112,8 @@ public sealed class HslBandSelector : VisualElement
         }
     }
 
+    public void RefreshTheme() => UpdateChipStyles();
+
     private void UpdateChipStyles()
     {
         for (int i = 0; i < 6; i++)

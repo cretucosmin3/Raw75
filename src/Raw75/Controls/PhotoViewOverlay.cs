@@ -55,6 +55,18 @@ public class PhotoViewOverlay : VisualElement
         Events.OnMouseUp += (_, args) => args.Handled = true;
     }
 
+    public void RefreshTheme()
+    {
+        Style.BackColor = new SKColor(Theme.Window.Red, Theme.Window.Green, Theme.Window.Blue, 191);
+        if (Style.Border != null)
+        {
+            Style.Border.Color = Theme.Hairline;
+            Style.Border.Roundness = Theme.Radius;
+        }
+        Theme.ApplyCardShadow(Style);
+        InvalidatePaint();
+    }
+
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = 88f;

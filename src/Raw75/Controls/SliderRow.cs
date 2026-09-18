@@ -429,6 +429,14 @@ public class SliderRow : VisualElement
         }
     }
 
+    public void RefreshTheme()
+    {
+        if (_labelEl.Style?.Text != null)
+            _labelEl.Style.Text.Color = Theme.TextSecondary;
+        UpdateValueColor();
+        InvalidatePaint();
+    }
+
     private void UpdateValueColor()
     {
         if (_valueEl.Style?.Text != null)
