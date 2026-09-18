@@ -675,7 +675,7 @@ public class Filmstrip : ScrollContainer
 
         private void UpdateReadyStyle()
         {
-            _ready.BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null;
+            _ready.BackgroundSvg = _isReady ? (_ready.BackgroundSvg ?? IconStore.LoadSvg("check")) : null;
             _ready.Style.BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 140);
             _ready.Style.Border.Color = _isReady ? Theme.Success : Theme.HairlineSubtle;
             _ready.Style.Border.Roundness = 9f;
@@ -689,7 +689,7 @@ public class Filmstrip : ScrollContainer
 
         private void UpdateStarStyle()
         {
-            _star.BackgroundSvg = _isFavorite ? IconStore.LoadSvg("star_filled") : null;
+            _star.BackgroundSvg = _isFavorite ? (_star.BackgroundSvg ?? IconStore.LoadSvg("star_filled")) : null;
             _star.BackgroundImageTintColor = Theme.Favorite;
             _star.IsClickthrough = !_isFavorite;
             _star.Style.BackColor = SKColors.Transparent;

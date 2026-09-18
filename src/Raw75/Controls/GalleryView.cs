@@ -439,7 +439,7 @@ public sealed class GalleryView : ScrollContainer
         SetContentSize(w, Math.Max(totalH, h));
         base.LayoutChildren();
 
-        UpdateVirtualCards(force: true);
+        UpdateVirtualCards(force: false);
     }
 
     private void UpdateVirtualCards(bool force = false)
@@ -519,7 +519,7 @@ public sealed class GalleryView : ScrollContainer
 
             if (_activeCards.TryGetValue(itemIdx, out var card))
             {
-                if (force)
+                if (force || card.Index != docIdx)
                 {
                     card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
                     card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
@@ -793,6 +793,7 @@ public sealed class GalleryView : ScrollContainer
 
         public void Rebind(int index, PhotoDocument doc, bool active)
         {
+            bool docChanged = _doc != doc || _index != index;
             _index = index;
             _doc = doc;
             _active = active;
@@ -824,7 +825,8 @@ public sealed class GalleryView : ScrollContainer
             _starBtn.Name = $"{Name}_Star";
             UpdateStarStyle();
 
-            InvalidateLayout();
+            if (docChanged)
+                InvalidateLayout();
             InvalidatePaint();
         }
 
@@ -886,7 +888,7 @@ public sealed class GalleryView : ScrollContainer
 
         private void UpdateReadyStyle()
         {
-            _readyBtn.BackgroundSvg = _isReady ? IconStore.LoadSvg("check") : null;
+            _readyBtn.BackgroundSvg = _isReady ? (_readyBtn.BackgroundSvg ?? IconStore.LoadSvg("check")) : null;
             _readyBtn.Style.BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 150);
             _readyBtn.Style.Border.Color = _isReady ? Theme.Success : Theme.HairlineSubtle;
             _readyBtn.Style.Border.Roundness = 11f;
@@ -900,7 +902,7 @@ public sealed class GalleryView : ScrollContainer
 
         private void UpdateStarStyle()
         {
-            _starBtn.BackgroundSvg = _isFavorite ? IconStore.LoadSvg("star_filled") : null;
+            _starBtn.BackgroundSvg = _isFavorite ? (_starBtn.BackgroundSvg ?? IconStore.LoadSvg("star_filled")) : null;
             _starBtn.BackgroundImageTintColor = Theme.Favorite;
             _starBtn.IsClickthrough = !_isFavorite;
             _starBtn.Style.BackColor = SKColors.Transparent;

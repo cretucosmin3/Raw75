@@ -50,7 +50,9 @@ public class IconButton : VisualElement
         get => _caption;
         set
         {
-            _caption = value ?? "";
+            var next = value ?? "";
+            if (_caption == next) return;
+            _caption = next;
             _labelElement.Text = _caption;
             _labelElement.Visible = !string.IsNullOrEmpty(_caption);
             InvalidateLayout();
