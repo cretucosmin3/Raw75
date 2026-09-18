@@ -32,6 +32,8 @@ internal static class Program
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Log.Info("Application exiting");
         NativeCrash.Install();
 
+        Browser.MaxFps = 120;
+
         foreach (var arg in Environment.GetCommandLineArgs())
         {
             if (arg.Equals("--smoke-test", StringComparison.OrdinalIgnoreCase))

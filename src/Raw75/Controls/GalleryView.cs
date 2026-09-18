@@ -9,33 +9,50 @@ using SkiaSharp;
 
 namespace Raw75.Controls;
 
-public enum GalleryFilter
-{
-    All,
-    ReadyOnly,
-    UnmarkedOnly
-}
-
 /// <summary>
 /// Full-canvas lightbox / gallery grid view:
-/// Displays a multi-column contact sheet with ready checkboxes, filter tabs,
+/// Displays a multi-column contact sheet with ready/star marks, filter tabs,
 /// and double-click to open in develop view. Virtualized for fast rendering.
 /// </summary>
+public enum GalleryThumbSize
+{
+    Small,
+    Medium,
+    Large
+}
+
 public sealed class GalleryView : ScrollContainer
 {
     private const float TopBarH = 46f;
-    private const float CardW = 200f;
-    private const float CardH = 210f;
     private const float Gap = 12f;
     private const float Pad = 16f;
 
     private readonly VisualElement _headerBar;
     private readonly IconButton _btnFilterAll;
     private readonly IconButton _btnFilterReady;
-    private readonly IconButton _btnFilterUnmarked;
+    private readonly IconButton _btnFilterStar;
     private readonly IconButton _btnMarkAll;
     private readonly IconButton _btnClearAll;
+    private readonly IconButton _btnSizeS;
+    private readonly IconButton _btnSizeM;
+    private readonly IconButton _btnSizeL;
     private readonly VisualElement _countLabel;
+
+    private GalleryThumbSize _thumbSize = GalleryThumbSize.Small;
+
+    private float CardW => _thumbSize switch
+    {
+        GalleryThumbSize.Medium => 336f,
+        GalleryThumbSize.Large => 456f,
+        _ => 240f
+    };
+
+    private float CardH => _thumbSize switch
+    {
+        GalleryThumbSize.Medium => 360f,
+        GalleryThumbSize.Large => 488f,
+        _ => 258f
+    };
 
     private readonly Dictionary<int, GalleryCard> _activeCards = new();
     private readonly Stack<GalleryCard> _cardPool = new();
@@ -44,7 +61,7 @@ public sealed class GalleryView : ScrollContainer
 
     private IReadOnlyList<PhotoDocument> _docs = Array.Empty<PhotoDocument>();
     private int _activeIndex = -1;
-    private GalleryFilter _filter = GalleryFilter.All;
+    private PhotoFilter _filter = PhotoFilter.All;
 
     private int _lastFirstRow = -1;
     private int _lastLastRow = -1;
@@ -56,9 +73,12 @@ public sealed class GalleryView : ScrollContainer
     public event Action<int>? PhotoSelected;
     public event Action<int>? PhotoDoubleClicked;
     public event Action<int, bool>? ReadyToggled;
+    public event Action<int, bool>? FavoriteToggled;
     public event Action? BatchReadyChanged;
+    public event Action<PhotoFilter>? FilterChanged;
+    public event Action<int, float, float>? ContextMenuRequested;
 
-    public GalleryFilter ActiveFilter => _filter;
+    public PhotoFilter ActiveFilter => _filter;
 
     public GalleryView()
     {
@@ -90,19 +110,29 @@ public sealed class GalleryView : ScrollContainer
 
         _btnFilterAll = new IconButton("All (0)");
         _btnFilterAll.Toggled = true;
-        _btnFilterAll.Clicked += () => SetFilter(GalleryFilter.All);
+        _btnFilterAll.Clicked += () => SetFilter(PhotoFilter.All);
 
         _btnFilterReady = new IconButton("Ready (0)", "check");
-        _btnFilterReady.Clicked += () => SetFilter(GalleryFilter.ReadyOnly);
+        _btnFilterReady.Clicked += () => ToggleFilterFlag(PhotoFilter.Ready);
 
-        _btnFilterUnmarked = new IconButton("Unmarked (0)");
-        _btnFilterUnmarked.Clicked += () => SetFilter(GalleryFilter.UnmarkedOnly);
+        _btnFilterStar = new IconButton("⭐ (0)", "star");
+        _btnFilterStar.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
 
         _btnMarkAll = new IconButton("Mark All Ready", "check");
         _btnMarkAll.Clicked += MarkAllReady;
 
         _btnClearAll = new IconButton("Clear Ready", "cross");
         _btnClearAll.Clicked += ClearAllReady;
+
+        _btnSizeS = IconButton.Icon("gallery_size_s");
+        _btnSizeS.Toggled = true;
+        _btnSizeS.Clicked += () => SetThumbSize(GalleryThumbSize.Small);
+
+        _btnSizeM = IconButton.Icon("gallery_size_m");
+        _btnSizeM.Clicked += () => SetThumbSize(GalleryThumbSize.Medium);
+
+        _btnSizeL = IconButton.Icon("gallery_size_l");
+        _btnSizeL.Clicked += () => SetThumbSize(GalleryThumbSize.Large);
 
         _countLabel = new VisualElement
         {
@@ -125,9 +155,12 @@ public sealed class GalleryView : ScrollContainer
 
         _headerBar.AddChild(_btnFilterAll);
         _headerBar.AddChild(_btnFilterReady);
-        _headerBar.AddChild(_btnFilterUnmarked);
+        _headerBar.AddChild(_btnFilterStar);
         _headerBar.AddChild(_btnMarkAll);
         _headerBar.AddChild(_btnClearAll);
+        _headerBar.AddChild(_btnSizeS);
+        _headerBar.AddChild(_btnSizeM);
+        _headerBar.AddChild(_btnSizeL);
         _headerBar.AddChild(_countLabel);
         AddChild(_headerBar);
     }
@@ -178,7 +211,30 @@ public sealed class GalleryView : ScrollContainer
         }
         UpdateFilterCounts();
 
-        if (_filter != GalleryFilter.All)
+        if (_filter != PhotoFilter.All)
+        {
+            UpdateFilteredIndices();
+            InvalidateLayout();
+        }
+        InvalidatePaint();
+    }
+
+    public void SetFavorite(int index, bool favorite)
+    {
+        if (index >= 0 && index < _docs.Count)
+            _docs[index].IsFavorite = favorite;
+
+        foreach (var card in _activeCards.Values)
+        {
+            if (card.Index == index)
+            {
+                card.SetFavorite(favorite);
+                break;
+            }
+        }
+        UpdateFilterCounts();
+
+        if (_filter != PhotoFilter.All)
         {
             UpdateFilteredIndices();
             InvalidateLayout();
@@ -207,30 +263,70 @@ public sealed class GalleryView : ScrollContainer
         InvalidatePaint();
     }
 
-    public void SetFilter(GalleryFilter filter)
+    public void SetFilter(PhotoFilter filter)
     {
+        if (_filter == filter) return;
         _filter = filter;
-        _btnFilterAll.Toggled = filter == GalleryFilter.All;
-        _btnFilterReady.Toggled = filter == GalleryFilter.ReadyOnly;
-        _btnFilterUnmarked.Toggled = filter == GalleryFilter.UnmarkedOnly;
+        ApplyFilterChrome();
         UpdateFilteredIndices();
         ScrollY = 0f;
         InvalidateLayout();
         InvalidatePaint();
+        FilterChanged?.Invoke(_filter);
+    }
+
+    public void SetThumbSize(GalleryThumbSize size)
+    {
+        if (_thumbSize == size)
+        {
+            ApplySizeChrome();
+            return;
+        }
+
+        _thumbSize = size;
+        ApplySizeChrome();
+        _lastFirstRow = -1;
+        _lastLastRow = -1;
+        _lastCols = -1;
+        ScrollY = 0f;
+        InvalidateLayout();
+        InvalidatePaint();
+    }
+
+    private void ApplySizeChrome()
+    {
+        _btnSizeS.Toggled = _thumbSize == GalleryThumbSize.Small;
+        _btnSizeM.Toggled = _thumbSize == GalleryThumbSize.Medium;
+        _btnSizeL.Toggled = _thumbSize == GalleryThumbSize.Large;
+    }
+
+    private void ToggleFilterFlag(PhotoFilter flag)
+    {
+        SetFilter(_filter ^ flag);
+    }
+
+    private void ApplyFilterChrome()
+    {
+        _btnFilterAll.Toggled = _filter == PhotoFilter.All;
+        _btnFilterReady.Toggled = (_filter & PhotoFilter.Ready) != 0;
+        _btnFilterStar.Toggled = (_filter & PhotoFilter.Favorite) != 0;
     }
 
     private void UpdateFilterCounts()
     {
         int total = _docs.Count;
         int ready = 0;
+        int starred = 0;
         for (int i = 0; i < total; i++)
+        {
             if (_docs[i].IsReady) ready++;
-        int unmarked = total - ready;
+            if (_docs[i].IsFavorite) starred++;
+        }
 
         _btnFilterAll.Caption = $"All ({total})";
         _btnFilterReady.Caption = $"Ready ({ready})";
-        _btnFilterUnmarked.Caption = $"Unmarked ({unmarked})";
-        _countLabel.Text = $"{total} photos · {ready} ready";
+        _btnFilterStar.Caption = $"⭐ ({starred})";
+        _countLabel.Text = $"{total} photos · {ready} ready · {starred} starred";
     }
 
     private void UpdateFilteredIndices()
@@ -238,13 +334,7 @@ public sealed class GalleryView : ScrollContainer
         _filteredIndices.Clear();
         for (int i = 0; i < _docs.Count; i++)
         {
-            bool match = _filter switch
-            {
-                GalleryFilter.ReadyOnly => _docs[i].IsReady,
-                GalleryFilter.UnmarkedOnly => !_docs[i].IsReady,
-                _ => true
-            };
-            if (match)
+            if (PhotoFilterMatch.Matches(_docs[i], _filter))
                 _filteredIndices.Add(i);
         }
     }
@@ -258,7 +348,7 @@ public sealed class GalleryView : ScrollContainer
             card.SetReady(true);
 
         UpdateFilterCounts();
-        if (_filter != GalleryFilter.All)
+        if (_filter != PhotoFilter.All)
         {
             UpdateFilteredIndices();
             InvalidateLayout();
@@ -276,7 +366,7 @@ public sealed class GalleryView : ScrollContainer
             card.SetReady(false);
 
         UpdateFilterCounts();
-        if (_filter != GalleryFilter.All)
+        if (_filter != PhotoFilter.All)
         {
             UpdateFilteredIndices();
             InvalidateLayout();
@@ -306,12 +396,20 @@ public sealed class GalleryView : ScrollContainer
 
         _btnFilterAll.Transform.SetAbsoluteFrame(hx, hy, 90f, btnH); hx += 94f;
         _btnFilterReady.Transform.SetAbsoluteFrame(hx, hy, 108f, btnH); hx += 112f;
-        _btnFilterUnmarked.Transform.SetAbsoluteFrame(hx, hy, 126f, btnH); hx += 134f;
+        _btnFilterStar.Transform.SetAbsoluteFrame(hx, hy, 110f, btnH); hx += 114f;
 
         _btnMarkAll.Transform.SetAbsoluteFrame(hx, hy, 144f, btnH); hx += 148f;
         _btnClearAll.Transform.SetAbsoluteFrame(hx, hy, 118f, btnH);
 
-        _countLabel.Transform.SetAbsoluteFrame(ox + w - Pad - 200f, hy + 6f, 200f, 20f);
+        float sizeBtn = 32f;
+        float sizeGap = 4f;
+        float sizeClusterW = sizeBtn * 3f + sizeGap * 2f;
+        float sizeX = ox + w - Pad - sizeClusterW;
+        _btnSizeS.Transform.SetAbsoluteFrame(sizeX, hy, sizeBtn, btnH); sizeX += sizeBtn + sizeGap;
+        _btnSizeM.Transform.SetAbsoluteFrame(sizeX, hy, sizeBtn, btnH); sizeX += sizeBtn + sizeGap;
+        _btnSizeL.Transform.SetAbsoluteFrame(sizeX, hy, sizeBtn, btnH);
+
+        _countLabel.Transform.SetAbsoluteFrame(ox + w - Pad - sizeClusterW - 12f - 200f, hy + 6f, 200f, 20f);
 
         // Grid layout calculations
         float startY = TopBarH + Pad;
@@ -449,6 +547,28 @@ public sealed class GalleryView : ScrollContainer
     internal void OnCardReadyToggled(int index, bool ready)
     {
         ReadyToggled?.Invoke(index, ready);
+        UpdateFilterCounts();
+        if ((_filter & PhotoFilter.Ready) != 0)
+        {
+            UpdateFilteredIndices();
+            InvalidateLayout();
+        }
+    }
+
+    internal void OnCardFavoriteToggled(int index, bool favorite)
+    {
+        FavoriteToggled?.Invoke(index, favorite);
+        UpdateFilterCounts();
+        if ((_filter & PhotoFilter.Favorite) != 0)
+        {
+            UpdateFilteredIndices();
+            InvalidateLayout();
+        }
+    }
+
+    internal void OnCardContextMenu(int index, float x, float y)
+    {
+        ContextMenuRequested?.Invoke(index, x, y);
     }
 
     public override void Dispose()
@@ -471,11 +591,13 @@ public sealed class GalleryView : ScrollContainer
         private PhotoDocument? _doc;
         private bool _active;
         private bool _isReady;
+        private bool _isFavorite;
         private DateTime _lastClickTime = DateTime.MinValue;
 
         private readonly GalleryThumbWell _thumb;
         private readonly RichBox _caption;
         private readonly VisualElement _readyBtn;
+        private readonly VisualElement _starBtn;
         private readonly VisualElement _indexBadge;
 
         public int Index => _index;
@@ -554,6 +676,36 @@ public sealed class GalleryView : ScrollContainer
                 args.Handled = true;
             };
 
+            _starBtn = new VisualElement
+            {
+                Name = "GalleryCard_Star",
+                Cursor = StandardCursor.Hand,
+                BackgroundImageScale = ImageScaleMode.Contain,
+                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                BackgroundImageTintColor = Theme.Text,
+                Padding = new Thickness(3f),
+                Style = new ElementStyle
+                {
+                    BackColor = new SKColor(0, 0, 0, 150),
+                    Border = new BorderStyle
+                    {
+                        Width = 1,
+                        Color = Theme.HairlineSubtle,
+                        Roundness = 11f
+                    }
+                }
+            };
+            _starBtn.Events.OnClick += (_, args) =>
+            {
+                if (args.Button != (int)MouseButton.Left) return;
+                if (_doc == null) return;
+                _isFavorite = !_isFavorite;
+                _doc.IsFavorite = _isFavorite;
+                UpdateStarStyle();
+                _owner.OnCardFavoriteToggled(_index, _isFavorite);
+                args.Handled = true;
+            };
+
             _indexBadge = new VisualElement
             {
                 Name = "GalleryCard_Badge",
@@ -577,6 +729,7 @@ public sealed class GalleryView : ScrollContainer
             AddChild(_thumb);
             AddChild(_caption);
             AddChild(_readyBtn);
+            AddChild(_starBtn);
             AddChild(_indexBadge);
 
             Events.OnMouseEnter += _ =>
@@ -593,11 +746,18 @@ public sealed class GalleryView : ScrollContainer
                 if (!_active)
                 {
                     Style.BackColor = Theme.Section;
-                    Style.Border.Color = _isReady ? Theme.SuccessSoft : Theme.Hairline;
+                    Style.Border.Color = CardBorderColor();
                     InvalidatePaint();
                 }
             };
 
+            Events.OnMouseUp += (_, args) =>
+            {
+                if (args.Button != (int)MouseButton.Right) return;
+                _owner.OnCardClicked(_index);
+                _owner.OnCardContextMenu(_index, args.Global.X, args.Global.Y);
+                args.Handled = true;
+            };
             Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
@@ -622,11 +782,12 @@ public sealed class GalleryView : ScrollContainer
             _doc = doc;
             _active = active;
             _isReady = doc.IsReady;
+            _isFavorite = doc.IsFavorite;
             Name = $"GalleryCard_{index}";
 
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 2f : 1f;
-            Style.Border.Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline);
+            Style.Border.Color = active ? Theme.Accent : CardBorderColor();
             Style.Shadow = active
                 ? new ShadowStyle(0, 3f, 6, 6, new SKColor(255, 153, 51, 90))
                 : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70));
@@ -645,6 +806,8 @@ public sealed class GalleryView : ScrollContainer
 
             _readyBtn.Name = $"{Name}_Ready";
             UpdateReadyStyle();
+            _starBtn.Name = $"{Name}_Star";
+            UpdateStarStyle();
 
             InvalidateLayout();
             InvalidatePaint();
@@ -664,7 +827,7 @@ public sealed class GalleryView : ScrollContainer
             _active = active;
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 2f : 1f;
-            Style.Border.Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline);
+            Style.Border.Color = active ? Theme.Accent : CardBorderColor();
             Style.Shadow = active
                 ? new ShadowStyle(0, 3f, 6, 6, new SKColor(255, 153, 51, 90))
                 : new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70));
@@ -678,9 +841,22 @@ public sealed class GalleryView : ScrollContainer
             UpdateReadyStyle();
         }
 
+        public void SetFavorite(bool favorite)
+        {
+            _isFavorite = favorite;
+            UpdateStarStyle();
+        }
+
         public void RefreshThumb()
         {
             _thumb.SetImage(GetValidImage());
+        }
+
+        private SKColor CardBorderColor()
+        {
+            if (_isReady) return Theme.SuccessSoft;
+            if (_isFavorite) return Theme.FavoriteSoft;
+            return Theme.Hairline;
         }
 
         private void UpdateReadyStyle()
@@ -692,7 +868,22 @@ public sealed class GalleryView : ScrollContainer
             _readyBtn.InvalidatePaint();
             if (!_active)
             {
-                Style.Border.Color = _isReady ? Theme.SuccessSoft : Theme.Hairline;
+                Style.Border.Color = CardBorderColor();
+                InvalidatePaint();
+            }
+        }
+
+        private void UpdateStarStyle()
+        {
+            _starBtn.BackgroundSvg = IconStore.LoadSvg(_isFavorite ? "star_filled" : "star");
+            _starBtn.BackgroundImageTintColor = _isFavorite ? Theme.Favorite : Theme.Text;
+            _starBtn.Style.BackColor = _isFavorite ? Theme.AccentSoft : new SKColor(0, 0, 0, 150);
+            _starBtn.Style.Border.Color = _isFavorite ? Theme.Favorite : Theme.HairlineSubtle;
+            _starBtn.Style.Border.Roundness = 11f;
+            _starBtn.InvalidatePaint();
+            if (!_active)
+            {
+                Style.Border.Color = CardBorderColor();
                 InvalidatePaint();
             }
         }
@@ -711,6 +902,7 @@ public sealed class GalleryView : ScrollContainer
             _thumb.Transform.SetAbsoluteFrame(ox + pad, oy + pad, w - pad * 2f, thumbH);
             _caption.Transform.SetAbsoluteFrame(ox + pad, oy + pad + thumbH, w - pad * 2f, captionH);
             _readyBtn.Transform.SetAbsoluteFrame(ox + pad + 4f, oy + pad + 4f, 22f, 22f);
+            _starBtn.Transform.SetAbsoluteFrame(ox + pad + 30f, oy + pad + 4f, 22f, 22f);
             _indexBadge.Transform.SetAbsoluteFrame(ox + w - pad - 34f, oy + pad + 4f, 30f, 20f);
         }
     }

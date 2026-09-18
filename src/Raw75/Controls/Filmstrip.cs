@@ -12,16 +12,25 @@ namespace Raw75.Controls;
 /// <summary>Horizontal session strip: thumbs, names, click to select, optional close, horizontally scrollable, virtualized.</summary>
 public class Filmstrip : ScrollContainer
 {
+    public const float FilterRailW = 56f;
+
     private const float ThumbW = 96f;
     private const float Gap = 6f;
     private const float NameH = 18f;
 
+    private readonly VisualElement _filterRail;
+    private readonly IconButton _btnFilterAll;
+    private readonly IconButton _btnFilterReady;
+    private readonly IconButton _btnFilterStar;
+
     private readonly Dictionary<int, Cell> _activeCells = new();
     private readonly Stack<Cell> _cellPool = new();
     private readonly List<int> _recycledKeys = new();
+    private readonly List<int> _filteredIndices = new();
 
     private IReadOnlyList<PhotoDocument> _docs = Array.Empty<PhotoDocument>();
     private int _activeIndex = -1;
+    private PhotoFilter _filter = PhotoFilter.All;
     private int _lastMinIdx = -1;
     private int _lastMaxIdx = -1;
     private float _lastOriginX = float.NaN;
@@ -35,15 +44,46 @@ public class Filmstrip : ScrollContainer
     public event Action<int>? Selected;
     public event Action<int>? CloseRequested;
     public event Action<int, bool>? ReadyToggled;
+    public event Action<int, bool>? FavoriteToggled;
+    public event Action<PhotoFilter>? FilterChanged;
+    public event Action<int, float, float>? ContextMenuRequested;
+
+    public PhotoFilter ActiveFilter => _filter;
 
     public void SetReady(int index, bool ready)
     {
         if (index >= 0 && index < _docs.Count)
-        {
             _docs[index].IsReady = ready;
-            if (_activeCells.TryGetValue(index, out var cell))
+
+        foreach (var cell in _activeCells.Values)
+        {
+            if (cell.Index == index)
+            {
                 cell.SetReady(ready);
+                break;
+            }
         }
+
+        if ((_filter & PhotoFilter.Ready) != 0)
+            RebuildFiltered(keepScroll: true);
+    }
+
+    public void SetFavorite(int index, bool favorite)
+    {
+        if (index >= 0 && index < _docs.Count)
+            _docs[index].IsFavorite = favorite;
+
+        foreach (var cell in _activeCells.Values)
+        {
+            if (cell.Index == index)
+            {
+                cell.SetFavorite(favorite);
+                break;
+            }
+        }
+
+        if ((_filter & PhotoFilter.Favorite) != 0)
+            RebuildFiltered(keepScroll: true);
     }
 
     public Filmstrip()
@@ -73,6 +113,38 @@ public class Filmstrip : ScrollContainer
                 Roundness = 0
             }
         };
+
+        _filterRail = new VisualElement
+        {
+            Name = "Filmstrip_FilterRail",
+            Style = new ElementStyle
+            {
+                BackColor = Theme.BottomBar,
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.Hairline,
+                    Roundness = 0
+                }
+            }
+        };
+
+        _btnFilterAll = new IconButton("All");
+        _btnFilterAll.FontSize = 11f;
+        _btnFilterAll.Toggled = true;
+        _btnFilterAll.Clicked += () => SetFilter(PhotoFilter.All);
+
+        _btnFilterReady = IconButton.Icon("check");
+        _btnFilterReady.Clicked += () => ToggleFilterFlag(PhotoFilter.Ready);
+
+        _btnFilterStar = new IconButton("⭐");
+        _btnFilterStar.FontSize = 14f;
+        _btnFilterStar.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
+
+        _filterRail.AddChild(_btnFilterAll);
+        _filterRail.AddChild(_btnFilterReady);
+        _filterRail.AddChild(_btnFilterStar);
+        AddChild(_filterRail);
 
         Events.OnMouseDown += (_, args) =>
         {
@@ -112,28 +184,35 @@ public class Filmstrip : ScrollContainer
         _lastMinIdx = -1;
         _lastMaxIdx = -1;
 
-        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
-        float h = Math.Max(1f, Transform.Height > 0 ? Transform.Height : Theme.FilmH);
-        float stride = ThumbW + Gap;
-        float totalW = _docs.Count > 0 ? (Padding.Left + _docs.Count * stride - Gap + Padding.Right) : w;
-
-        SetContentSize(Math.Max(totalW, w), h);
+        UpdateFilteredIndices();
+        ApplyFilterChrome();
+        UpdateContentSize();
         UpdateVirtualCells(force: true);
         EnsureVisible(activeIndex);
         InvalidatePaint();
     }
 
+    public void SetFilter(PhotoFilter filter)
+    {
+        if (_filter == filter) return;
+        _filter = filter;
+        ApplyFilterChrome();
+        RebuildFiltered(keepScroll: false);
+        FilterChanged?.Invoke(_filter);
+    }
+
     public void EnsureVisible(int index)
     {
-        if (index < 0 || index >= _docs.Count) return;
-        float cellLeft = Padding.Left + index * (ThumbW + Gap);
+        int vis = VisualIndexOf(index);
+        if (vis < 0) return;
+        float cellLeft = FilterRailW + Padding.Left + vis * (ThumbW + Gap);
         float cellRight = cellLeft + ThumbW;
         float viewW = Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width;
         if (viewW <= 0) return;
 
-        if (cellLeft < ScrollX + Padding.Left)
+        if (cellLeft < ScrollX + FilterRailW + Padding.Left)
         {
-            AnimateScrollTo(Math.Max(0, cellLeft - Padding.Left), 0);
+            AnimateScrollTo(Math.Max(0, cellLeft - FilterRailW - Padding.Left), 0);
         }
         else if (cellRight > ScrollX + viewW - Padding.Right)
         {
@@ -178,19 +257,85 @@ public class Filmstrip : ScrollContainer
 
     protected override void LayoutChildren()
     {
-        float w = Math.Max(1f, Transform.Computed.Width);
-        float h = Math.Max(1f, Transform.Height);
-        float stride = ThumbW + Gap;
-        float totalW = _docs.Count > 0 ? (Padding.Left + _docs.Count * stride - Gap + Padding.Right) : w;
-        SetContentSize(Math.Max(totalW, w), h);
-
+        UpdateContentSize();
         base.LayoutChildren();
         UpdateVirtualCells(force: true);
     }
 
+    private void ToggleFilterFlag(PhotoFilter flag)
+    {
+        PhotoFilter next = _filter ^ flag;
+        SetFilter(next);
+    }
+
+    private void ApplyFilterChrome()
+    {
+        _btnFilterAll.Toggled = _filter == PhotoFilter.All;
+        _btnFilterReady.Toggled = (_filter & PhotoFilter.Ready) != 0;
+        _btnFilterStar.Toggled = (_filter & PhotoFilter.Favorite) != 0;
+    }
+
+    private void RebuildFiltered(bool keepScroll)
+    {
+        float oldScroll = ScrollX;
+        UpdateFilteredIndices();
+        _lastMinIdx = -1;
+        _lastMaxIdx = -1;
+        UpdateContentSize();
+        if (!keepScroll)
+            ScrollX = 0f;
+        else
+            ScrollX = oldScroll;
+        UpdateVirtualCells(force: true);
+        EnsureVisible(_activeIndex);
+        InvalidatePaint();
+    }
+
+    private void UpdateFilteredIndices()
+    {
+        _filteredIndices.Clear();
+        for (int i = 0; i < _docs.Count; i++)
+        {
+            if (PhotoFilterMatch.Matches(_docs[i], _filter))
+                _filteredIndices.Add(i);
+        }
+    }
+
+    private int VisualIndexOf(int docIndex)
+    {
+        for (int i = 0; i < _filteredIndices.Count; i++)
+        {
+            if (_filteredIndices[i] == docIndex)
+                return i;
+        }
+        return -1;
+    }
+
+    private void UpdateContentSize()
+    {
+        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
+        float h = Math.Max(1f, Transform.Height > 0 ? Transform.Height : Theme.FilmH);
+        float stride = ThumbW + Gap;
+        int n = _filteredIndices.Count;
+        float totalW = n > 0
+            ? (FilterRailW + Padding.Left + n * stride - Gap + Padding.Right)
+            : Math.Max(w, FilterRailW + 8f);
+        SetContentSize(Math.Max(totalW, w), h);
+    }
+
     private void UpdateVirtualCells(bool force = false)
     {
-        if (_docs.Count == 0)
+        float originX = Transform.Computed.X;
+        float originY = Transform.Computed.Y;
+        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
+        float h = Math.Max(1f, Transform.Height > 0 ? Transform.Height : Theme.FilmH);
+        float cellH = Math.Max(1f, h - Padding.Vertical);
+        float stride = ThumbW + Gap;
+        float scrollX = ScrollX;
+
+        LayoutFilterRail(originX, originY, h, scrollX);
+
+        if (_filteredIndices.Count == 0)
         {
             foreach (var cell in _activeCells.Values)
             {
@@ -203,19 +348,12 @@ public class Filmstrip : ScrollContainer
             return;
         }
 
-        float originX = Transform.Computed.X;
-        float originY = Transform.Computed.Y;
-        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
-        float h = Math.Max(1f, Transform.Height > 0 ? Transform.Height : Theme.FilmH);
-        float cellH = Math.Max(1f, h - Padding.Vertical);
-        float stride = ThumbW + Gap;
+        float thumbsLeft = FilterRailW + Padding.Left;
+        int minIdx = (int)Math.Floor((scrollX - thumbsLeft - ThumbW) / stride) - 2;
+        int maxIdx = (int)Math.Ceiling((scrollX + w - thumbsLeft) / stride) + 2;
 
-        float scrollX = ScrollX;
-        int minIdx = (int)Math.Floor((scrollX - Padding.Left - ThumbW) / stride) - 2;
-        int maxIdx = (int)Math.Ceiling((scrollX + w - Padding.Left) / stride) + 2;
-
-        minIdx = Math.Clamp(minIdx, 0, _docs.Count - 1);
-        maxIdx = Math.Clamp(maxIdx, 0, _docs.Count - 1);
+        minIdx = Math.Clamp(minIdx, 0, _filteredIndices.Count - 1);
+        maxIdx = Math.Clamp(maxIdx, 0, _filteredIndices.Count - 1);
 
         bool originChanged = originX != _lastOriginX || originY != _lastOriginY || cellH != _lastHeight;
         if (!force && !originChanged && minIdx == _lastMinIdx && maxIdx == _lastMaxIdx)
@@ -229,7 +367,6 @@ public class Filmstrip : ScrollContainer
         _lastOriginY = originY;
         _lastHeight = cellH;
 
-        // Recycle cells that are now outside the visible window
         _recycledKeys.Clear();
         foreach (var kvp in _activeCells)
         {
@@ -245,17 +382,17 @@ public class Filmstrip : ScrollContainer
         for (int i = 0; i < _recycledKeys.Count; i++)
             _activeCells.Remove(_recycledKeys[i]);
 
-        // Place or rebind cells within the visible window
-        for (int i = minIdx; i <= maxIdx; i++)
+        for (int vis = minIdx; vis <= maxIdx; vis++)
         {
-            float cellAbsX = originX + Padding.Left + i * stride;
+            int docIdx = _filteredIndices[vis];
+            float cellAbsX = originX + FilterRailW + Padding.Left + vis * stride;
             float cellAbsY = originY + Padding.Top;
 
-            if (_activeCells.TryGetValue(i, out var cell))
+            if (_activeCells.TryGetValue(vis, out var cell))
             {
                 if (force)
                 {
-                    cell.Rebind(i, _docs[i], i == _activeIndex);
+                    cell.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
                     cell.Transform.SetAbsoluteFrame(cellAbsX, cellAbsY, ThumbW, cellH);
                 }
                 else if (originChanged)
@@ -276,19 +413,38 @@ public class Filmstrip : ScrollContainer
                     AddChild(cell);
                 }
 
-                cell.Rebind(i, _docs[i], i == _activeIndex);
+                cell.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
                 cell.Transform.SetAbsoluteFrame(cellAbsX, cellAbsY, ThumbW, cellH);
                 cell.Visible = true;
-                _activeCells[i] = cell;
+                _activeCells[vis] = cell;
             }
         }
+    }
+
+    private void LayoutFilterRail(float originX, float originY, float h, float scrollX)
+    {
+        // Pin the rail to the visual left edge while thumbs scroll underneath.
+        float railX = originX + scrollX;
+        _filterRail.Transform.SetAbsoluteFrame(railX, originY, FilterRailW, h);
+        _filterRail.ZIndex = 20;
+
+        float btnW = 44f;
+        float btnH = 28f;
+        float gap = 4f;
+        float stackH = btnH * 3f + gap * 2f;
+        float startY = originY + Math.Max(6f, (h - stackH) * 0.5f);
+        float bx = railX + (FilterRailW - btnW) * 0.5f;
+
+        _btnFilterAll.Transform.SetAbsoluteFrame(bx, startY, btnW, btnH);
+        _btnFilterReady.Transform.SetAbsoluteFrame(bx, startY + btnH + gap, btnW, btnH);
+        _btnFilterStar.Transform.SetAbsoluteFrame(bx, startY + (btnH + gap) * 2f, btnW, btnH);
     }
 
     private void OnCellSelected(int index)
     {
         _activeIndex = index;
         foreach (var pair in _activeCells)
-            pair.Value.SetActive(pair.Key == index);
+            pair.Value.SetActive(pair.Value.Index == index);
         EnsureVisible(index);
         Selected?.Invoke(index);
     }
@@ -311,10 +467,12 @@ public class Filmstrip : ScrollContainer
         private readonly ThumbWell _thumb;
         private readonly RichBox _caption;
         private readonly VisualElement _ready;
+        private readonly VisualElement _star;
         private readonly VisualElement _close;
         private PhotoDocument? _doc;
         private bool _active;
         private bool _isReady;
+        private bool _isFavorite;
 
         public int Index => _index;
         public PhotoDocument? Doc => _doc;
@@ -363,24 +521,7 @@ public class Filmstrip : ScrollContainer
                 }
             };
 
-            _ready = new VisualElement
-            {
-                Name = "Cell_Ready",
-                Cursor = StandardCursor.Hand,
-                BackgroundImageScale = ImageScaleMode.Contain,
-                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
-                BackgroundImageTintColor = SKColors.White,
-                Style = new ElementStyle
-                {
-                    BackColor = new SKColor(0, 0, 0, 140),
-                    Border = new BorderStyle
-                    {
-                        Width = 1,
-                        Color = Theme.HairlineSubtle,
-                        Roundness = 9f
-                    }
-                }
-            };
+            _ready = MakeMarkButton("Cell_Ready");
             _ready.Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
@@ -389,6 +530,18 @@ public class Filmstrip : ScrollContainer
                 _doc.IsReady = _isReady;
                 UpdateReadyStyle();
                 _owner.ReadyToggled?.Invoke(_index, _isReady);
+                args.Handled = true;
+            };
+
+            _star = MakeMarkButton("Cell_Star");
+            _star.Events.OnClick += (_, args) =>
+            {
+                if (args.Button != (int)MouseButton.Left) return;
+                if (_doc == null) return;
+                _isFavorite = !_isFavorite;
+                _doc.IsFavorite = _isFavorite;
+                UpdateStarStyle();
+                _owner.FavoriteToggled?.Invoke(_index, _isFavorite);
                 args.Handled = true;
             };
 
@@ -429,6 +582,7 @@ public class Filmstrip : ScrollContainer
             AddChild(_thumb);
             AddChild(_caption);
             AddChild(_ready);
+            AddChild(_star);
             AddChild(_close);
 
             Events.OnMouseEnter += _ =>
@@ -446,12 +600,19 @@ public class Filmstrip : ScrollContainer
                 if (!_active)
                 {
                     Style.BackColor = Theme.Section;
-                    Style.Border.Color = _isReady ? Theme.SuccessSoft : Theme.Hairline;
+                    Style.Border.Color = CellBorderColor();
                     _caption.Style.Text.Color = Theme.TextDim;
                     InvalidatePaint();
                 }
             };
 
+            Events.OnMouseUp += (_, args) =>
+            {
+                if (args.Button != (int)MouseButton.Right) return;
+                _owner.OnCellSelected(_index);
+                _owner.ContextMenuRequested?.Invoke(_index, args.Global.X, args.Global.Y);
+                args.Handled = true;
+            };
             Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
@@ -466,11 +627,12 @@ public class Filmstrip : ScrollContainer
             _doc = doc;
             _active = active;
             _isReady = doc.IsReady;
+            _isFavorite = doc.IsFavorite;
             Name = $"FilmstripCell_{index}";
 
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 1.5f : 1f;
-            Style.Border.Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline);
+            Style.Border.Color = active ? Theme.Accent : CellBorderColor();
             Style.Border.Roundness = Theme.RadiusSm;
             Style.Shadow = active
                 ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80))
@@ -486,6 +648,8 @@ public class Filmstrip : ScrollContainer
 
             _ready.Name = $"{Name}_Ready";
             UpdateReadyStyle();
+            _star.Name = $"{Name}_Star";
+            UpdateStarStyle();
 
             _close.Name = $"{Name}_Close";
             _close.Style.BackColor = new SKColor(0, 0, 0, 160);
@@ -509,7 +673,7 @@ public class Filmstrip : ScrollContainer
             _active = active;
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 1.5f : 1f;
-            Style.Border.Color = active ? Theme.Accent : (_isReady ? Theme.SuccessSoft : Theme.Hairline);
+            Style.Border.Color = active ? Theme.Accent : CellBorderColor();
             Style.Shadow = active ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80)) : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
             _caption.Style.Text.Color = active ? Theme.Accent : Theme.TextDim;
             InvalidatePaint();
@@ -521,9 +685,22 @@ public class Filmstrip : ScrollContainer
             UpdateReadyStyle();
         }
 
+        public void SetFavorite(bool favorite)
+        {
+            _isFavorite = favorite;
+            UpdateStarStyle();
+        }
+
         public void RefreshThumb()
         {
             _thumb.SetImage(GetValidImage());
+        }
+
+        private SKColor CellBorderColor()
+        {
+            if (_isReady) return Theme.SuccessSoft;
+            if (_isFavorite) return Theme.FavoriteSoft;
+            return Theme.Hairline;
         }
 
         private void UpdateReadyStyle()
@@ -535,7 +712,22 @@ public class Filmstrip : ScrollContainer
             _ready.InvalidatePaint();
             if (!_active)
             {
-                Style.Border.Color = _isReady ? Theme.SuccessSoft : Theme.Hairline;
+                Style.Border.Color = CellBorderColor();
+                InvalidatePaint();
+            }
+        }
+
+        private void UpdateStarStyle()
+        {
+            _star.BackgroundSvg = IconStore.LoadSvg(_isFavorite ? "star_filled" : "star");
+            _star.BackgroundImageTintColor = _isFavorite ? Theme.Favorite : Theme.Text;
+            _star.Style.BackColor = _isFavorite ? Theme.AccentSoft : new SKColor(0, 0, 0, 140);
+            _star.Style.Border.Color = _isFavorite ? Theme.Favorite : Theme.HairlineSubtle;
+            _star.Style.Border.Roundness = 9f;
+            _star.InvalidatePaint();
+            if (!_active)
+            {
+                Style.Border.Color = CellBorderColor();
                 InvalidatePaint();
             }
         }
@@ -551,7 +743,31 @@ public class Filmstrip : ScrollContainer
             _thumb.Transform.SetAbsoluteFrame(originX + 4, originY + 4, w - 8, thumbH);
             _caption.Transform.SetAbsoluteFrame(originX + 2, originY + 4 + thumbH, w - 4, NameH);
             _ready.Transform.SetAbsoluteFrame(originX + 6, originY + 6, 18, 18);
+            _star.Transform.SetAbsoluteFrame(originX + 26, originY + 6, 18, 18);
             _close.Transform.SetAbsoluteFrame(originX + w - 20, originY + 6, 14, 14);
+        }
+
+        private static VisualElement MakeMarkButton(string name)
+        {
+            return new VisualElement
+            {
+                Name = name,
+                Cursor = StandardCursor.Hand,
+                BackgroundImageScale = ImageScaleMode.Contain,
+                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                BackgroundImageTintColor = SKColors.White,
+                Padding = new Thickness(2f),
+                Style = new ElementStyle
+                {
+                    BackColor = new SKColor(0, 0, 0, 140),
+                    Border = new BorderStyle
+                    {
+                        Width = 1,
+                        Color = Theme.HairlineSubtle,
+                        Roundness = 9f
+                    }
+                }
+            };
         }
     }
 

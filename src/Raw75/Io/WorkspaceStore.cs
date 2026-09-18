@@ -136,6 +136,7 @@ public static class WorkspaceStore
                 meta.Settings.Hsl = DevelopSettings.CreateHsl();
             doc.Settings.CopyFrom(meta.Settings);
             doc.IsReady = meta.IsReady;
+            doc.IsFavorite = meta.IsFavorite;
             doc.HasSavedSettings = true;
 
             SKImage? preview = LoadJpeg(Path.Combine(dir, "preview.jpg"));
@@ -186,6 +187,7 @@ public static class WorkspaceStore
             var meta = Stamp(doc.Path);
             meta.Settings = doc.Settings.Clone();
             meta.IsReady = doc.IsReady;
+            meta.IsFavorite = doc.IsFavorite;
             doc.HasSavedSettings = true;
             File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(meta, JsonOptions));
         }
@@ -214,6 +216,7 @@ public static class WorkspaceStore
                 meta.Settings = doc.Settings.Clone();
             }
             meta.IsReady = doc.IsReady;
+            meta.IsFavorite = doc.IsFavorite;
             File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, JsonOptions));
         }
         catch (Exception ex)
@@ -232,6 +235,7 @@ public static class WorkspaceStore
             var meta = Stamp(doc.Path);
             meta.Settings = settings.Clone();
             meta.IsReady = doc.IsReady;
+            meta.IsFavorite = doc.IsFavorite;
             File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(meta, JsonOptions));
             if (previewJpeg is { Length: > 0 })
                 File.WriteAllBytes(Path.Combine(dir, "preview.jpg"), previewJpeg);
@@ -558,6 +562,7 @@ public static class WorkspaceStore
         public DateTime MtimeUtc { get; set; }
         public DevelopSettings? Settings { get; set; }
         public bool IsReady { get; set; }
+        public bool IsFavorite { get; set; }
     }
 
     private sealed class WorkspacePrefs

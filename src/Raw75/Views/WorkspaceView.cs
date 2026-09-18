@@ -46,6 +46,7 @@ public sealed class WorkspaceView : View
     private DevelopSettings? _copiedSettings;
     private VisualElement _zoomLabel = null!;
     private GalleryView _gallery = null!;
+    private PhotoMarkMenu _markMenu = null!;
     private VisualElement _toolsBar = null!;
     private IconButton _btnViewerMode = null!;
     private IconButton _btnGalleryMode = null!;
@@ -331,17 +332,10 @@ public sealed class WorkspaceView : View
             _session.Select(idx);
             SetViewMode(false);
         };
-        _gallery.ReadyToggled += (idx, ready) =>
-        {
-            if (idx >= 0 && idx < _session.Documents.Count)
-            {
-                var doc = _session.Documents[idx];
-                doc.IsReady = ready;
-                _film.SetReady(idx, ready);
-                WorkspaceStore.SaveReadyState(doc);
-                UpdateTitleBadge();
-            }
-        };
+        _gallery.ReadyToggled += OnReadyToggled;
+        _gallery.FavoriteToggled += OnFavoriteToggled;
+        _gallery.FilterChanged += f => _film.SetFilter(f);
+        _gallery.ContextMenuRequested += OpenMarkMenu;
         _gallery.BatchReadyChanged += () =>
         {
             for (int i = 0; i < _session.Documents.Count; i++)
@@ -463,17 +457,10 @@ public sealed class WorkspaceView : View
                 _gate.Show();
             }
         };
-        _film.ReadyToggled += (idx, ready) =>
-        {
-            if (idx >= 0 && idx < _session.Documents.Count)
-            {
-                var doc = _session.Documents[idx];
-                doc.IsReady = ready;
-                _gallery.SetReady(idx, ready);
-                WorkspaceStore.SaveReadyState(doc);
-                UpdateTitleBadge();
-            }
-        };
+        _film.ReadyToggled += OnReadyToggled;
+        _film.FavoriteToggled += OnFavoriteToggled;
+        _film.FilterChanged += f => _gallery.SetFilter(f);
+        _film.ContextMenuRequested += OpenMarkMenu;
         AddElement(_film);
 
         // Status badge: floating pill overlaying the image at the bottom, visible only when showing a message
@@ -528,6 +515,17 @@ public sealed class WorkspaceView : View
         _gate = new WorkspaceGate();
         _gate.FolderPicked += folder => LoadWorkspace(folder, rememberActive: false);
         AddElement(_gate);
+
+        _markMenu = new PhotoMarkMenu
+        {
+            Transform = new Transform(0, 0, W, H)
+            {
+                Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
+            }
+        };
+        _markMenu.ReadyToggled += OnReadyToggled;
+        _markMenu.FavoriteToggled += OnFavoriteToggled;
+        AddElement(_markMenu);
     }
 
     private void BuildRightPanels(RightColumn host)
@@ -968,13 +966,38 @@ public sealed class WorkspaceView : View
     {
         var d = _session.Active;
         if (d == null) return;
-        d.IsReady = force ?? !d.IsReady;
-        int idx = _session.ActiveIndex;
-        _film.SetReady(idx, d.IsReady);
-        _gallery.SetReady(idx, d.IsReady);
-        WorkspaceStore.SaveReadyState(d);
+        OnReadyToggled(_session.ActiveIndex, force ?? !d.IsReady);
+    }
+
+    private void OnReadyToggled(int idx, bool ready)
+    {
+        if (idx < 0 || idx >= _session.Documents.Count) return;
+        var doc = _session.Documents[idx];
+        doc.IsReady = ready;
+        _film.SetReady(idx, ready);
+        _gallery.SetReady(idx, ready);
+        WorkspaceStore.SaveReadyState(doc);
         UpdateTitleBadge();
-        SetStatus(d.IsReady ? $"Marked ready: {d.Name}" : $"Unmarked: {d.Name}");
+        SetStatus(ready ? $"Marked ready: {doc.Name}" : $"Unmarked ready: {doc.Name}");
+    }
+
+    private void OnFavoriteToggled(int idx, bool favorite)
+    {
+        if (idx < 0 || idx >= _session.Documents.Count) return;
+        var doc = _session.Documents[idx];
+        doc.IsFavorite = favorite;
+        _film.SetFavorite(idx, favorite);
+        _gallery.SetFavorite(idx, favorite);
+        WorkspaceStore.SaveReadyState(doc);
+        UpdateTitleBadge();
+        SetStatus(favorite ? $"Starred: {doc.Name}" : $"Unstarred: {doc.Name}");
+    }
+
+    private void OpenMarkMenu(int idx, float x, float y)
+    {
+        if (idx < 0 || idx >= _session.Documents.Count) return;
+        var doc = _session.Documents[idx];
+        _markMenu.Open(idx, doc.IsReady, doc.IsFavorite, x, y, Width, Height);
     }
 
     private void OnLivePreview(PhotoDocument doc)
@@ -1870,7 +1893,8 @@ public sealed class WorkspaceView : View
             || (_nameDialog != null && _nameDialog.Visible)
             || (_export != null && _export.Visible)
             || (_settings != null && _settings.Visible)
-            || (_gate != null && _gate.Visible);
+            || (_gate != null && _gate.Visible)
+            || (_markMenu != null && _markMenu.Visible);
 
         if (isModalOrText)
         {
@@ -1897,6 +1921,10 @@ public sealed class WorkspaceView : View
             else if (_gate != null && _gate.Visible)
             {
                 if (key == Key.Enter || key == Key.O) { _gate.Pick(); return; }
+            }
+            else if (_markMenu != null && _markMenu.Visible)
+            {
+                if (key == Key.Escape) { _markMenu.Close(); return; }
             }
             return;
         }

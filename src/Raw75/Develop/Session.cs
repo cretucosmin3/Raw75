@@ -86,6 +86,7 @@ public sealed class Session : IDisposable
             var doc = Documents[i];
             doc.Settings.Reset();
             doc.IsReady = false;
+            doc.IsFavorite = false;
             doc.Undo.Clear();
             doc.UnloadWorking();
 
