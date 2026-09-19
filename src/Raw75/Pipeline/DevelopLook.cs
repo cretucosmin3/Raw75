@@ -33,7 +33,6 @@ internal sealed class DevelopLook : IDisposable
     private float _cachedHlThreshold;
     private float _cachedReconColorAmount;
     private float _cachedReconColorSpatial;
-    private bool _cachedStage1Fast;
     private bool _stage1Dirty = true;
 
     // Stage 2 tracking
@@ -41,7 +40,6 @@ internal sealed class DevelopLook : IDisposable
     private float _cachedTexture;
     private float _cachedDenoiseLuma;
     private float _cachedDenoiseChroma;
-    private bool _cachedStage2Fast;
     private bool _stage2Dirty = true;
 
     // Monolithic fallback cache
@@ -54,7 +52,12 @@ internal sealed class DevelopLook : IDisposable
 
     public bool Failed { get; private set; }
 
-    public void Invalidate() => _dirty = true;
+    public void Invalidate()
+    {
+        _dirty = true;
+        _stage1Dirty = true;
+        _stage2Dirty = true;
+    }
 
     public void InvalidateAll()
     {
@@ -148,13 +151,12 @@ internal sealed class DevelopLook : IDisposable
                 || curReconMode != _cachedReconMode
                 || curHlThresh != _cachedHlThreshold
                 || curColorAmt != _cachedReconColorAmount
-                || curColorSpatial != _cachedReconColorSpatial
-                || (curReconMode != HighlightMode.Off && fast != _cachedStage1Fast);
+                || curColorSpatial != _cachedReconColorSpatial;
 
             if (needStage1)
             {
                 var u1 = new SKRuntimeEffectUniforms(eff1);
-                DevelopRenderer.BindStage1Uniforms(u1, settings, source.Width, source.Height, fast, srcLinear);
+                DevelopRenderer.BindStage1Uniforms(u1, settings, source.Width, source.Height, fast: false, srcLinear);
 
                 using var srcShader = source.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
                 if (srcShader == null) return false;
@@ -168,7 +170,6 @@ internal sealed class DevelopLook : IDisposable
                 _cachedHlThreshold = curHlThresh;
                 _cachedReconColorAmount = curColorAmt;
                 _cachedReconColorSpatial = curColorSpatial;
-                _cachedStage1Fast = fast;
                 _stage1Dirty = false;
                 _stage2Dirty = true; // Stage 1 change forces Stage 2 update
             }
@@ -193,13 +194,12 @@ internal sealed class DevelopLook : IDisposable
                     || curDetail != _cachedLocalDetail
                     || curTex != _cachedTexture
                     || curDenoiseLuma != _cachedDenoiseLuma
-                    || curDenoiseChroma != _cachedDenoiseChroma
-                    || fast != _cachedStage2Fast;
+                    || curDenoiseChroma != _cachedDenoiseChroma;
 
                 if (needStage2)
                 {
                     var u2 = new SKRuntimeEffectUniforms(eff2);
-                    DevelopRenderer.BindStage2Uniforms(u2, settings, source.Width, source.Height, fast);
+                    DevelopRenderer.BindStage2Uniforms(u2, settings, source.Width, source.Height, fast: false);
 
                     SKImage inputForStage2 = _stage1Image ?? source;
                     using var s1Shader = inputForStage2.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
@@ -214,7 +214,6 @@ internal sealed class DevelopLook : IDisposable
                     _cachedTexture = curTex;
                     _cachedDenoiseLuma = curDenoiseLuma;
                     _cachedDenoiseChroma = curDenoiseChroma;
-                    _cachedStage2Fast = fast;
                     _stage2Dirty = false;
                 }
             }

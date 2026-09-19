@@ -48,10 +48,10 @@ public sealed class PhotoPane : VisualElement
 
     private void InvalidateAllLooks()
     {
-        _look.Invalidate();
-        _tileLook.Invalidate();
-        _beforeLook.Invalidate();
-        _tileBeforeLook.Invalidate();
+        _look.InvalidateAll();
+        _tileLook.InvalidateAll();
+        _beforeLook.InvalidateAll();
+        _tileBeforeLook.InvalidateAll();
     }
 
     private DevelopSettings GetBaselineSettings()
@@ -161,8 +161,8 @@ public sealed class PhotoPane : VisualElement
                 SplitBeforeChanged?.Invoke(false);
             }
             StartBeforeTransition(_showBefore);
-            _beforeLook.Invalidate();
-            _tileBeforeLook.Invalidate();
+            _beforeLook.InvalidateAll();
+            _tileBeforeLook.InvalidateAll();
             InvalidatePaint();
             ShowBeforeChanged?.Invoke(_showBefore);
         }
@@ -252,8 +252,8 @@ public sealed class PhotoPane : VisualElement
                 _beforeTarget = 0f;
                 ShowBeforeChanged?.Invoke(false);
             }
-            _beforeLook.Invalidate();
-            _tileBeforeLook.Invalidate();
+            _beforeLook.InvalidateAll();
+            _tileBeforeLook.InvalidateAll();
             InvalidatePaint();
             SplitBeforeChanged?.Invoke(_splitBefore);
         }
@@ -725,7 +725,7 @@ public sealed class PhotoPane : VisualElement
         var pane = new SKRect(0, 0, Transform.Computed.Width, Transform.Computed.Height);
         bool applyCrop = !_cropTool && _settings.HasCrop;
 
-        bool isFast = _lookFast || _isInteracting;
+        bool isFast = _lookFast;
 
         if (_splitBefore)
         {
@@ -1919,8 +1919,8 @@ public sealed class PhotoPane : VisualElement
             _crop.FlipCrop(h: false);
         _freeZoom = false;
         ZoomMode = ZoomMode.Fit;
-        _look.Invalidate();
-        _tileLook.Invalidate();
+        _look.InvalidateAll();
+        _tileLook.InvalidateAll();
         GetFrameSize(out int fw, out int fh);
         if (_crop.RatioId != "free")
             _crop.ApplyRatio(_crop.RatioId, fw, fh);
@@ -2113,8 +2113,8 @@ public sealed class PhotoPane : VisualElement
                     StraightenPreview = 0f;
                     if (_settings != null)
                         _settings.Straighten = 0f;
-                    _look.Invalidate();
-                    _tileLook.Invalidate();
+                    _look.InvalidateAll();
+                    _tileLook.InvalidateAll();
                     break;
                 case "cancel":
                     CancelCrop();

@@ -261,7 +261,7 @@ internal static class DevelopCpu
                     float c0_g = g - lc;
                     float c0_b = b - lc;
 
-                    float rangeSigma = 0.05f + 0.35f * denoiseAmt;
+                    float rangeSigma = 0.04f + 0.12f * denoiseAmt;
                     float sumL = lc;
                     float sumW_L = 1.0f;
                     float sumCr = c0_r, sumCg = c0_g, sumCb = c0_b;
@@ -297,8 +297,8 @@ internal static class DevelopCpu
                         Tap(-4, 0, 0.25f); Tap(4, 0, 0.25f); Tap(0, -4, 0.25f); Tap(0, 4, 0.25f);
                     }
 
-                    float kL = fast ? denoiseAmt * 0.80f : denoiseAmt;
-                    float kC = fast ? denoiseAmt * 0.90f : denoiseAmt;
+                    float kL = denoiseAmt * 0.85f;
+                    float kC = denoiseAmt * 0.90f;
 
                     float finalL = lc + (sumL / sumW_L - lc) * kL;
                     float finalCr = c0_r + (sumCr / sumW_C - c0_r) * kC;

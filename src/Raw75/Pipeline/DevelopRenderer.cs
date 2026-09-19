@@ -431,10 +431,10 @@ public static class DevelopRenderer
         float noiseVal = s.EnableDetail ? s.Noise : 0f;
         if (noiseVal == 0f && s.EnableDetail && (s.DenoiseLuma > 0f || s.DenoiseChroma > 0f))
             noiseVal = -Math.Max(s.DenoiseLuma, s.DenoiseChroma);
-        Set(u, "u_denoiseFast", fast ? 1f : 0f);
+        Set(u, "u_denoiseFast", 0f);
         Set(u, "u_denoiseLuma", noiseVal < 0f ? -noiseVal / 100f : 0f);
         Set(u, "u_denoiseChroma", noiseVal < 0f ? -noiseVal / 100f : 0f);
-        Set(u, "u_localFast", fast ? 1f : 0f);
+        Set(u, "u_localFast", 0f);
     }
 
     internal static void BindStage3Uniforms(
@@ -1171,7 +1171,7 @@ public static class DevelopRenderer
                 if (u_denoiseLuma > 0.001 || u_denoiseChroma > 0.001) {
                     float lc = luma2020(processed);
                     float3 cc = processed - lc;
-                    float rangeSigma = 0.08 + 0.25 * u_denoiseLuma;
+                    float rangeSigma = 0.04 + 0.12 * u_denoiseLuma;
                     float sumL = lc;
                     float sumW_L = 1.0;
                     float3 sumC = cc;
@@ -1244,8 +1244,8 @@ public static class DevelopRenderer
 
                     float blurL = sumL / sumW_L;
                     float3 blurC = sumC / sumW_C;
-                    float kL = (u_denoiseFast > 0.5) ? u_denoiseLuma * 0.80 : u_denoiseLuma;
-                    float kC = (u_denoiseFast > 0.5) ? u_denoiseChroma * 0.90 : u_denoiseChroma;
+                    float kL = u_denoiseLuma * 0.85;
+                    float kC = u_denoiseChroma * 0.90;
                     float finalL = (u_denoiseLuma > 0.001) ? mix(lc, blurL, kL) : lc;
                     float3 finalC = (u_denoiseChroma > 0.001) ? mix(cc, blurC, kC) : cc;
                     processed = max(float3(finalL) + finalC, 0.0);
@@ -2614,7 +2614,7 @@ public static class DevelopRenderer
                 if (u_denoiseLuma > 0.001 || u_denoiseChroma > 0.001) {
                     float lc = luma2020(processed);
                     float3 cc = processed - lc;
-                    float rangeSigma = 0.08 + 0.25 * u_denoiseLuma;
+                    float rangeSigma = 0.04 + 0.12 * u_denoiseLuma;
                     float sumL = lc;
                     float sumW_L = 1.0;
                     float3 sumC = cc;
@@ -2687,8 +2687,8 @@ public static class DevelopRenderer
 
                     float blurL = sumL / sumW_L;
                     float3 blurC = sumC / sumW_C;
-                    float kL = (u_denoiseFast > 0.5) ? u_denoiseLuma * 0.80 : u_denoiseLuma;
-                    float kC = (u_denoiseFast > 0.5) ? u_denoiseChroma * 0.90 : u_denoiseChroma;
+                    float kL = u_denoiseLuma * 0.85;
+                    float kC = u_denoiseChroma * 0.90;
                     float finalL = (u_denoiseLuma > 0.001) ? mix(lc, blurL, kL) : lc;
                     float3 finalC = (u_denoiseChroma > 0.001) ? mix(cc, blurC, kC) : cc;
                     processed = max(float3(finalL) + finalC, 0.0);
