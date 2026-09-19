@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
@@ -22,6 +23,33 @@ public class IconButton : VisualElement
     private bool _primary;
     private bool _pressed;
     private bool _hovered;
+    private bool _enable3DEffect = true;
+    private float _pressScale = 0.95f;
+
+    [BuilderProperty("3D Effect", "Appearance")]
+    public bool Enable3DEffect
+    {
+        get => _enable3DEffect;
+        set
+        {
+            if (_enable3DEffect == value) return;
+            _enable3DEffect = value;
+            ApplyChrome();
+        }
+    }
+
+    [BuilderProperty("Press Scale", "Appearance", min: 0.1f, max: 1f, step: 0.05f)]
+    public float PressScale
+    {
+        get => _pressScale;
+        set
+        {
+            if (Math.Abs(_pressScale - value) < 0.001f) return;
+            _pressScale = value;
+            if (_pressed && _enable3DEffect)
+                ApplyChrome();
+        }
+    }
 
     public bool Toggled
     {
@@ -42,6 +70,24 @@ public class IconButton : VisualElement
             if (_primary == value) return;
             _primary = value;
             ApplyChrome();
+        }
+    }
+
+    private float _textOffsetY = 2f;
+
+    /// <summary>
+    /// Optical vertical adjustment in pixels to center text inside button pill/border.
+    /// Neutralizes font ascent headroom and brings cap-height into visual balance.
+    /// </summary>
+    public float TextOffsetY
+    {
+        get => _textOffsetY;
+        set
+        {
+            if (Math.Abs(_textOffsetY - value) < 0.001f) return;
+            _textOffsetY = value;
+            InvalidateLayout();
+            InvalidatePaint();
         }
     }
 
@@ -105,16 +151,24 @@ public class IconButton : VisualElement
 
     public event Action? Clicked;
 
-    public IconButton(string? caption, bool primary = false)
-        : this(caption, iconName: null, primary: primary)
+    public IconButton(string? caption, bool primary = false, bool enable3DEffect = true)
+        : this(caption, iconName: null, primary: primary, enable3DEffect: enable3DEffect)
     {
     }
 
-    public IconButton(string? caption, string? iconName, bool primary = false)
+    public IconButton(string? caption, string? iconName, bool primary = false, bool enable3DEffect = true)
     {
         _caption = caption ?? "";
         _primary = primary;
         _iconName = iconName;
+
+        var attr = GetType().GetCustomAttribute<Enable3DEffectAttribute>();
+        _enable3DEffect = attr != null ? attr.Enabled : enable3DEffect;
+        if (attr != null)
+        {
+            _pressScale = attr.Scale;
+        }
+
         Name = $"IconButton_{_caption}_{_iconName}";
         Cursor = StandardCursor.Hand;
         Transform.Height = Theme.ToolH;
@@ -205,11 +259,11 @@ public class IconButton : VisualElement
         ApplyChrome();
     }
 
-    public static IconButton Icon(string iconName, bool primary = false)
-        => new(caption: null, iconName: iconName, primary: primary);
+    public static IconButton Icon(string iconName, bool primary = false, bool enable3DEffect = true)
+        => new(caption: null, iconName: iconName, primary: primary, enable3DEffect: enable3DEffect);
 
-    public static IconButton IconWithText(string iconName, string caption, bool primary = false)
-        => new(caption: caption, iconName: iconName, primary: primary);
+    public static IconButton IconWithText(string iconName, string caption, bool primary = false, bool enable3DEffect = true)
+        => new(caption: caption, iconName: iconName, primary: primary, enable3DEffect: enable3DEffect);
 
     public void SetIcon(string? iconName)
     {
@@ -277,7 +331,7 @@ public class IconButton : VisualElement
             float maxTextW = Math.Max(0f, ox + w - textX - 2f);
             float actualTextW = Math.Max(textW + 2f, maxTextW);
 
-            _labelElement.Transform.SetAbsoluteFrame(textX, oy, actualTextW, h);
+            _labelElement.Transform.SetAbsoluteFrame(textX, oy + _textOffsetY, actualTextW, h);
             if (_labelElement.Style?.Text != null)
             {
                 _labelElement.Style.Text.Alignment = TextAlign.Left;
@@ -303,7 +357,7 @@ public class IconButton : VisualElement
             float actualW = Math.Max(w, textW + 4f);
             float textOx = (w >= actualW) ? ox : ox + (w - actualW) * 0.5f;
 
-            _labelElement.Transform.SetAbsoluteFrame(textOx, oy, actualW, h);
+            _labelElement.Transform.SetAbsoluteFrame(textOx, oy + _textOffsetY, actualW, h);
             if (_labelElement.Style?.Text != null)
             {
                 _labelElement.Style.Text.Alignment = TextAlign.Center;
@@ -403,7 +457,15 @@ public class IconButton : VisualElement
             iconChanged = true;
         }
 
-        if (fillChanged || borderChanged || textChanged || iconChanged)
+        float targetScale = (_enable3DEffect && _pressed) ? _pressScale : 1f;
+        bool scaleChanged = Math.Abs(Transform.ScaleX - targetScale) > 0.001f || Math.Abs(Transform.ScaleY - targetScale) > 0.001f;
+        if (scaleChanged)
+        {
+            Transform.ScaleX = targetScale;
+            Transform.ScaleY = targetScale;
+        }
+
+        if (fillChanged || borderChanged || textChanged || iconChanged || scaleChanged)
             InvalidatePaint();
     }
 

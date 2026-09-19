@@ -17,10 +17,61 @@ public sealed class PhotoMetadata
     public float Aperture { get; set; }
     public float Iso { get; set; }
     public DateTime? CaptureTime { get; set; }
+    public double? GpsLatitude { get; set; }
+    public double? GpsLongitude { get; set; }
+    public double? GpsAltitude { get; set; }
+    public string Artist { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string Copyright { get; set; } = "";
     public int Width { get; set; }
     public int Height { get; set; }
     public int Orientation { get; set; } = 1;
     public long FileSizeBytes { get; set; }
+
+    public bool HasGps => GpsLatitude.HasValue && GpsLongitude.HasValue;
+
+    public string FormattedGps
+    {
+        get
+        {
+            if (!HasGps) return "—";
+            double lat = GpsLatitude!.Value;
+            double lon = GpsLongitude!.Value;
+            char latRef = lat >= 0 ? 'N' : 'S';
+            char lonRef = lon >= 0 ? 'E' : 'W';
+            double absLat = Math.Abs(lat);
+            double absLon = Math.Abs(lon);
+
+            int latD = (int)Math.Floor(absLat);
+            double latMrem = (absLat - latD) * 60.0;
+            int latM = (int)Math.Floor(latMrem);
+            double latS = (latMrem - latM) * 60.0;
+
+            int lonD = (int)Math.Floor(absLon);
+            double lonMrem = (absLon - lonD) * 60.0;
+            int lonM = (int)Math.Floor(lonMrem);
+            double lonS = (lonMrem - lonM) * 60.0;
+
+            return $"{latD}°{latM}'{latS:0.#}\"{latRef}  {lonD}°{lonM}'{lonS:0.#}\"{lonRef}";
+        }
+    }
+
+    public string FormattedLocation
+    {
+        get
+        {
+            if (!HasGps) return "—";
+            string coords = FormattedGps;
+            if (GpsAltitude.HasValue)
+            {
+                string altStr = GpsAltitude.Value >= 0
+                    ? $"{GpsAltitude.Value:0.#} m"
+                    : $"-{Math.Abs(GpsAltitude.Value):0.#} m";
+                return $"{coords} ({altStr})";
+            }
+            return coords;
+        }
+    }
 
     public string CameraName
     {

@@ -10,7 +10,7 @@ using SkiaSharp;
 namespace Raw75.Controls;
 
 /// <summary>Horizontal session strip: thumbs, click to select, horizontally scrollable, virtualized.</summary>
-public class Filmstrip : ScrollContainer
+public class Filmstrip : VisualElement
 {
     public const float FilterRailW = 56f;
 
@@ -21,6 +21,7 @@ public class Filmstrip : ScrollContainer
     private readonly IconButton _btnFilterAll;
     private readonly IconButton _btnFilterReady;
     private readonly IconButton _btnFilterStar;
+    private readonly FilmstripScroller _scroller;
 
     private readonly Dictionary<int, Cell> _activeCells = new();
     private readonly Stack<Cell> _cellPool = new();
@@ -47,6 +48,12 @@ public class Filmstrip : ScrollContainer
     public event Action<int, float, float>? ContextMenuRequested;
 
     public PhotoFilter ActiveFilter => _filter;
+
+    public float ScrollX
+    {
+        get => _scroller.ScrollX;
+        set => _scroller.ScrollX = value;
+    }
 
     public void SetReady(int index, bool ready)
     {
@@ -87,20 +94,6 @@ public class Filmstrip : ScrollContainer
     public Filmstrip()
     {
         Name = "Filmstrip";
-        OverflowX = OverflowMode.Scroll;
-        OverflowY = OverflowMode.Clip;
-        ScrollbarVisibilityX = ScrollbarVisibility.Auto;
-        ScrollbarVisibilityY = ScrollbarVisibility.Hidden;
-        ScrollbarThickness = 8f;
-        ScrollbarRadius = 4f;
-        ScrollbarPadding = 1.5f;
-        ScrollbarThumbColor = new SKColor(160, 160, 160, 140);
-        ScrollbarThumbHoverColor = new SKColor(200, 200, 200, 200);
-        ScrollbarThumbDragColor = Theme.Accent;
-        ScrollbarTrackColor = SKColors.Transparent;
-        Padding = new Thickness(8, 6, 8, 8);
-        SmoothScroll = true;
-        ScrollStepX = (ThumbW + Gap) * 1.5f;
         Style = new ElementStyle
         {
             BackColor = Theme.Filmstrip,
@@ -144,35 +137,61 @@ public class Filmstrip : ScrollContainer
         _filterRail.AddChild(_btnFilterStar);
         AddChild(_filterRail);
 
-        Events.OnMouseDown += (_, args) =>
+        _scroller = new FilmstripScroller(this)
+        {
+            Name = "Filmstrip_Scroller",
+            OverflowX = OverflowMode.Scroll,
+            OverflowY = OverflowMode.Clip,
+            ScrollbarVisibilityX = ScrollbarVisibility.Auto,
+            ScrollbarVisibilityY = ScrollbarVisibility.Hidden,
+            ScrollbarThickness = 8f,
+            ScrollbarRadius = 4f,
+            ScrollbarPadding = 1.5f,
+            ScrollbarThumbColor = new SKColor(160, 160, 160, 140),
+            ScrollbarThumbHoverColor = new SKColor(200, 200, 200, 200),
+            ScrollbarThumbDragColor = Theme.Accent,
+            ScrollbarTrackColor = SKColors.Transparent,
+            Padding = new Thickness(8, 6, 8, 8),
+            SmoothScroll = true,
+            ScrollStepX = (ThumbW + Gap) * 1.5f,
+            Style = new ElementStyle
+            {
+                BackColor = Theme.Filmstrip,
+                Border = new BorderStyle { Width = 0 }
+            }
+        };
+
+        _scroller.Events.OnMouseDown += (_, args) =>
         {
             if (args.Button == (int)MouseButton.Middle)
             {
                 _isPanning = true;
                 _panStartX = args.Global.X;
-                _panStartScroll = ScrollX;
-                CapturePointer();
+                _panStartScroll = _scroller.ScrollX;
+                _scroller.CapturePointer();
                 args.Handled = true;
             }
         };
-        Events.OnMouseMove += (_, args) =>
+        _scroller.Events.OnMouseMove += (_, args) =>
         {
             if (_isPanning)
             {
                 float dx = args.Global.X - _panStartX;
-                ScrollX = _panStartScroll - dx;
+                _scroller.ScrollX = _panStartScroll - dx;
                 args.Handled = true;
             }
         };
-        Events.OnMouseUp += (_, args) =>
+        _scroller.Events.OnMouseUp += (_, args) =>
         {
             if (_isPanning)
             {
                 _isPanning = false;
-                ReleasePointer();
+                _scroller.ReleasePointer();
                 args.Handled = true;
             }
         };
+
+        AddChild(_scroller);
     }
 
     public void RefreshTheme()
@@ -180,7 +199,8 @@ public class Filmstrip : ScrollContainer
         Style.BackColor = Theme.Filmstrip;
         if (Style.Border != null)
             Style.Border.Color = Theme.Hairline;
-        ScrollbarThumbDragColor = Theme.Accent;
+        _scroller.Style.BackColor = Theme.Filmstrip;
+        _scroller.ScrollbarThumbDragColor = Theme.Accent;
         if (_filterRail.Style != null)
         {
             _filterRail.Style.BackColor = Theme.BottomBar;
@@ -222,18 +242,18 @@ public class Filmstrip : ScrollContainer
     {
         int vis = VisualIndexOf(index);
         if (vis < 0) return;
-        float cellLeft = FilterRailW + Padding.Left + vis * (ThumbW + Gap);
+        float cellLeft = _scroller.Padding.Left + vis * (ThumbW + Gap);
         float cellRight = cellLeft + ThumbW;
-        float viewW = Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width;
+        float viewW = _scroller.Transform.Computed.Width > 0 ? _scroller.Transform.Computed.Width : _scroller.Transform.Width;
         if (viewW <= 0) return;
 
-        if (cellLeft < ScrollX + FilterRailW + Padding.Left)
+        if (cellLeft < _scroller.ScrollX + _scroller.Padding.Left)
         {
-            AnimateScrollTo(Math.Max(0, cellLeft - FilterRailW - Padding.Left), 0);
+            _scroller.AnimateScrollTo(Math.Max(0, cellLeft - _scroller.Padding.Left), 0);
         }
-        else if (cellRight > ScrollX + viewW - Padding.Right)
+        else if (cellRight > _scroller.ScrollX + viewW - _scroller.Padding.Right)
         {
-            AnimateScrollTo(Math.Max(0, cellRight - viewW + Padding.Right), 0);
+            _scroller.AnimateScrollTo(Math.Max(0, cellRight - viewW + _scroller.Padding.Right), 0);
         }
     }
 
@@ -266,14 +286,29 @@ public class Filmstrip : ScrollContainer
         return new SKSize(w, h);
     }
 
-    protected override void OnScrollOffsetChanged()
-    {
-        base.OnScrollOffsetChanged();
-        UpdateVirtualCells(force: false);
-    }
-
     protected override void LayoutChildren()
     {
+        float ox = Transform.Computed.X;
+        float oy = Transform.Computed.Y;
+        float w = Transform.Computed.Width;
+        float h = Transform.Computed.Height;
+
+        _filterRail.Transform.SetAbsoluteFrame(ox, oy, FilterRailW, h);
+
+        float btnW = 44f;
+        float btnH = 28f;
+        float gap = 4f;
+        float stackH = btnH * 3f + gap * 2f;
+        float startY = oy + Math.Max(6f, (h - stackH) * 0.5f);
+        float bx = ox + (FilterRailW - btnW) * 0.5f;
+
+        _btnFilterAll.Transform.SetAbsoluteFrame(bx, startY, btnW, btnH);
+        _btnFilterReady.Transform.SetAbsoluteFrame(bx, startY + btnH + gap, btnW, btnH);
+        _btnFilterStar.Transform.SetAbsoluteFrame(bx, startY + (btnH + gap) * 2f, btnW, btnH);
+
+        float scrollerW = Math.Max(0f, w - FilterRailW);
+        _scroller.Transform.SetAbsoluteFrame(ox + FilterRailW, oy, scrollerW, h);
+
         UpdateContentSize();
         base.LayoutChildren();
         UpdateVirtualCells(force: true);
@@ -330,27 +365,25 @@ public class Filmstrip : ScrollContainer
 
     private void UpdateContentSize()
     {
-        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
+        float scrollerW = Math.Max(1f, _scroller.Transform.Computed.Width > 0 ? _scroller.Transform.Computed.Width : (_scroller.Transform.Width > 0 ? _scroller.Transform.Width : Math.Max(1f, Transform.Width - FilterRailW)));
         float h = Math.Max(1f, Transform.Height > 0 ? Transform.Height : Theme.FilmH);
         float stride = ThumbW + Gap;
         int n = _filteredIndices.Count;
         float totalW = n > 0
-            ? (FilterRailW + Padding.Left + n * stride - Gap + Padding.Right)
-            : Math.Max(w, FilterRailW + 8f);
-        SetContentSize(Math.Max(totalW, w), h);
+            ? (_scroller.Padding.Left + n * stride - Gap + _scroller.Padding.Right)
+            : scrollerW;
+        _scroller.SetContentSize(Math.Max(totalW, scrollerW), h);
     }
 
     private void UpdateVirtualCells(bool force = false)
     {
-        float originX = Transform.Computed.X;
-        float originY = Transform.Computed.Y;
-        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
-        float h = Math.Max(1f, Transform.Height > 0 ? Transform.Height : Theme.FilmH);
-        float cellH = Math.Max(1f, h - Padding.Vertical);
+        float originX = _scroller.Transform.Computed.X;
+        float originY = _scroller.Transform.Computed.Y;
+        float w = Math.Max(1f, _scroller.Transform.Computed.Width > 0 ? _scroller.Transform.Computed.Width : _scroller.Transform.Width);
+        float h = Math.Max(1f, _scroller.Transform.Computed.Height > 0 ? _scroller.Transform.Computed.Height : (_scroller.Transform.Height > 0 ? _scroller.Transform.Height : Theme.FilmH));
+        float cellH = Math.Max(1f, h - _scroller.Padding.Vertical);
         float stride = ThumbW + Gap;
-        float scrollX = ScrollX;
-
-        LayoutFilterRail(originX, originY, h, scrollX);
+        float scrollX = _scroller.ScrollX;
 
         if (_filteredIndices.Count == 0)
         {
@@ -365,7 +398,7 @@ public class Filmstrip : ScrollContainer
             return;
         }
 
-        float thumbsLeft = FilterRailW + Padding.Left;
+        float thumbsLeft = _scroller.Padding.Left;
         int minIdx = (int)Math.Floor((scrollX - thumbsLeft - ThumbW) / stride) - 2;
         int maxIdx = (int)Math.Ceiling((scrollX + w - thumbsLeft) / stride) + 2;
 
@@ -402,8 +435,8 @@ public class Filmstrip : ScrollContainer
         for (int vis = minIdx; vis <= maxIdx; vis++)
         {
             int docIdx = _filteredIndices[vis];
-            float cellAbsX = originX + FilterRailW + Padding.Left + vis * stride;
-            float cellAbsY = originY + Padding.Top;
+            float cellAbsX = originX + _scroller.Padding.Left + vis * stride;
+            float cellAbsY = originY + _scroller.Padding.Top;
 
             if (_activeCells.TryGetValue(vis, out var cell))
             {
@@ -427,7 +460,7 @@ public class Filmstrip : ScrollContainer
                 else
                 {
                     cell = new Cell(this);
-                    AddChild(cell);
+                    _scroller.AddChild(cell);
                 }
 
                 cell.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
@@ -436,25 +469,6 @@ public class Filmstrip : ScrollContainer
                 _activeCells[vis] = cell;
             }
         }
-    }
-
-    private void LayoutFilterRail(float originX, float originY, float h, float scrollX)
-    {
-        // Pin the rail to the visual left edge while thumbs scroll underneath.
-        float railX = originX + scrollX;
-        _filterRail.Transform.SetAbsoluteFrame(railX, originY, FilterRailW, h);
-        _filterRail.ZIndex = 20;
-
-        float btnW = 44f;
-        float btnH = 28f;
-        float gap = 4f;
-        float stackH = btnH * 3f + gap * 2f;
-        float startY = originY + Math.Max(6f, (h - stackH) * 0.5f);
-        float bx = railX + (FilterRailW - btnW) * 0.5f;
-
-        _btnFilterAll.Transform.SetAbsoluteFrame(bx, startY, btnW, btnH);
-        _btnFilterReady.Transform.SetAbsoluteFrame(bx, startY + btnH + gap, btnW, btnH);
-        _btnFilterStar.Transform.SetAbsoluteFrame(bx, startY + (btnH + gap) * 2f, btnW, btnH);
     }
 
     private void OnCellSelected(int index)
@@ -469,12 +483,35 @@ public class Filmstrip : ScrollContainer
     public override void Dispose()
     {
         base.Dispose();
+        _scroller.Dispose();
         foreach (var cell in _activeCells.Values)
             cell.Dispose();
         _activeCells.Clear();
 
         while (_cellPool.Count > 0)
             _cellPool.Pop().Dispose();
+    }
+
+    private sealed class FilmstripScroller : ScrollContainer
+    {
+        private readonly Filmstrip _owner;
+
+        public FilmstripScroller(Filmstrip owner)
+        {
+            _owner = owner;
+        }
+
+        protected override void OnScrollOffsetChanged()
+        {
+            base.OnScrollOffsetChanged();
+            _owner.UpdateVirtualCells(force: false);
+        }
+
+        protected override void LayoutChildren()
+        {
+            base.LayoutChildren();
+            _owner.UpdateVirtualCells(force: true);
+        }
     }
 
     private sealed class Cell : VisualElement

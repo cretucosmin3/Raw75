@@ -4,6 +4,7 @@ using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
 using Raw75.Develop;
+using Raw75.Io;
 using Silk.NET.Input;
 using SkiaSharp;
 
@@ -21,7 +22,7 @@ public enum GalleryThumbSize
     Large
 }
 
-public sealed class GalleryView : ScrollContainer
+public sealed class GalleryView : VisualElement
 {
     private const float TopBarH = 46f;
     private const float Gap = 12f;
@@ -37,6 +38,7 @@ public sealed class GalleryView : ScrollContainer
     private readonly IconButton _btnSizeM;
     private readonly IconButton _btnSizeL;
     private readonly VisualElement _countLabel;
+    private readonly GalleryScroller _scroller;
 
     private GalleryThumbSize _thumbSize = GalleryThumbSize.Small;
 
@@ -80,13 +82,15 @@ public sealed class GalleryView : ScrollContainer
 
     public PhotoFilter ActiveFilter => _filter;
 
+    public float ScrollY
+    {
+        get => _scroller.ScrollY;
+        set => _scroller.ScrollY = value;
+    }
+
     public GalleryView()
     {
         Name = "GalleryView";
-        OverflowX = OverflowMode.Clip;
-        OverflowY = OverflowMode.Scroll;
-        ScrollbarVisibilityX = ScrollbarVisibility.Hidden;
-        ScrollbarVisibilityY = ScrollbarVisibility.Auto;
         Style = new ElementStyle
         {
             BackColor = Theme.Canvas,
@@ -99,12 +103,7 @@ public sealed class GalleryView : ScrollContainer
             Style = new ElementStyle
             {
                 BackColor = Theme.Window,
-                Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.Hairline,
-                    Roundness = 0
-                }
+                Border = new BorderStyle { Width = 0 }
             }
         };
 
@@ -163,16 +162,41 @@ public sealed class GalleryView : ScrollContainer
         _headerBar.AddChild(_btnSizeL);
         _headerBar.AddChild(_countLabel);
         AddChild(_headerBar);
+
+        _scroller = new GalleryScroller(this)
+        {
+            Name = "Gallery_Scroller",
+            OverflowX = OverflowMode.Clip,
+            OverflowY = OverflowMode.Scroll,
+            ScrollbarVisibilityX = ScrollbarVisibility.Hidden,
+            ScrollbarVisibilityY = ScrollbarVisibility.Auto,
+            ScrollbarThickness = 8f,
+            ScrollbarRadius = 4f,
+            ScrollbarPadding = 1.5f,
+            ScrollbarThumbColor = new SKColor(160, 160, 160, 140),
+            ScrollbarThumbHoverColor = new SKColor(200, 200, 200, 200),
+            ScrollbarThumbDragColor = Theme.Accent,
+            ScrollbarTrackColor = SKColors.Transparent,
+            SmoothScroll = true,
+            Style = new ElementStyle
+            {
+                BackColor = Theme.Canvas,
+                Border = new BorderStyle { Width = 0 }
+            }
+        };
+        AddChild(_scroller);
     }
 
     public void RefreshTheme()
     {
         Style.BackColor = Theme.Canvas;
+        _scroller.Style.BackColor = Theme.Canvas;
+        _scroller.ScrollbarThumbDragColor = Theme.Accent;
         if (_headerBar.Style != null)
         {
             _headerBar.Style.BackColor = Theme.Window;
             if (_headerBar.Style.Border != null)
-                _headerBar.Style.Border.Color = Theme.Hairline;
+                _headerBar.Style.Border.Width = 0;
         }
         if (_countLabel.Style?.Text != null)
             _countLabel.Style.Text.Color = Theme.TextDim;
@@ -193,15 +217,15 @@ public sealed class GalleryView : ScrollContainer
         UpdateFilteredIndices();
         UpdateFilterCounts();
 
-        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
-        float h = Math.Max(1f, Transform.Computed.Height > 0 ? Transform.Computed.Height : Transform.Height);
-        float startY = TopBarH + Pad;
+        float w = Math.Max(1f, _scroller.Transform.Computed.Width > 0 ? _scroller.Transform.Computed.Width : (_scroller.Transform.Width > 0 ? _scroller.Transform.Width : Transform.Width));
+        float h = Math.Max(1f, _scroller.Transform.Computed.Height > 0 ? _scroller.Transform.Computed.Height : Math.Max(1f, Transform.Height - TopBarH));
+        float startY = Pad;
         float availW = Math.Max(1f, w - Pad * 2f);
         int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
         int totalRows = (_filteredIndices.Count + cols - 1) / cols;
         float totalH = startY + totalRows * (CardH + Gap) + Pad;
 
-        SetContentSize(w, Math.Max(totalH, h));
+        _scroller.SetContentSize(w, Math.Max(totalH, h));
         UpdateVirtualCards(force: true);
         InvalidatePaint();
     }
@@ -393,12 +417,6 @@ public sealed class GalleryView : ScrollContainer
         BatchReadyChanged?.Invoke();
     }
 
-    protected override void OnScrollOffsetChanged()
-    {
-        base.OnScrollOffsetChanged();
-        UpdateVirtualCards(force: false);
-    }
-
     protected override void LayoutChildren()
     {
         float ox = Transform.Computed.X;
@@ -429,14 +447,18 @@ public sealed class GalleryView : ScrollContainer
 
         _countLabel.Transform.SetAbsoluteFrame(ox + w - Pad - sizeClusterW - 12f - 200f, hy + 6f, 200f, 20f);
 
-        // Grid layout calculations
-        float startY = TopBarH + Pad;
+        // Position scroller below header bar
+        float scrollerH = Math.Max(1f, h - TopBarH);
+        _scroller.Transform.SetAbsoluteFrame(ox, oy + TopBarH, w, scrollerH);
+
+        // Grid layout calculations inside _scroller
+        float startY = Pad;
         float availW = Math.Max(1f, w - Pad * 2f);
         int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
         int totalRows = (_filteredIndices.Count + cols - 1) / cols;
         float totalH = startY + totalRows * (CardH + Gap) + Pad;
 
-        SetContentSize(w, Math.Max(totalH, h));
+        _scroller.SetContentSize(w, Math.Max(totalH, scrollerH));
         base.LayoutChildren();
 
         UpdateVirtualCards(force: false);
@@ -457,12 +479,12 @@ public sealed class GalleryView : ScrollContainer
             return;
         }
 
-        float ox = Transform.Computed.X;
-        float oy = Transform.Computed.Y;
-        float w = Math.Max(1f, Transform.Computed.Width > 0 ? Transform.Computed.Width : Transform.Width);
-        float h = Math.Max(1f, Transform.Computed.Height > 0 ? Transform.Computed.Height : Transform.Height);
+        float ox = _scroller.Transform.Computed.X;
+        float oy = _scroller.Transform.Computed.Y;
+        float w = Math.Max(1f, _scroller.Transform.Computed.Width > 0 ? _scroller.Transform.Computed.Width : _scroller.Transform.Width);
+        float h = Math.Max(1f, _scroller.Transform.Computed.Height > 0 ? _scroller.Transform.Computed.Height : _scroller.Transform.Height);
 
-        float startY = TopBarH + Pad;
+        float startY = Pad;
         float availW = Math.Max(1f, w - Pad * 2f);
         int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
         float actualCellW = (availW - (cols - 1) * Gap) / cols;
@@ -471,7 +493,7 @@ public sealed class GalleryView : ScrollContainer
         int totalRows = (totalCount + cols - 1) / cols;
         float rowStride = CardH + Gap;
 
-        float scrollY = ScrollY;
+        float scrollY = _scroller.ScrollY;
         int firstRow = Math.Max(0, (int)Math.Floor((scrollY - startY - CardH) / rowStride) - 1);
         int lastRow = Math.Min(totalRows - 1, (int)Math.Ceiling((scrollY + h - startY) / rowStride) + 1);
 
@@ -539,7 +561,7 @@ public sealed class GalleryView : ScrollContainer
                 else
                 {
                     card = new GalleryCard(this);
-                    AddChild(card);
+                    _scroller.AddChild(card);
                 }
 
                 card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
@@ -592,12 +614,35 @@ public sealed class GalleryView : ScrollContainer
     public override void Dispose()
     {
         base.Dispose();
+        _scroller.Dispose();
         foreach (var card in _activeCards.Values)
             card.Dispose();
         _activeCards.Clear();
 
         while (_cardPool.Count > 0)
             _cardPool.Pop().Dispose();
+    }
+
+    private sealed class GalleryScroller : ScrollContainer
+    {
+        private readonly GalleryView _owner;
+
+        public GalleryScroller(GalleryView owner)
+        {
+            _owner = owner;
+        }
+
+        protected override void OnScrollOffsetChanged()
+        {
+            base.OnScrollOffsetChanged();
+            _owner.UpdateVirtualCards(force: false);
+        }
+
+        protected override void LayoutChildren()
+        {
+            base.LayoutChildren();
+            _owner.UpdateVirtualCards(force: true);
+        }
     }
 
     private sealed class GalleryCard : VisualElement
@@ -800,6 +845,9 @@ public sealed class GalleryView : ScrollContainer
             _isReady = doc.IsReady;
             _isFavorite = doc.IsFavorite;
             Name = $"GalleryCard_{index}";
+
+            if (_doc.Look == null)
+                WorkspaceStore.HydrateLook(_doc);
 
             Style.BackColor = active ? Theme.Selected : Theme.Section;
             Style.Border.Width = active ? 2f : 1f;

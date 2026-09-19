@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Blossom;
@@ -234,6 +235,31 @@ public sealed class DevelopEngine
 
                 try
                 {
+                    string dir = WorkspaceStore.EntryDir(doc.Path);
+                    string lookPath = Path.Combine(dir, "look.jpg");
+                    string prevPath = Path.Combine(dir, "preview.jpg");
+                    string thumbPath = Path.Combine(dir, "thumb.jpg");
+                    string? cachedPath = File.Exists(lookPath) ? lookPath : (File.Exists(prevPath) ? prevPath : (File.Exists(thumbPath) ? thumbPath : null));
+                    if (cachedPath != null)
+                    {
+                        SKImage? cached = WorkspaceStore.LoadJpeg(cachedPath);
+                        if (cached != null)
+                        {
+                            int nCached = Interlocked.Increment(ref processed);
+                            PhotoDocument targetCached = doc;
+                            SKImage shotCached = cached;
+                            Browser.Post(() =>
+                            {
+                                if (targetCached.IsDisposed || targetCached.Preview != null || targetCached.Thumb != null)
+                                    return;
+                                Assign(targetCached, thumb: shotCached);
+                                ThumbLoaded?.Invoke(targetCached);
+                                ThumbProgress?.Invoke(nCached, missing);
+                            });
+                            continue;
+                        }
+                    }
+
                     RasterBuffer buf;
                     Develop.PhotoMetadata? meta = null;
                     if (RawDecoder.IsRawPath(doc.Path))
@@ -250,7 +276,8 @@ public sealed class DevelopEngine
                         buf = raster.Value;
                     }
 
-                    buf = RawDecoder.Limit(buf, 480);
+                    buf = RawDecoder.Limit(buf, 640);
+                    WorkspaceStore.SaveThumb(doc, buf);
                     int n = Interlocked.Increment(ref processed);
                     PhotoDocument target = doc;
                     RasterBuffer shot = buf;
@@ -672,7 +699,7 @@ public sealed class DevelopEngine
             if (!src.HasPixels)
                 return;
             RasterBuffer lookBuf = DevelopCpu.Apply(src, settings, fast: true);
-            RasterBuffer prevBuf = RawDecoder.Limit(lookBuf, 160);
+            RasterBuffer prevBuf = RawDecoder.Limit(lookBuf, 640);
             byte[]? lookJpeg = WorkspaceStore.EncodeJpeg(lookBuf, 85);
             byte[]? prevJpeg = WorkspaceStore.EncodeJpeg(prevBuf, 82);
             WorkspaceStore.SaveLooks(doc, settings, prevJpeg, lookJpeg);
@@ -716,13 +743,16 @@ public sealed class DevelopEngine
         string format,
         int jpegQuality,
         int longEdge,
-        Action<string>? status)
+        Action<string>? status,
+        Develop.PhotoMetadata? metadata = null)
     {
         RasterBuffer src = hiRes.HasPixels
             ? hiRes
             : (RawDecoder.DecodeRasterFull(path) ?? RawDecoder.DecodeFull(path));
         if (!src.HasPixels)
             throw new InvalidOperationException("Could not decode photo for export.");
+
+        metadata ??= RawDecoder.ReadMetadata(path);
 
         status?.Invoke($"Developing export {src.Width}×{src.Height}…");
         RasterBuffer developed = DevelopCpu.Apply(src, settings ?? new DevelopSettings(), fast: false);
@@ -731,7 +761,7 @@ public sealed class DevelopEngine
 
         status?.Invoke($"Writing {developed.Width}×{developed.Height}…");
         Log.Info($"Export develop {src.Width}x{src.Height} → {developed.Width}x{developed.Height} {dest}");
-        return Exporter.Export(developed, dest, format, jpegQuality, longEdge);
+        return Exporter.Export(developed, dest, format, jpegQuality, longEdge, sourcePath: path, metadata: metadata);
     }
 
     private bool Stale(int gen) => gen != Volatile.Read(ref _generation);

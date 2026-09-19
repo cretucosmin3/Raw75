@@ -1766,7 +1766,7 @@ public sealed class WorkspaceView : View
                 {
                     var size = DevelopEngine.WriteExport(
                         srcPath, settings, hiRes, dest, req.Format, req.Quality, req.LongEdge,
-                        msg => Browser.Post(() => SetStatus(msg)));
+                        msg => Browser.Post(() => SetStatus(msg)), d.Metadata);
                     Browser.Post(() => SetStatus(
                         $"Exported {size.Width}×{size.Height}  {Path.GetFileName(dest)}"));
                 }
@@ -1830,7 +1830,7 @@ public sealed class WorkspaceView : View
                     {
                         DevelopEngine.WriteExport(
                             doc.Path, doc.Settings.Clone(), doc.HiResRgba, destPath,
-                            req.Format, req.Quality, req.LongEdge, null);
+                            req.Format, req.Quality, req.LongEdge, null, doc.Metadata);
                         done++;
                     }
                     catch (Exception ex)

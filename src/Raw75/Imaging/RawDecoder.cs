@@ -231,13 +231,11 @@ internal static class RawDecoder
                         full = RotateAndFlip(full, flip);
                 }
 
-                metadata = new Develop.PhotoMetadata
-                {
-                    Width = full.Width,
-                    Height = full.Height,
-                    Orientation = (int)origin,
-                    FileSizeBytes = bytes.Length
-                };
+                metadata = ReadMetadata(path);
+                metadata.Width = full.Width;
+                metadata.Height = full.Height;
+                metadata.Orientation = (int)origin;
+                metadata.FileSizeBytes = bytes.Length;
 
                 return Limit(full, ProxyLongEdge(full.Width, full.Height));
             }
@@ -317,10 +315,44 @@ internal static class RawDecoder
 
             try
             {
-                using ProcessedImage image = raw.ExportThumbnail(0);
+                int bestThumbIdx = 0;
+                try
+                {
+                    var data = Marshal.PtrToStructure<Sdcb.LibRaw.Natives.LibRawData>(handle);
+                    int thumbCount = data.ThumbnailList.ThumbCount;
+                    if (thumbCount > 1 && data.ThumbnailList.ThumbList != null)
+                    {
+                        int bestArea = 0;
+                        for (int t = 0; t < Math.Min(thumbCount, data.ThumbnailList.ThumbList.Length); t++)
+                        {
+                            var item = data.ThumbnailList.ThumbList[t];
+                            int area = item.Width * item.Height;
+                            if (area > bestArea && item.Width <= 2560 && item.Height <= 2560)
+                            {
+                                bestArea = area;
+                                bestThumbIdx = t;
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                using ProcessedImage image = raw.ExportThumbnail(bestThumbIdx);
                 var buf = ToBuffer(image, maxEdge: 0);
                 if (flip != 0)
                     buf = RotateAndFlip(buf, flip);
+
+                if (Math.Max(buf.Width, buf.Height) < 380)
+                {
+                    Log.Info($"Thumb {buf.Width}x{buf.Height} too small for gallery preview; upgrading via half-size raw export");
+                    using ProcessedImage rawImg = raw.ExportRawImage(c =>
+                    {
+                        c.HalfSize = true;
+                        c.OutputBps = 8;
+                    });
+                    buf = ToBuffer(rawImg, maxEdge: 640);
+                }
+
                 Log.Info($"Thumb {buf.Width}x{buf.Height} (flip={flip}) type={image.ImageType} bits={image.Bits} ch={image.Channels}");
                 return buf;
             }
@@ -332,7 +364,7 @@ internal static class RawDecoder
                     c.HalfSize = true;
                     c.OutputBps = 8;
                 });
-                var buf = ToBuffer(image, maxEdge: 480);
+                var buf = ToBuffer(image, maxEdge: 640);
                 return buf;
             }
         }
@@ -421,6 +453,73 @@ internal static class RawDecoder
             meta.FocalLengthIn35mm = l.FocalLengthIn35mmFormat;
         }
         catch { }
+
+        try
+        {
+            var gps = raw.ImageOtherParams.ParsedGPS;
+            if (gps.GPSParsed != 0 || gps.LatitudeDegrees > 0 || gps.LongitudeDegrees > 0 ||
+                gps.LatitudeMinutes > 0 || gps.LongitudeMinutes > 0 ||
+                gps.LatitudeSeconds > 0 || gps.LongitudeSeconds > 0)
+            {
+                double lat = gps.LatitudeDegrees + gps.LatitudeMinutes / 60.0 + gps.LatitudeSeconds / 3600.0;
+                char latRef = (char)gps.LatitudeReference;
+                if (latRef == 'S' || latRef == 's') lat = -lat;
+
+                double lon = gps.LongitudeDegrees + gps.LongitudeMinutes / 60.0 + gps.LongitudeSeconds / 3600.0;
+                char lonRef = (char)gps.LongitudeReference;
+                if (lonRef == 'W' || lonRef == 'w') lon = -lon;
+
+                if (Math.Abs(lat) > 0.000001 || Math.Abs(lon) > 0.000001)
+                {
+                    meta.GpsLatitude = lat;
+                    meta.GpsLongitude = lon;
+                    if (gps.Altitude > -9999f)
+                    {
+                        meta.GpsAltitude = gps.AltitudeReference == 1 ? -gps.Altitude : gps.Altitude;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        try
+        {
+            var op = raw.ImageOtherParams;
+            if (!string.IsNullOrEmpty(op.Artist)) meta.Artist = op.Artist.Trim();
+            if (!string.IsNullOrEmpty(op.Description)) meta.Description = op.Description.Trim();
+        }
+        catch { }
+
+        if (!meta.CaptureTime.HasValue || !meta.HasGps || string.IsNullOrEmpty(meta.LensModel))
+        {
+            try
+            {
+                var info = SixLabors.ImageSharp.Image.Identify(path);
+                var exif = info?.Metadata?.ExifProfile;
+                if (exif != null)
+                {
+                    if (!meta.CaptureTime.HasValue)
+                    {
+                        var dStr = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTimeOriginal)?.Value?.ToString()
+                            ?? exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTimeDigitized)?.Value?.ToString()
+                            ?? exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTime)?.Value?.ToString();
+                        if (!string.IsNullOrEmpty(dStr) && TryParseExifDate(dStr, out var dt))
+                            meta.CaptureTime = dt;
+                    }
+
+                    if (!meta.HasGps)
+                    {
+                        ExtractGpsFromExif(exif, meta);
+                    }
+
+                    if (string.IsNullOrEmpty(meta.LensModel))
+                    {
+                        meta.LensModel = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.LensModel)?.Value?.ToString() ?? "";
+                    }
+                }
+            }
+            catch { }
+        }
 
         try
         {
@@ -519,17 +618,85 @@ internal static class RawDecoder
                     var focal35 = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.FocalLengthIn35mmFilm)?.Value;
                     if (focal35 is ushort f35) meta.FocalLengthIn35mm = f35;
 
-                    var dateVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTimeOriginal)?.Value?.ToString();
-                    if (!string.IsNullOrEmpty(dateVal) && DateTime.TryParseExact(dateVal, "yyyy:MM:dd HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var dt))
+                    var dateVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTimeOriginal)?.Value?.ToString()
+                        ?? exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTimeDigitized)?.Value?.ToString()
+                        ?? exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.DateTime)?.Value?.ToString();
+                    if (!string.IsNullOrEmpty(dateVal) && TryParseExifDate(dateVal, out var dt))
                     {
                         meta.CaptureTime = dt;
                     }
+
+                    ExtractGpsFromExif(exif, meta);
+
+                    var artistVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Artist)?.Value?.ToString();
+                    if (!string.IsNullOrEmpty(artistVal)) meta.Artist = artistVal.Trim();
+
+                    var copyrightVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Copyright)?.Value?.ToString();
+                    if (!string.IsNullOrEmpty(copyrightVal)) meta.Copyright = copyrightVal.Trim();
+
+                    var descVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.ImageDescription)?.Value?.ToString();
+                    if (!string.IsNullOrEmpty(descVal)) meta.Description = descVal.Trim();
                 }
             }
         }
         catch { }
 
         return meta;
+    }
+
+    internal static bool TryParseExifDate(string dateStr, out DateTime dt)
+    {
+        dt = default;
+        if (string.IsNullOrWhiteSpace(dateStr)) return false;
+        string s = dateStr.Trim();
+        string[] formats =
+        {
+            "yyyy:MM:dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy:MM:ddTHH:mm:ss",
+            "yyyy-MM-ddTHH:mm:ss",
+            "yyyy:MM:dd",
+            "yyyy-MM-dd"
+        };
+        if (DateTime.TryParseExact(s, formats, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out dt))
+            return true;
+        return DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out dt);
+    }
+
+    internal static void ExtractGpsFromExif(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifProfile exif, Develop.PhotoMetadata meta)
+    {
+        try
+        {
+            var latVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.GPSLatitude)?.Value;
+            var latRef = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.GPSLatitudeRef)?.Value?.ToString();
+            var lonVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.GPSLongitude)?.Value;
+            var lonRef = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.GPSLongitudeRef)?.Value?.ToString();
+
+            if (latVal != null && latVal.Length >= 3 && lonVal != null && lonVal.Length >= 3)
+            {
+                double lat = latVal[0].ToDouble() + latVal[1].ToDouble() / 60.0 + latVal[2].ToDouble() / 3600.0;
+                if (string.Equals(latRef, "S", StringComparison.OrdinalIgnoreCase)) lat = -lat;
+
+                double lon = lonVal[0].ToDouble() + lonVal[1].ToDouble() / 60.0 + lonVal[2].ToDouble() / 3600.0;
+                if (string.Equals(lonRef, "W", StringComparison.OrdinalIgnoreCase)) lon = -lon;
+
+                if (Math.Abs(lat) > 0.000001 || Math.Abs(lon) > 0.000001)
+                {
+                    meta.GpsLatitude = lat;
+                    meta.GpsLongitude = lon;
+
+                    var altVal = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.GPSAltitude)?.Value;
+                    var altRef = exif.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.GPSAltitudeRef)?.Value;
+                    if (altVal.HasValue && altVal.Value.Denominator > 0)
+                    {
+                        double alt = altVal.Value.ToDouble();
+                        if (altRef == 1) alt = -alt;
+                        meta.GpsAltitude = alt;
+                    }
+                }
+            }
+        }
+        catch { }
     }
 
     public static RasterBuffer DecodeFull(string path)

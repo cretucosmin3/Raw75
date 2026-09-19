@@ -172,6 +172,7 @@ public class PanelGroup : VisualElement
             Name = $"{Name}_Action_{label}",
             Text = string.IsNullOrEmpty(iconName) ? label : "",
             Cursor = StandardCursor.Hand,
+            Padding = string.IsNullOrEmpty(iconName) ? new Thickness(0, 4, 0, 0) : new Thickness(0),
             BackgroundImageScale = ImageScaleMode.Contain,
             BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
             BackgroundImageTintColor = Theme.TextSecondary,

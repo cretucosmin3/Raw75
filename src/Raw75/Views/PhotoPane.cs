@@ -1115,6 +1115,9 @@ public sealed class PhotoPane : VisualElement
         if (_metadata.CaptureTime.HasValue)
             rows.Add(("Date & Time", _metadata.FormattedDateTime, Theme.TextDim));
 
+        if (_metadata.HasGps)
+            rows.Add(("Location", _metadata.FormattedLocation, Theme.TextSecondary));
+
         if (rows.Count == 0) return;
 
         var tfSemiBold = Theme.GetTypeface(600);

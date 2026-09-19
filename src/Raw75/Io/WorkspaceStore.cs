@@ -129,15 +129,32 @@ public static class WorkspaceStore
         try
         {
             var meta = JsonSerializer.Deserialize<CacheMeta>(File.ReadAllText(metaPath), JsonOptions);
-            if (meta?.Settings == null || !StampMatches(doc.Path, meta))
+            if (meta == null || !StampMatches(doc.Path, meta))
                 return false;
 
-            if (meta.Settings.Hsl == null || meta.Settings.Hsl.Length != 6)
-                meta.Settings.Hsl = DevelopSettings.CreateHsl();
-            doc.Settings.CopyFrom(meta.Settings);
             doc.IsReady = meta.IsReady;
             doc.IsFavorite = meta.IsFavorite;
-            doc.HasSavedSettings = true;
+            if (meta.Metadata != null)
+                doc.Metadata ??= meta.Metadata;
+            if (!string.IsNullOrEmpty(meta.Camera))
+                doc.Camera ??= meta.Camera;
+
+            if (meta.Settings != null)
+            {
+                if (meta.Settings.Hsl == null || meta.Settings.Hsl.Length != 6)
+                    meta.Settings.Hsl = DevelopSettings.CreateHsl();
+                doc.Settings.CopyFrom(meta.Settings);
+                doc.HasSavedSettings = true;
+            }
+
+            SKImage? look = LoadJpeg(Path.Combine(dir, "look.jpg"));
+            if (look != null)
+            {
+                SKImage? old = doc.Look;
+                doc.Look = look;
+                if (old != null && !ReferenceEquals(old, doc.Thumb) && !ReferenceEquals(old, doc.Preview))
+                    GpuRetain.Retire(old);
+            }
 
             SKImage? preview = LoadJpeg(Path.Combine(dir, "preview.jpg"));
             if (preview != null)
@@ -146,6 +163,17 @@ public static class WorkspaceStore
                 doc.Preview = preview;
                 if (old != null && !ReferenceEquals(old, doc.Thumb) && !ReferenceEquals(old, doc.Look))
                     GpuRetain.Retire(old);
+            }
+            else if (look == null)
+            {
+                SKImage? thumb = LoadJpeg(Path.Combine(dir, "thumb.jpg"));
+                if (thumb != null)
+                {
+                    SKImage? old = doc.Thumb;
+                    doc.Thumb = thumb;
+                    if (old != null && !ReferenceEquals(old, doc.Preview) && !ReferenceEquals(old, doc.Look))
+                        GpuRetain.Retire(old);
+                }
             }
 
             return true;
@@ -177,6 +205,35 @@ public static class WorkspaceStore
         }
     }
 
+    internal static void SaveThumb(PhotoDocument doc, RasterBuffer buf)
+    {
+        ArgumentNullException.ThrowIfNull(doc);
+        if (!buf.HasPixels) return;
+        try
+        {
+            string dir = EntryDir(doc.Path);
+            Directory.CreateDirectory(dir);
+            byte[]? jpeg = EncodeJpeg(buf, 82);
+            if (jpeg is { Length: > 0 })
+                File.WriteAllBytes(Path.Combine(dir, "thumb.jpg"), jpeg);
+
+            string metaPath = Path.Combine(dir, "meta.json");
+            if (!File.Exists(metaPath))
+            {
+                var meta = Stamp(doc.Path);
+                meta.IsReady = doc.IsReady;
+                meta.IsFavorite = doc.IsFavorite;
+                meta.Metadata = doc.Metadata;
+                meta.Camera = doc.Camera;
+                File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, JsonOptions));
+            }
+        }
+        catch (Exception ex)
+        {
+            Blossom.Log.Warning("Workspace save thumb: " + ex.Message);
+        }
+    }
+
     public static void SaveSettings(PhotoDocument doc)
     {
         ArgumentNullException.ThrowIfNull(doc);
@@ -188,6 +245,8 @@ public static class WorkspaceStore
             meta.Settings = doc.Settings.Clone();
             meta.IsReady = doc.IsReady;
             meta.IsFavorite = doc.IsFavorite;
+            meta.Metadata = doc.Metadata;
+            meta.Camera = doc.Camera;
             doc.HasSavedSettings = true;
             File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(meta, JsonOptions));
         }
@@ -217,6 +276,8 @@ public static class WorkspaceStore
             }
             meta.IsReady = doc.IsReady;
             meta.IsFavorite = doc.IsFavorite;
+            meta.Metadata ??= doc.Metadata;
+            meta.Camera ??= doc.Camera;
             File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, JsonOptions));
         }
         catch (Exception ex)
@@ -236,6 +297,8 @@ public static class WorkspaceStore
             meta.Settings = settings.Clone();
             meta.IsReady = doc.IsReady;
             meta.IsFavorite = doc.IsFavorite;
+            meta.Metadata = doc.Metadata;
+            meta.Camera = doc.Camera;
             File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(meta, JsonOptions));
             if (previewJpeg is { Length: > 0 })
                 File.WriteAllBytes(Path.Combine(dir, "preview.jpg"), previewJpeg);
@@ -407,7 +470,7 @@ public static class WorkspaceStore
         }
     }
 
-    private static SKImage? LoadJpeg(string path)
+    internal static SKImage? LoadJpeg(string path)
     {
         if (!File.Exists(path))
             return null;
@@ -515,7 +578,7 @@ public static class WorkspaceStore
             "cache");
     }
 
-    private static string EntryDir(string photoPath)
+    internal static string EntryDir(string photoPath)
     {
         string full = Path.GetFullPath(photoPath);
         byte[] hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(full));
@@ -563,6 +626,8 @@ public static class WorkspaceStore
         public DevelopSettings? Settings { get; set; }
         public bool IsReady { get; set; }
         public bool IsFavorite { get; set; }
+        public PhotoMetadata? Metadata { get; set; }
+        public string? Camera { get; set; }
     }
 
     private sealed class WorkspacePrefs
