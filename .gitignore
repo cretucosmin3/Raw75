@@ -18,6 +18,9 @@ publish/
 !.vscode/settings.json
 *.code-workspace
 
+# Raw75 catalog cache (created next to photos)
+.raw75/
+
 # Logs / OS
 *.log
 *.DotSettings.user
@@ -30,3 +33,6 @@ Thumbs.db
 **/packages/*
 project.lock.json
 project.fragment.lock.json
+
+# Local files not needed for git
+/local

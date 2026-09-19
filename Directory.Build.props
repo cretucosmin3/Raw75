@@ -5,7 +5,8 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <!-- Sibling clone: ../Blossom — override with /p:BlossomRoot=... if needed. -->
+    <!-- Prefer local submodule external/Blossom, then fallback to sibling clone ../Blossom -->
+    <BlossomRoot Condition="'$(BlossomRoot)' == '' and Exists('$(MSBuildThisFileDirectory)external\Blossom\src\Blossom\Blossom.csproj')">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)external\Blossom\'))</BlossomRoot>
     <BlossomRoot Condition="'$(BlossomRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Blossom\'))</BlossomRoot>
   </PropertyGroup>
 </Project>

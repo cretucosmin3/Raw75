@@ -1,62 +1,77 @@
 # Raw75
 
-Desktop app for editing RAW photos. Free software, AGPL-3.
+![Raw75 Screenshot](github/sample_image.png)
 
-UI is Blossom. Photo preview is Skia on the GPU.
+A fast, modern desktop application for editing RAW photos. Free and open-source software under the AGPL-3.0 license.
 
-## Spec
+UI is built with [Blossom](https://github.com/cretucosmin3/Blossom), with real-time hardware-accelerated photo development rendered via Skia and SkSL shaders on the GPU.
 
-See `SPEC.md` for the real pipeline. How we sit on Blossom: `docs/blossom.md`.
-
-Short version: LibRaw once, GPU after that. Proxy for sliders, tiles at 1:1, same passes for preview and export. ImageSharp only writes the file. Presets are JSON offsets.
+---
 
 ## Features
 
-### Tone
+### Tone & Dynamic Range
+- **Exposure & Brightness**: Fine-grained exposure correction with real-time preview.
+- **Dynamic Tone Controls**: Highlights, Shadows, Whites, and Blacks with smooth perceptual rolloff.
+- **Sigmoid Tone Mapping**: Smooth highlight roll-off and shadow preservation.
+- **Dehaze & Atmosphere**: Single-image airlight estimator and physical atmospheric transmission recovery.
+- **Tone & Color Curves**: Interactive 4-channel curves editor (RGB, Red, Green, Blue) using monotone cubic Hermite spline interpolation.
+- **Real-Time Histogram**: RGB and luminance histogram with active clipping indicators.
 
-- [ ] Exposure / brightness
-- [ ] Contrast
-- [ ] Highlights & shadows
-- [ ] Whites & blacks
-- [ ] Live histogram (RGB + luminance, clipped pixels)
+### Color & Grading
+- **White Balance & Tint**: High-precision Kelvin temperature and green-magenta tint balancing.
+- **Vibrance & Saturation**: Perceptual saturation enhancement with skin tone protection.
+- **HSL Tool**: 6-color band editor for custom Hue, Saturation, and Lightness adjustments.
+- **3D LUT Support**: Load `.cube` LUT profiles directly into the GPU shader pipeline.
 
-### Color
+### Detail & Reconstruction
+- **Local Contrast**: Edge-preserving bilateral filtering for micro-contrast enhancement.
+- **Sharpening & Denoise**: Fine detail extraction with customizable noise reduction.
+- **Highlight Reconstruction**: Recovers blown highlight areas using opposed-channel and chromaticity transfer techniques.
 
-- [ ] Temperature & tint
-- [ ] Vibrance & saturation
-- [ ] HSL mixer (six colors)
+### Canvas & Workflow
+- **Gallery & Workspace**: Fast folder browsing with background caching and non-destructive recipe storage.
+- **Photo Canvas**: Smooth zoom & pan, 1:1 pixel inspection, and center-fit.
+- **Before / After**: Instant side-by-side and split-view preview modes.
+- **Crop & Geometry**: Interactive on-canvas crop handles, straighten angle adjustment, 90° rotation, and flips.
+- **Presets**: Built-in and custom presets stored as lightweight non-destructive JSON recipes.
+- **Export**: Full-resolution rendering to JPEG (with original EXIF metadata preserved), PNG, WebP, and TIFF.
 
-### Detail & crop
+---
 
-- [ ] Sharpen & denoise
-- [ ] Crop (free, 1:1, 4:3, 16:9)
-- [ ] Straighten, 90° rotate, flip
+## Installation & Releases
 
-### Working
+Self-contained binaries are built automatically for:
+- **Linux** (`x64`)
+- **Windows** (`x64`)
+- **macOS** (Apple Silicon `arm64` & Intel `x64`)
 
-- [ ] Zoom & pan, 1:1
-- [ ] Before / after
-- [ ] Undo / redo
-- [ ] Export (JPEG, PNG, WebP, TIFF)
+Download the latest release archive for your platform from the [Releases](https://github.com/cretucosmin3/Raw75/releases) tab.
 
-### Underneath
+---
 
-- [ ] Open RAW into a GPU texture
-- [ ] One SkSL shader for the edit
-- [ ] JSON presets
-- [ ] `.cube` LUTs
-- [ ] HDR merge
+## Building from Source
 
-## Build
+### Prerequisites
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
 
+### Clone & Run
 ```bash
+git clone --recurse-submodules https://github.com/cretucosmin3/Raw75.git
+cd Raw75
 dotnet run --project src/Raw75/Raw75.csproj
 ```
 
-Needs .NET 10. Blossom lives next to this repo (`../Blossom`).
+### Self-Contained Release Build
+```bash
+dotnet publish src/Raw75/Raw75.csproj -c Release -r <RID> --self-contained true
+```
+*(Replace `<RID>` with `linux-x64`, `win-x64`, `osx-arm64`, or `osx-x64`)*
+
+---
 
 ## License
 
 Copyright (C) 2026 Cosmin Crețu
 
-GNU Affero General Public License v3. See `LICENSE`.
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See `LICENSE` for details.

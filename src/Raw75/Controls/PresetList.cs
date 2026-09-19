@@ -1,0 +1,343 @@
+using System;
+using System.Collections.Generic;
+using Blossom.Core;
+using Blossom.Core.Visual;
+using Blossom.Core.Visual.Enums;
+using Raw75.Presets;
+using Silk.NET.Input;
+using SkiaSharp;
+
+namespace Raw75.Controls;
+
+/// <summary>
+/// Presets card:
+/// Crisp header bar, "Save Preset" action button, and a recessed scrollable list well with custom delete buttons.
+/// </summary>
+public class PresetList : VisualElement
+{
+    private const float HeaderH = Theme.GroupHeadH;
+    private const float SaveH = Theme.ToolH;
+    private const float RowH = 28f;
+
+    private readonly VisualElement _header;
+    private readonly VisualElement _headerTitle;
+    private readonly IconButton _copy;
+    private readonly IconButton _paste;
+    private readonly IconButton _save;
+    private readonly PresetScrollList _list;
+    private readonly List<NameRow> _rows = new();
+
+    public event Action<string>? Applied;
+    public event Action? CopyClicked;
+    public event Action? PasteClicked;
+    public event Action? SaveClicked;
+    public event Action<string>? Deleted;
+
+    public PresetList()
+    {
+        Name = "PresetList";
+        Overflow = OverflowMode.Clip;
+        Style = new ElementStyle
+        {
+            BackColor = Theme.Section,
+            Border = new BorderStyle
+            {
+                Width = 1,
+                Color = Theme.Hairline,
+                Roundness = Theme.Radius
+            },
+            Shadow = new ShadowStyle(0, 2.5f, 3, 3, new SKColor(0, 0, 0, 75))
+        };
+
+        _header = new VisualElement
+        {
+            Name = "PresetList_Header",
+            Style = new ElementStyle
+            {
+                BackColor = Theme.SectionHeader,
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.HairlineSubtle,
+                    Roundness = 0
+                }
+            }
+        };
+
+        _headerTitle = new VisualElement
+        {
+            Name = "PresetList_Title",
+            Text = "PRESETS & LOOKS",
+            IsClickthrough = true,
+            Style = new ElementStyle
+            {
+                BackColor = SKColors.Transparent,
+                Text = new TextStyle
+                {
+                    Color = Theme.Text,
+                    Size = 12,
+                    Weight = 600,
+                    Alignment = TextAlign.Left,
+                    Padding = 0
+                }
+            }
+        };
+        _header.AddChild(_headerTitle);
+        AddChild(_header);
+
+        _copy = new IconButton("Copy", "copy");
+        _copy.Clicked += () => CopyClicked?.Invoke();
+        AddChild(_copy);
+
+        _paste = new IconButton("Paste", "paste");
+        _paste.Clicked += () => PasteClicked?.Invoke();
+        AddChild(_paste);
+
+        _save = new IconButton("Save Preset", "plus");
+        _save.Clicked += () => SaveClicked?.Invoke();
+        AddChild(_save);
+
+        _list = new PresetScrollList();
+        AddChild(_list);
+    }
+
+    public void RefreshTheme()
+    {
+        Style.BackColor = Theme.Section;
+        if (Style.Border != null)
+        {
+            Style.Border.Color = Theme.Hairline;
+            Style.Border.Roundness = Theme.Radius;
+        }
+        Theme.ApplyCardShadow(Style);
+        if (_header.Style != null)
+        {
+            _header.Style.BackColor = Theme.SectionHeader;
+            if (_header.Style.Border != null)
+                _header.Style.Border.Color = Theme.HairlineSubtle;
+        }
+        if (_headerTitle.Style?.Text != null)
+            _headerTitle.Style.Text.Color = Theme.Text;
+        foreach (var row in _rows)
+        {
+            if (row.Style?.Text != null)
+                row.Style.Text.Color = Theme.TextDim;
+            if (row.Style?.Border != null)
+                row.Style.Border.Roundness = Theme.RadiusSm;
+        }
+        InvalidatePaint();
+    }
+
+    public void SetItems(IReadOnlyList<string> names)
+    {
+        names ??= Array.Empty<string>();
+
+        var previous = _rows.ToArray();
+        _rows.Clear();
+        _list.ClearItems();
+        for (int i = 0; i < previous.Length; i++)
+        {
+            previous[i].Dispose();
+        }
+
+        for (int i = 0; i < names.Count; i++)
+        {
+            string name = names[i] ?? "";
+            var row = new NameRow(name, PresetStore.IsUser(name));
+            row.Events.OnClick += (_, args) =>
+            {
+                if (args.Button != (int)MouseButton.Left) return;
+                Applied?.Invoke(name);
+                args.Handled = true;
+            };
+            row.DeleteClicked += () => Deleted?.Invoke(name);
+            _rows.Add(row);
+            _list.AddItem(row);
+        }
+
+        InvalidateLayout();
+        InvalidatePaint();
+    }
+
+    public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
+    {
+        float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : Theme.LeftW);
+        float h = HeaderH + SaveH + 6f + SaveH + 16f + _rows.Count * RowH + 16f;
+        if (maxHeight > 0) h = Math.Min(h, maxHeight);
+        return new SKSize(w, h);
+    }
+
+    protected override void LayoutChildren()
+    {
+        float originX = Transform.Computed.X;
+        float originY = Transform.Computed.Y;
+        float w = Math.Max(1f, Transform.Width);
+        float h = Math.Max(1f, Transform.Height);
+
+        // Header bar
+        _header.Transform.SetAbsoluteFrame(originX, originY, w, HeaderH);
+        _headerTitle.Transform.SetAbsoluteFrame(originX + 8f, originY + (HeaderH - 18f) * 0.5f, w - 16f, 18f);
+
+        // Copy and Paste action buttons in a single row
+        float copyPasteY = originY + HeaderH + 6f;
+        float pad = 8f;
+        float gap = 6f;
+        float totalRowW = w - pad * 2f;
+        float halfW = (totalRowW - gap) * 0.5f;
+        _copy.Transform.SetAbsoluteFrame(originX + pad, copyPasteY, halfW, SaveH);
+        _paste.Transform.SetAbsoluteFrame(originX + pad + halfW + gap, copyPasteY, halfW, SaveH);
+
+        // Save preset action button
+        float saveY = copyPasteY + SaveH + 6f;
+        _save.Transform.SetAbsoluteFrame(originX + pad, saveY, totalRowW, SaveH);
+
+        // Recessed presets list well
+        float listY = saveY + SaveH + 6f;
+        float listH = Math.Max(24f, originY + h - listY - 8f);
+        _list.Transform.SetAbsoluteFrame(originX + pad, listY, totalRowW, listH);
+    }
+
+    private sealed class PresetScrollList : ScrollContainer
+    {
+        private readonly List<VisualElement> _items = new();
+
+        public PresetScrollList()
+        {
+            Name = "PresetList_ScrollContainer";
+            OverflowX = OverflowMode.Clip;
+            OverflowY = OverflowMode.Scroll;
+            ScrollbarVisibilityX = ScrollbarVisibility.Hidden;
+            ScrollbarVisibilityY = ScrollbarVisibility.Auto;
+            Style = new ElementStyle
+            {
+                BackColor = Theme.Well,
+                Border = new BorderStyle
+                {
+                    Width = 1,
+                    Color = Theme.HairlineSubtle,
+                    Roundness = Theme.RadiusSm
+                }
+            };
+        }
+
+        public void AddItem(VisualElement item)
+        {
+            _items.Add(item);
+            AddChild(item);
+        }
+
+        public void ClearItems()
+        {
+            for (int i = 0; i < _items.Count; i++)
+                RemoveChild(_items[i]);
+            _items.Clear();
+        }
+
+        protected override void LayoutChildren()
+        {
+            float ox = Transform.Computed.X;
+            float oy = Transform.Computed.Y;
+            float w = Math.Max(1f, Transform.Width);
+            float y = 2f;
+
+            for (int i = 0; i < _items.Count; i++)
+            {
+                var row = _items[i];
+                row.Transform.SetAbsoluteFrame(ox + 2f, oy + y, w - 4f, RowH);
+                y += RowH;
+            }
+
+            SetContentSize(w, Math.Max(y + 2f, Transform.Computed.Height));
+            base.LayoutChildren();
+        }
+    }
+
+    private sealed class NameRow : VisualElement
+    {
+        public event Action? DeleteClicked;
+
+        public NameRow(string name, bool canDelete)
+        {
+            Name = $"Preset_{name}";
+            Text = name;
+            Cursor = StandardCursor.Hand;
+            Style = new ElementStyle
+            {
+                BackColor = SKColors.Transparent,
+                Border = new BorderStyle
+                {
+                    Width = 0,
+                    Color = SKColors.Transparent,
+                    Roundness = Theme.RadiusSm
+                },
+                Text = new TextStyle
+                {
+                    Color = Theme.TextDim,
+                    Size = 12.5f,
+                    Weight = 400,
+                    Alignment = TextAlign.Left,
+                    Padding = 10
+                }
+            };
+
+            if (canDelete)
+            {
+                var del = new VisualElement
+                {
+                    Name = $"{Name}_Del",
+                    Cursor = StandardCursor.Hand,
+                    BackgroundImageScale = ImageScaleMode.Contain,
+                    BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                    BackgroundImageTintColor = Theme.TextDim,
+                    BackgroundSvg = IconStore.LoadSvg("cross"),
+                    Style = new ElementStyle
+                    {
+                        BackColor = SKColors.Transparent,
+                        Border = new BorderStyle { Width = 0, Roundness = 2 }
+                    }
+                };
+                del.Events.OnMouseEnter += _ =>
+                {
+                    del.Style.BackColor = Theme.Hover;
+                    del.BackgroundImageTintColor = Theme.Text;
+                    InvalidatePaint();
+                };
+                del.Events.OnMouseLeave += _ =>
+                {
+                    del.Style.BackColor = SKColors.Transparent;
+                    del.BackgroundImageTintColor = Theme.TextDim;
+                    InvalidatePaint();
+                };
+                del.Events.OnClick += (_, args) =>
+                {
+                    args.Handled = true;
+                    DeleteClicked?.Invoke();
+                };
+                AddChild(del);
+            }
+
+            Events.OnMouseEnter += _ =>
+            {
+                Style.BackColor = Theme.Selected;
+                Style.Text.Color = Theme.Text;
+                InvalidatePaint();
+            };
+            Events.OnMouseLeave += _ =>
+            {
+                Style.BackColor = SKColors.Transparent;
+                Style.Text.Color = Theme.TextDim;
+                InvalidatePaint();
+            };
+        }
+
+        protected override void LayoutChildren()
+        {
+            if (Children.Count == 0) return;
+            float ox = Transform.Computed.X;
+            float oy = Transform.Computed.Y;
+            float w = Math.Max(1f, Transform.Width);
+            float h = Math.Max(1f, Transform.Height);
+            Children[0].Transform.SetAbsoluteFrame(ox + w - 24, oy + (h - 20) * 0.5f, 20, 20);
+        }
+    }
+}
