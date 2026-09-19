@@ -33,13 +33,7 @@ jobs:
       - name: Checkout Raw75
         uses: actions/checkout@v4
         with:
-          path: Raw75
-
-      - name: Checkout Blossom
-        uses: actions/checkout@v4
-        with:
-          repository: cretucosmin3/Blossom
-          path: Blossom
+          submodules: recursive
 
       - name: Install macOS Dependencies
         if: startsWith(matrix.os, 'macos')
@@ -53,7 +47,7 @@ jobs:
 
       - name: Publish Raw75 (${{ matrix.rid }})
         run: >
-          dotnet publish Raw75/src/Raw75/Raw75.csproj
+          dotnet publish src/Raw75/Raw75.csproj
           -c Release
           -r ${{ matrix.rid }}
           --self-contained true

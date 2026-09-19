@@ -12,7 +12,12 @@ cd "$ROOT"
 
 PROJECT="$ROOT/src/Raw75/Raw75.csproj"
 PUBLISH="$ROOT/publish"
-BLOSSOM_ROOT="${BLOSSOM_ROOT:-$(cd "$ROOT/../Blossom" && pwd)}"
+if [[ -d "$ROOT/external/Blossom/src/Blossom" ]]; then
+  DEFAULT_BLOSSOM="$ROOT/external/Blossom"
+else
+  DEFAULT_BLOSSOM="$(cd "$ROOT/../Blossom" 2>/dev/null && pwd || echo "")"
+fi
+BLOSSOM_ROOT="${BLOSSOM_ROOT:-$DEFAULT_BLOSSOM}"
 
 if [[ ! -f "$PROJECT" ]]; then
   echo "error: missing $PROJECT" >&2
