@@ -35,7 +35,8 @@ internal static class LibRawNative
         string[] deps =
         {
             "libjpeg.so.8", "liblcms2.so", "libgomp.so.1", "libraw_r.so.23",
-            "jpeg8.dll", "lcms2.dll", "raw_r.dll"
+            "jpeg8.dll", "lcms2.dll", "raw_r.dll",
+            "libraw.23.dylib", "libraw.dylib"
         };
 
         foreach (string dir in NativeDirs())
@@ -61,6 +62,13 @@ internal static class LibRawNative
         yield return Path.Combine(baseDir, "runtimes", RuntimeInformation.RuntimeIdentifier, "native");
         yield return Path.Combine(baseDir, "runtimes", "linux-x64", "native");
         yield return Path.Combine(baseDir, "runtimes", "win-x64", "native");
+        yield return Path.Combine(baseDir, "runtimes", "osx-arm64", "native");
+        yield return Path.Combine(baseDir, "runtimes", "osx-x64", "native");
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            yield return "/opt/homebrew/lib";
+            yield return "/usr/local/lib";
+        }
     }
 
     public static string Flatten(Exception ex)
