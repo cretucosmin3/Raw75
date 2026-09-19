@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>Raw75</RootNamespace>
     <AssemblyName>Raw75</AssemblyName>
+    <Version>0.1.0</Version>
     <Description>Desktop application for editing raw photos.</Description>
     <Authors>Cosmin Crețu</Authors>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

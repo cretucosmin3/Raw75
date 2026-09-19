@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.rid }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            archive_ext: tar.gz
+          - os: windows-latest
+            rid: win-x64
+            archive_ext: zip
+          - os: macos-latest
+            rid: osx-arm64
+            archive_ext: tar.gz
+          - os: macos-13
+            rid: osx-x64
+            archive_ext: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Raw75
+        uses: actions/checkout@v4
+        with:
+          path: Raw75
+
+      - name: Checkout Blossom
+        uses: actions/checkout@v4
+        with:
+          repository: cretucosmin3/Blossom
+          path: Blossom
+
+      - name: Install macOS Dependencies
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install libraw
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish Raw75 (${{ matrix.rid }})
+        run: >
+          dotnet publish Raw75/src/Raw75/Raw75.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -o ./publish/Raw75-${{ matrix.rid }}
+
+      - name: Package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          chmod +x ./publish/Raw75-${{ matrix.rid }}/Raw75
+          tar -czvf Raw75-${{ matrix.rid }}.tar.gz -C ./publish Raw75-${{ matrix.rid }}
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          Compress-Archive -Path ./publish/Raw75-${{ matrix.rid }} -DestinationPath Raw75-${{ matrix.rid }}.zip
+
+      - name: Package (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          BREW_PREFIX=$(brew --prefix)
+          cp -L "$BREW_PREFIX"/lib/libraw*.dylib ./publish/Raw75-${{ matrix.rid }}/ 2>/dev/null || true
+          cp -L "$BREW_PREFIX"/lib/liblcms2*.dylib ./publish/Raw75-${{ matrix.rid }}/ 2>/dev/null || true
+          cp -L "$BREW_PREFIX"/lib/libjpeg*.dylib ./publish/Raw75-${{ matrix.rid }}/ 2>/dev/null || true
+          chmod +x ./publish/Raw75-${{ matrix.rid }}/Raw75
+          tar -czvf Raw75-${{ matrix.rid }}.tar.gz -C ./publish Raw75-${{ matrix.rid }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Raw75-${{ matrix.rid }}
+          path: Raw75-${{ matrix.rid }}.${{ matrix.archive_ext }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Raw75
+        uses: actions/checkout@v4
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Determine Version & Tag
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION=$(grep -oPm1 "(?<=<Version>)[^<]+" src/Raw75/Raw75.csproj || echo "0.1.0")
+            TAG="v$VERSION"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          files: artifacts/*
+          generate_release_notes: true
