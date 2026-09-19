@@ -33,3 +33,6 @@ Thumbs.db
 **/packages/*
 project.lock.json
 project.fragment.lock.json
+
+# Local files not needed for git
+/local
