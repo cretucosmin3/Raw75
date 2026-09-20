@@ -62,8 +62,7 @@ internal static class DevelopCpu
         bool hasLocalContrast = s.EnableLocalContrast && (
             Math.Abs(s.LocalContrastDetail) > 0.001f ||
             Math.Abs(s.Texture) > 0.001f);
-        bool neighbor = doDenoise;
-        bool needBuffer = hasColorRecon || hasLocalContrast || neighbor || doGrain;
+        bool needBuffer = hasColorRecon || hasLocalContrast || doDenoise;
 
         bool hasCurve = s.EnableCurve && (!CurveMath.IsIdentity(s.CurveRgb) || !CurveMath.IsIdentity(s.CurveRed) || !CurveMath.IsIdentity(s.CurveGreen) || !CurveMath.IsIdentity(s.CurveBlue));
         bool rgbCurvesActive = s.EnableCurve && (!CurveMath.IsIdentity(s.CurveRed) || !CurveMath.IsIdentity(s.CurveGreen) || !CurveMath.IsIdentity(s.CurveBlue));
@@ -79,9 +78,9 @@ internal static class DevelopCpu
             return new RasterBuffer(new byte[dw * dh * 4], dw, dh);
 
         bool remap = hasCrop || rot != 0 || flipH || flipV || Math.Abs(straight) > 0.05f;
-        float[]? preLook = hasColorRecon ? new float[dw * dh * 3] : null;
-        float[]? look = needBuffer ? new float[dw * dh * 3] : null;
-        for (int y = 0; y < dh; y++)
+        float[]? linBuf = needBuffer ? new float[dw * dh * 3] : null;
+
+        Parallel.For(0, dh, y =>
         {
             for (int x = 0; x < dw; x++)
             {
@@ -177,83 +176,86 @@ internal static class DevelopCpu
                     }
                 }
 
-                if (preLook != null)
+                if (needBuffer)
                 {
                     int pi = (y * dw + x) * 3;
-                    preLook[pi] = r;
-                    preLook[pi + 1] = g;
-                    preLook[pi + 2] = b;
+                    linBuf![pi] = r;
+                    linBuf[pi + 1] = g;
+                    linBuf[pi + 2] = b;
                 }
                 else
                 {
                     ApplyLook(ref r, ref g, ref b, temp, tint, ev, contrast, hi, shd, whites, blacks, vib, sat, s, expLut);
 
-                    if (look != null)
+                    if (doGrain)
                     {
-                        int li = (y * dw + x) * 3;
-                        look[li] = r;
-                        look[li + 1] = g;
-                        look[li + 2] = b;
+                        float lum = Luma(r, g, b);
+                        float midtoneCurve = MathF.Sin(Math.Clamp(lum, 0f, 1f) * MathF.PI);
+                        uint n1 = (uint)(x * 73856093 ^ y * 19349663 ^ 12345);
+                        n1 = (n1 ^ (n1 >> 13)) * 0x5bd1e995;
+                        n1 ^= n1 >> 15;
+                        float g1 = (n1 & 0xFFFF) / 32768.0f - 1.0f;
+
+                        uint n2 = (uint)((x >> 1) * 73856093 ^ (y >> 1) * 19349663 ^ 67891);
+                        n2 = (n2 ^ (n2 >> 13)) * 0x5bd1e995;
+                        n2 ^= n2 >> 15;
+                        float g2 = (n2 & 0xFFFF) / 32768.0f - 1.0f;
+
+                        float rawGrain = g1 * 0.70f + g2 * 0.30f;
+                        float grain = rawGrain * grainAmt * 0.12f * (0.35f + 0.65f * midtoneCurve);
+                        r = MathF.Max(0f, r + grain);
+                        g = MathF.Max(0f, g + grain);
+                        b = MathF.Max(0f, b + grain);
                     }
-                    else
-                    {
-                        int di = (y * dw + x) * 4;
-                        ToneCurveSrgb(r, g, b, toneMode, sig, out float or, out float og, out float ob);
-                        if (hasCurve)
-                            ApplyCurveCpu(ref or, ref og, ref ob, rgbCurvesActive, lutR!, lutG!, lutB!, lutM!);
-                        dst[di] = ToByte(or);
-                        dst[di + 1] = ToByte(og);
-                        dst[di + 2] = ToByte(ob);
-                        dst[di + 3] = 255;
-                    }
+
+                    int di = (y * dw + x) * 4;
+                    ToneCurveSrgb(r, g, b, toneMode, sig, out float or, out float og, out float ob);
+                    if (hasCurve)
+                        ApplyCurveCpu(ref or, ref og, ref ob, rgbCurvesActive, lutR!, lutG!, lutB!, lutM!);
+                    dst[di] = ToByte(or);
+                    dst[di + 1] = ToByte(og);
+                    dst[di + 2] = ToByte(ob);
+                    dst[di + 3] = 255;
                 }
             }
-        }
+        });
 
-        if (preLook != null)
+        if (!needBuffer)
         {
-            // Color reconstruction (step 2)
-            // ref: color reconstruction
-            if (fast)
-                ApplyColorReconstructionFast(preLook, dw, dh, hlThreshold, s.ColorReconstructionAmount, s.ColorReconstructionSpatial);
-            else
-                ApplyColorReconstructionBilateral(preLook, dw, dh, hlThreshold, s.ColorReconstructionAmount, s.ColorReconstructionSpatial);
-
-            for (int y = 0; y < dh; y++)
+            if (sharp > 0.001f)
             {
-                for (int x = 0; x < dw; x++)
-                {
-                    int i = (y * dw + x) * 3;
-                    float r = preLook[i];
-                    float g = preLook[i + 1];
-                    float b = preLook[i + 2];
-                    ApplyLook(ref r, ref g, ref b, temp, tint, ev, contrast, hi, shd, whites, blacks, vib, sat, s, expLut);
-                    look![i] = r;
-                    look[i + 1] = g;
-                    look[i + 2] = b;
-                }
+                if (fast)
+                    UnsharpBytesFast(dst, dw, dh, sharp);
+                else
+                    UnsharpBytes(dst, dw, dh, sharp);
             }
+            return new RasterBuffer(dst, dw, dh);
         }
 
-        if (look == null)
-            return new RasterBuffer(dst, dw, dh);
+        // Color reconstruction (step 2) - operates on linear scene-referred RGB
+        if (hasColorRecon)
+        {
+            if (fast)
+                ApplyColorReconstructionFast(linBuf!, dw, dh, hlThreshold, s.ColorReconstructionAmount, s.ColorReconstructionSpatial);
+            else
+                ApplyColorReconstructionBilateral(linBuf!, dw, dh, hlThreshold, s.ColorReconstructionAmount, s.ColorReconstructionSpatial);
+        }
 
-        // Local contrast (step 8)
-        // ref: bilateral filter
+        // Local contrast & Clarity (step 8) - operates on linear scene-referred RGB (matches GPU Stage 2)
         if (hasLocalContrast)
         {
-            ApplyLocalContrast(look, dw, dh, s.LocalContrastDetail, s.Texture / 100f, fast);
+            ApplyLocalContrast(linBuf!, dw, dh, s.LocalContrastDetail, s.Texture / 100f, fast);
         }
 
-        // Denoise (step 9) + Tone curve (step 12)
-        for (int y = 0; y < dh; y++)
+        // Final look, denoise (step 9), grain & tone curve (step 12)
+        Parallel.For(0, dh, y =>
         {
             for (int x = 0; x < dw; x++)
             {
                 int li = (y * dw + x) * 3;
-                float r = look[li];
-                float g = look[li + 1];
-                float b = look[li + 2];
+                float r = linBuf![li];
+                float g = linBuf[li + 1];
+                float b = linBuf[li + 2];
                 if (doDenoise)
                 {
                     float lc = Luma(r, g, b);
@@ -269,7 +271,7 @@ internal static class DevelopCpu
 
                     void Tap(int dx, int dy, float sw)
                     {
-                        SampleLook(look, dw, dh, x + dx, y + dy, out float nr, out float ng, out float nb);
+                        SampleLook(linBuf, dw, dh, x + dx, y + dy, out float nr, out float ng, out float nb);
                         float nl = Luma(nr, ng, nb);
                         float wl = sw * MathF.Exp(-MathF.Abs(nl - lc) / rangeSigma);
                         sumL += nl * wl;
@@ -310,6 +312,8 @@ internal static class DevelopCpu
                     b = MathF.Max(0f, finalL + finalCb);
                 }
 
+                ApplyLook(ref r, ref g, ref b, temp, tint, ev, contrast, hi, shd, whites, blacks, vib, sat, s, expLut);
+
                 if (doGrain)
                 {
                     float lum = Luma(r, g, b);
@@ -340,7 +344,7 @@ internal static class DevelopCpu
                 dst[di + 2] = ToByte(ob);
                 dst[di + 3] = 255;
             }
-        }
+        });
 
         if (sharp > 0.001f)
         {
@@ -355,7 +359,7 @@ internal static class DevelopCpu
     private static void UnsharpBytes(byte[] dst, int dw, int dh, float sharp)
     {
         byte[] copy = (byte[])dst.Clone();
-        float amt = sharp * 2.4f;
+        float amt = sharp * 2.0f;
         for (int y = 0; y < dh; y++)
         {
             for (int x = 0; x < dw; x++)
@@ -1362,12 +1366,15 @@ internal static class DevelopCpu
         float rangeSigma = 0.16f;
         float invTwoSigmaSq = 0.5f / (rangeSigma * rangeSigma);
 
+        // Diagonal taps at radius r2 match GPU Stage2 diag offset (r2 * 0.7071)
+        int r2d = Math.Max(1, (int)MathF.Round(r2 * 0.7071f));
+
         Parallel.For(0, h, y =>
         {
             int yT1 = Math.Max(0, y - r1);
             int yB1 = Math.Min(h - 1, y + r1);
-            int yT2 = Math.Max(0, y - r2);
-            int yB2 = Math.Min(h - 1, y + r2);
+            int yT2 = Math.Max(0, y - r2d);
+            int yB2 = Math.Min(h - 1, y + r2d);
             int yT3 = Math.Max(0, y - r3);
             int yB3 = Math.Min(h - 1, y + r3);
 
@@ -1395,9 +1402,9 @@ internal static class DevelopCpu
                 float d3 = l3 - xL; float w3 = MathF.Exp(-d3 * d3 * invTwoSigmaSq); sumL += l3 * w3; sumW += w3;
                 float d4 = l4 - xL; float w4 = MathF.Exp(-d4 * d4 * invTwoSigmaSq); sumL += l4 * w4; sumW += w4;
 
-                // Ring 2: 4 diagonal taps at r2
-                int xL2 = Math.Max(0, x - r2);
-                int xR2 = Math.Min(w - 1, x + r2);
+                // Ring 2: 4 diagonal taps at radius r2 (offset r2d)
+                int xL2 = Math.Max(0, x - r2d);
+                int xR2 = Math.Min(w - 1, x + r2d);
                 float l5 = lumsL[yT2 * w + xR2];
                 float l6 = lumsL[yT2 * w + xL2];
                 float l7 = lumsL[yB2 * w + xR2];
@@ -1426,10 +1433,11 @@ internal static class DevelopCpu
 
                 float gL = sumL / sumW;
                 float c = xL - gL;
-                float newL = xL + detail * c * MathF.Exp(-c * c / 0.04f);
+                // Pre-look detail is calibrated (0.55x) so that downstream contrast S-curve steepening produces 1:1 visual match
+                float newL = xL + (detail * 0.55f) * c * MathF.Exp(-c * c / 0.04f);
 
-                // Edge-guided halo suppression matching GPU SkSL
-                float edgeFactor = MathF.Exp(-grad * grad / 0.0064f);
+                // Edge-guided halo suppression matching GPU SkSL: preserves textures, suppresses edge halo exaggeration
+                float edgeFactor = MathF.Exp(-grad * grad / 0.012f);
                 float finalL = xL + (newL - xL) * edgeFactor;
                 if (MathF.Abs(texture) > 0.001f)
                 {
@@ -1440,7 +1448,7 @@ internal static class DevelopCpu
                 finalL = Math.Clamp(finalL, 0.0001f, 2.0f);
 
                 float newLum = finalL * finalL * finalL;
-                float gain = newLum / lum;
+                float gain = Math.Clamp(newLum / lum, 0.05f, 20.0f);
 
                 look[3 * idx] *= gain;
                 look[3 * idx + 1] *= gain;
