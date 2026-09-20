@@ -126,10 +126,15 @@ public class Filmstrip : VisualElement
         _btnFilterAll.Clicked += () => SetFilter(PhotoFilter.All);
 
         _btnFilterReady = IconButton.Icon("check");
+        _btnFilterReady.IconColor = Theme.Success;
+        _btnFilterReady.ToggledBackColor = new SKColor(46, 180, 80, 36);
+        _btnFilterReady.ToggledBorderColor = Theme.SuccessSoft;
         _btnFilterReady.Clicked += () => ToggleFilterFlag(PhotoFilter.Ready);
 
-        _btnFilterStar = new IconButton("⭐");
-        _btnFilterStar.FontSize = 14f;
+        _btnFilterStar = IconButton.Icon("star_filled");
+        _btnFilterStar.IconColor = Theme.Favorite;
+        _btnFilterStar.ToggledBackColor = new SKColor(255, 214, 50, 32);
+        _btnFilterStar.ToggledBorderColor = Theme.FavoriteSoft;
         _btnFilterStar.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
 
         _filterRail.AddChild(_btnFilterAll);
@@ -207,6 +212,13 @@ public class Filmstrip : VisualElement
             if (_filterRail.Style.Border != null)
                 _filterRail.Style.Border.Color = Theme.Hairline;
         }
+        _btnFilterAll.RefreshTheme();
+        _btnFilterReady.IconColor = Theme.Success;
+        _btnFilterReady.ToggledBorderColor = Theme.SuccessSoft;
+        _btnFilterReady.RefreshTheme();
+        _btnFilterStar.IconColor = Theme.Favorite;
+        _btnFilterStar.ToggledBorderColor = Theme.FavoriteSoft;
+        _btnFilterStar.RefreshTheme();
         foreach (var cell in _activeCells.Values)
             cell.RefreshTheme();
         foreach (var cell in _cellPool)
