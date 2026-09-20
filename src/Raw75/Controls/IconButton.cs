@@ -186,7 +186,7 @@ public class IconButton : VisualElement
     }
 
     private bool _showUnderscore;
-    private float _underscoreHeight = 3f;
+    private float _underscoreHeight = 4f;
     private float? _underscoreWidth;
     private SKColor? _underscoreColor;
     private VisualElement? _underlineElement;
@@ -202,6 +202,10 @@ public class IconButton : VisualElement
             if (_showUnderscore)
             {
                 _enable3DEffect = false;
+                if (FontSize <= 12.01f)
+                {
+                    FontSize = 14f;
+                }
                 EnsureUnderlineElement();
             }
             else if (_underlineElement != null)
@@ -221,6 +225,10 @@ public class IconButton : VisualElement
         {
             if (Math.Abs(_underscoreHeight - value) < 0.01f) return;
             _underscoreHeight = value;
+            if (_underlineElement?.Style?.Border != null)
+            {
+                _underlineElement.Style.Border.Roundness = Math.Min(2f, _underscoreHeight * 0.5f);
+            }
             InvalidateLayout();
         }
     }
@@ -262,6 +270,21 @@ public class IconButton : VisualElement
                 _labelElement.Style.Text.Size = value;
             if (Style?.Text != null)
                 Style.Text.Size = value;
+            InvalidateLayout();
+            InvalidatePaint();
+        }
+    }
+
+    private float? _iconSize;
+
+    [BuilderProperty("Icon Size", "Appearance", min: 8f, max: 48f, step: 1f)]
+    public float? IconSize
+    {
+        get => _iconSize;
+        set
+        {
+            if (_iconSize == value) return;
+            _iconSize = value;
             InvalidateLayout();
             InvalidatePaint();
         }
@@ -449,8 +472,9 @@ public class IconButton : VisualElement
 
         if (hasIcon && hasText)
         {
-            float iconSz = Math.Clamp(Math.Min(15f, h - 8f), 12f, 16f);
-            float iconGap = 5f;
+            float defaultIconSz = _showUnderscore ? 19f : Math.Clamp(Math.Min(15f, h - 8f), 12f, 16f);
+            float iconSz = _iconSize ?? defaultIconSz;
+            float iconGap = _showUnderscore ? 7f : 5f;
             float textW = _labelElement.Style?.Text?.Paint?.MeasureText(_caption) ?? (_caption.Length * 7.5f);
             totalW = iconSz + iconGap + textW;
 
@@ -467,7 +491,8 @@ public class IconButton : VisualElement
             float maxTextW = Math.Max(0f, ox + w - textX - 2f);
             float actualTextW = Math.Max(textW + 2f, maxTextW);
 
-            _labelElement.Transform.SetAbsoluteFrame(textX, oy + _textOffsetY, actualTextW, h);
+            float textOy = _showUnderscore ? 0.5f : _textOffsetY;
+            _labelElement.Transform.SetAbsoluteFrame(textX, oy + textOy, actualTextW, h);
             if (_labelElement.Style?.Text != null)
             {
                 _labelElement.Style.Text.Alignment = TextAlign.Left;
@@ -476,7 +501,8 @@ public class IconButton : VisualElement
         }
         else if (hasIcon)
         {
-            float sz = Math.Clamp(Math.Min(w - 6f, h - 6f), 14f, 18f);
+            float defaultSz = _showUnderscore ? 20f : Math.Clamp(Math.Min(w - 6f, h - 6f), 14f, 18f);
+            float sz = _iconSize ?? defaultSz;
             totalW = sz;
             _iconElement!.Transform.SetAbsoluteFrame(ox + (w - sz) * 0.5f, oy + (h - sz) * 0.5f, sz, sz);
             _iconElement.Visible = true;
@@ -663,7 +689,7 @@ public class IconButton : VisualElement
                 {
                     Width = 0,
                     Color = SKColors.Transparent,
-                    Roundness = 1.5f
+                    Roundness = Math.Min(2f, _underscoreHeight * 0.5f)
                 }
             }
         };
@@ -722,10 +748,13 @@ public class IconButton : VisualElement
 
     public void RefreshTheme()
     {
-        if (Style?.Border != null)
-            Style.Border.Roundness = Theme.RadiusSm;
         if (!_showUnderscore)
-            Theme.ApplyButtonShadow(Style);
+        {
+            if (Style?.Border != null)
+                Style.Border.Roundness = Theme.RadiusSm;
+            if (Style != null)
+                Theme.ApplyButtonShadow(Style);
+        }
         if (_underlineElement?.Style != null)
             _underlineElement.Style.BackColor = _underscoreColor ?? Theme.Accent;
         ApplyChrome();
