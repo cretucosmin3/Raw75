@@ -35,9 +35,6 @@ public static class ThemeApplier
             case PresetList p:
                 p.RefreshTheme();
                 break;
-            case NavigatorBox n:
-                n.RefreshTheme();
-                break;
             case Filmstrip f:
                 f.RefreshTheme();
                 break;
