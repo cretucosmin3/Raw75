@@ -218,13 +218,15 @@ public sealed class WorkspaceView : View
             }
         });
 
-        _btnGalleryMode = Chip("Gallery", 331, navY, 96, 32, iconName: "gallery");
+        _btnGalleryMode = Chip("Gallery", 328, 0f, 112, top, iconName: "gallery");
         _btnGalleryMode.ShowUnderscore = true;
+        _btnGalleryMode.FontSize = 14f;
         _btnGalleryMode.Transform.Anchor = Anchor.Left | Anchor.Top;
         _btnGalleryMode.Clicked += () => SetViewMode(true);
 
-        _btnViewerMode = Chip("Develop", 433, navY, 110, 32, iconName: "viewer");
+        _btnViewerMode = Chip("Develop", 444, 0f, 120, top, iconName: "viewer");
         _btnViewerMode.ShowUnderscore = true;
+        _btnViewerMode.FontSize = 14f;
         _btnViewerMode.Transform.Anchor = Anchor.Left | Anchor.Top;
         _btnViewerMode.Toggled = true;
         _btnViewerMode.Clicked += () => SetViewMode(false);

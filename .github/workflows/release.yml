@@ -102,7 +102,7 @@ jobs:
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
-            VERSION=$(grep -oPm1 "(?<=<Version>)[^<]+" src/Raw75/Raw75.csproj || echo "0.1.1")
+            VERSION=$(grep -oPm1 "(?<=<Version>)[^<]+" src/Raw75/Raw75.csproj || echo "0.1.11")
             TAG="v$VERSION"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT

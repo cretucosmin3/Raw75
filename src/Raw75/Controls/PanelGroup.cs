@@ -57,6 +57,7 @@ public class PanelGroup : VisualElement
         Name = $"PanelGroup_{title}";
         _title = title ?? "";
         Padding = new Thickness(10, 8, 10, 10);
+        Overflow = OverflowMode.Clip;
         Style = new ElementStyle
         {
             BackColor = Theme.Section,

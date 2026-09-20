@@ -23,8 +23,8 @@ public sealed class SettingsDialog : VisualElement
     private readonly VisualElement _card;
     private readonly VisualElement _title;
     private readonly IconButton _close;
-    private readonly IconButton _tabGeneral;
     private readonly IconButton _tabThemes;
+    private readonly IconButton _tabGeneral;
     private readonly IconButton _tabDev;
     private readonly VisualElement _panelGeneral;
     private readonly VisualElement _panelThemes;
@@ -49,7 +49,7 @@ public sealed class SettingsDialog : VisualElement
 
     public event Action? CacheCleared;
 
-    private string _tab = "General";
+    private string _tab = "Themes";
     private Session? _session;
     private PhotoPane? _pane;
 
@@ -70,11 +70,11 @@ public sealed class SettingsDialog : VisualElement
         _close = new IconButton("Close");
         _close.Clicked += Close;
 
-        _tabGeneral = new IconButton("General");
         _tabThemes = new IconButton("Themes");
+        _tabGeneral = new IconButton("General");
         _tabDev = new IconButton("Dev");
-        _tabGeneral.Clicked += () => SetTab("General");
         _tabThemes.Clicked += () => SetTab("Themes");
+        _tabGeneral.Clicked += () => SetTab("General");
         _tabDev.Clicked += () => SetTab("Dev");
 
         _panelGeneral = Box("PanelGeneral", Theme.PanelAlt, 6f);
@@ -151,8 +151,8 @@ public sealed class SettingsDialog : VisualElement
         AddChild(_card);
         _card.AddChild(_title);
         _card.AddChild(_close);
-        _card.AddChild(_tabGeneral);
         _card.AddChild(_tabThemes);
+        _card.AddChild(_tabGeneral);
         _card.AddChild(_tabDev);
         _card.AddChild(_panelGeneral);
         _card.AddChild(_panelThemes);
@@ -174,7 +174,7 @@ public sealed class SettingsDialog : VisualElement
                 Close();
         };
 
-        SetTab("General");
+        SetTab("Themes");
     }
 
     public void Open(Session session, PhotoPane pane)
@@ -346,8 +346,8 @@ public sealed class SettingsDialog : VisualElement
         float tabX = cardX + 10;
         float tabY = cardY + 54;
         float tabH = 34f;
-        _tabGeneral.Transform.SetAbsoluteFrame(tabX, tabY, TabW, tabH);
-        _tabThemes.Transform.SetAbsoluteFrame(tabX, tabY + tabH + 6, TabW, tabH);
+        _tabThemes.Transform.SetAbsoluteFrame(tabX, tabY, TabW, tabH);
+        _tabGeneral.Transform.SetAbsoluteFrame(tabX, tabY + tabH + 6, TabW, tabH);
         _tabDev.Transform.SetAbsoluteFrame(tabX, tabY + (tabH + 6) * 2, TabW, tabH);
 
         float px = cardX + 10 + TabW + 12;
