@@ -1152,9 +1152,9 @@ public static class DevelopRenderer
 
                     float gL = sumL / sumW;
                     float c = xL - gL;
-                    float newL = xL + u_localDetail * c * exp(-c * c / 0.04);
+                    float newL = xL + (u_localDetail * 0.55) * c * exp(-c * c / 0.04);
 
-                    float edgeFactor = exp(-grad * grad / 0.0064);
+                    float edgeFactor = exp(-grad * grad / 0.012);
                     float finalL = mix(xL, newL, edgeFactor);
                     if (abs(u_texture) > 0.001) {
                         float microAvg = 0.25 * (l1 + l2 + l3 + l4);
@@ -1164,7 +1164,7 @@ public static class DevelopRenderer
                     finalL = clamp(finalL, 0.0001, 2.0);
 
                     float newLum = finalL * finalL * finalL;
-                    processed *= newLum / lum;
+                    processed *= clamp(newLum / lum, 0.05, 20.0);
                 }
 
                 // Denoise
@@ -1764,12 +1764,13 @@ public static class DevelopRenderer
                     disp = sample_curve(disp);
                 }
                 if (u_sharpen > 0.001) {
-                    float3 d0 = to_srgb(tone_curve(lin));
+                    float evGain = exp2(u_ev);
+                    float3 d0 = to_srgb(tone_curve(lin * evGain));
                     float3 acc = float3(0.0);
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb));
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb));
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(-1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb));
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb));
+                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
+                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
+                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(-1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
+                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
                     acc *= 0.25;
                     disp += (d0 - acc) * u_sharpen * 2.4;
                 }
@@ -2590,13 +2591,13 @@ public static class DevelopRenderer
 
                     float gL = sumL / sumW;
                     float c = xL - gL;
-                    float newL = xL + u_localDetail * c * exp(-c * c / 0.04);
+                    float newL = xL + (u_localDetail * 0.55) * c * exp(-c * c / 0.04);
 
                     // Edge-guided halo suppression:
                     // In flat or textured regions (grad < 0.05), edgeFactor ~ 1.0 (full clarity enhancement).
                     // Across high-contrast silhouette boundaries (grad >= 0.12), edgeFactor drops to 0,
                     // completely eliminating black shadow lines and bright edge halos.
-                    float edgeFactor = exp(-grad * grad / 0.0064);
+                    float edgeFactor = exp(-grad * grad / 0.012);
                     float finalL = mix(xL, newL, edgeFactor);
                     if (abs(u_texture) > 0.001) {
                         float microAvg = 0.25 * (l1 + l2 + l3 + l4);
@@ -2607,7 +2608,7 @@ public static class DevelopRenderer
 
                     // Convert from perceptual L back to linear luminance (L^3)
                     float newLum = finalL * finalL * finalL;
-                    processed *= newLum / lum;
+                    processed *= clamp(newLum / lum, 0.05, 20.0);
                 }
 
                 // Denoise (step 9)
@@ -2710,13 +2711,14 @@ public static class DevelopRenderer
                     disp = sample_curve(disp);
                 }
                 if (u_sharpen > 0.001) {
-                    float3 o0 = u_srcLinear > 0.5 ? orig.rgb : to_lin(orig.rgb);
+                    float evGain = exp2(u_ev);
+                    float3 o0 = (u_srcLinear > 0.5 ? orig.rgb : to_lin(orig.rgb)) * evGain;
                     float3 d0 = to_srgb(tone_curve(o0));
                     float3 acc = float3(0.0);
-                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, -1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb)));
-                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, 1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb)));
-                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb)));
-                    acc += to_srgb(tone_curve(u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb)));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, -1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb)) * evGain));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, 1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb)) * evGain));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb)) * evGain));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb)) * evGain));
                     acc *= 0.25;
                     disp += (d0 - acc) * u_sharpen * 2.4;
                 }
