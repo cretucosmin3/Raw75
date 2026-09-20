@@ -114,7 +114,7 @@ public sealed class GalleryView : VisualElement
         _btnFilterReady = new IconButton("Ready (0)", "check");
         _btnFilterReady.Clicked += () => ToggleFilterFlag(PhotoFilter.Ready);
 
-        _btnFilterStar = new IconButton("⭐ (0)", "star");
+        _btnFilterStar = new IconButton("Starred (0)", "star");
         _btnFilterStar.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
 
         _btnMarkAll = new IconButton("Mark All Ready", "check");
@@ -367,7 +367,7 @@ public sealed class GalleryView : VisualElement
 
         _btnFilterAll.Caption = $"All ({total})";
         _btnFilterReady.Caption = $"Ready ({ready})";
-        _btnFilterStar.Caption = $"⭐ ({starred})";
+        _btnFilterStar.Caption = $"Starred ({starred})";
         _countLabel.Text = $"{total} photos · {ready} ready · {starred} starred";
     }
 
@@ -432,7 +432,7 @@ public sealed class GalleryView : VisualElement
 
         _btnFilterAll.Transform.SetAbsoluteFrame(hx, hy, 90f, btnH); hx += 94f;
         _btnFilterReady.Transform.SetAbsoluteFrame(hx, hy, 108f, btnH); hx += 112f;
-        _btnFilterStar.Transform.SetAbsoluteFrame(hx, hy, 110f, btnH); hx += 114f;
+        _btnFilterStar.Transform.SetAbsoluteFrame(hx, hy, 118f, btnH); hx += 122f;
 
         _btnMarkAll.Transform.SetAbsoluteFrame(hx, hy, 144f, btnH); hx += 148f;
         _btnClearAll.Transform.SetAbsoluteFrame(hx, hy, 118f, btnH);

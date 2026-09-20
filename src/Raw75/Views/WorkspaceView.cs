@@ -32,7 +32,6 @@ public sealed class WorkspaceView : View
     private VisualElement _status = null!;
     private HistogramView _histogram = null!;
     private Filmstrip _film = null!;
-    private NavigatorBox _nav = null!;
     private PresetList _presets = null!;
     private ExportDialog _export = null!;
     private NameDialog _nameDialog = null!;
@@ -50,6 +49,10 @@ public sealed class WorkspaceView : View
     private IconButton _btnViewerMode = null!;
     private IconButton _btnGalleryMode = null!;
     private bool _isGalleryMode;
+    private VisualElement _leftDockBar = null!;
+    private VisualElement _rightDockBar = null!;
+    private RightColumn _rightColumn = null!;
+    private float GetGalleryColWidth(float w) => Math.Clamp(w * 0.40f, 320f, Math.Max(320f, w - 200f));
 
     private PanelGroup _wbGroup = null!;
     private PanelGroup _exposureGroup = null!;
@@ -216,10 +219,12 @@ public sealed class WorkspaceView : View
         });
 
         _btnGalleryMode = Chip("Gallery", 331, navY, 96, 32, iconName: "gallery");
+        _btnGalleryMode.ShowUnderscore = true;
         _btnGalleryMode.Transform.Anchor = Anchor.Left | Anchor.Top;
         _btnGalleryMode.Clicked += () => SetViewMode(true);
 
         _btnViewerMode = Chip("Develop", 433, navY, 110, 32, iconName: "viewer");
+        _btnViewerMode.ShowUnderscore = true;
         _btnViewerMode.Transform.Anchor = Anchor.Left | Anchor.Top;
         _btnViewerMode.Toggled = true;
         _btnViewerMode.Clicked += () => SetViewMode(false);
@@ -232,35 +237,10 @@ public sealed class WorkspaceView : View
         exp.Clicked += StartExport;
 
         // Left dock background + cards
-        AddElement(Bar("LeftDock", Theme.Window, 0, top, L, H - top - film, Anchor.Left | Anchor.Top | Anchor.Bottom));
+        _leftDockBar = Bar("LeftDock", Theme.Window, 0, top, L, H - top - film, Anchor.Left | Anchor.Top | Anchor.Bottom);
 
         float leftInset = 10f;
-        _nav = new NavigatorBox
-        {
-            Transform = new Transform(leftInset, top + leftInset, L - leftInset * 2, 168)
-            {
-                Anchor = Anchor.Left | Anchor.Top
-            }
-        };
-        _nav.ModePicked += m =>
-        {
-            _photo.SetZoomMode(m == "Fill" ? ZoomMode.Fill : m == "1:1" ? ZoomMode.OneToOne : ZoomMode.Fit);
-            UpdateZoomLabel();
-        };
-        _nav.PreviewClicked += (nx, ny) =>
-        {
-            if (_photo.ZoomMode == ZoomMode.Fit && !_photo.IsFreeZoom)
-            {
-                _photo.ToggleZoom(new Vector2(nx * _photo.Transform.Computed.Width, ny * _photo.Transform.Computed.Height));
-            }
-            else
-            {
-                _photo.PanToNorm(nx, ny);
-            }
-        };
-        AddElement(_nav);
-
-        float presetTop = top + leftInset + 168 + 14f;
+        float presetTop = top + leftInset;
         _presets = new PresetList
         {
             Transform = new Transform(leftInset, presetTop, L - leftInset * 2, H - presetTop - leftInset - film)
@@ -276,7 +256,7 @@ public sealed class WorkspaceView : View
         AddElement(_presets);
 
         // Right dock background + cards
-        AddElement(Bar("RightDock", Theme.Window, W - R, top, R, H - top - film, Anchor.Right | Anchor.Top | Anchor.Bottom));
+        _rightDockBar = Bar("RightDock", Theme.Window, W - R, top, R, H - top - film, Anchor.Right | Anchor.Top | Anchor.Bottom);
 
         float rightInset = 10f;
         _histogram = new HistogramView
@@ -289,15 +269,15 @@ public sealed class WorkspaceView : View
         AddElement(_histogram);
 
         float rightDockTop = top + rightInset + 96 + 14f;
-        var rightDock = new RightColumn
+        _rightColumn = new RightColumn
         {
             Transform = new Transform(W - R, rightDockTop, R, H - rightDockTop - film)
             {
                 Anchor = Anchor.Right | Anchor.Top | Anchor.Bottom
             }
         };
-        AddElement(rightDock);
-        BuildRightPanels(rightDock);
+        AddElement(_rightColumn);
+        BuildRightPanels(_rightColumn);
 
         float photoX = L;
         float photoY = top;
@@ -315,13 +295,13 @@ public sealed class WorkspaceView : View
             UpdateZoomLabel();
             var d = _session.Active;
             if (d == null) return;
-            if (!_restoringView)
+            if (!_restoringView && !_isGalleryMode)
                 _photo.CaptureView(d);
         };
         _photo.ViewSettled += () =>
         {
             var d = _session.Active;
-            if (d == null) return;
+            if (d == null || _isGalleryMode) return;
             RequestViewport(d);
         };
         _photo.Rotate90Clicked += Rotate;
@@ -333,7 +313,7 @@ public sealed class WorkspaceView : View
 
         _gallery = new GalleryView
         {
-            Transform = new Transform(photoX, photoY, photoW, H - top)
+            Transform = new Transform(0, top, W - GetGalleryColWidth(W), H - top)
             {
                 Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
             },
@@ -525,6 +505,17 @@ public sealed class WorkspaceView : View
         _markMenu.ReadyToggled += OnReadyToggled;
         _markMenu.FavoriteToggled += OnFavoriteToggled;
         AddElement(_markMenu);
+
+        var root = new WorkspaceRoot(this)
+        {
+            Transform = new Transform(0, 0, W, H)
+            {
+                Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
+            }
+        };
+        AddElement(root);
+
+        SetViewMode(false);
     }
 
     private void BuildRightPanels(RightColumn host)
@@ -903,7 +894,6 @@ public sealed class WorkspaceView : View
         if (d == null)
         {
             _photo.SetDeveloped(null, owns: false);
-            _nav.Image = null;
             SetStatus("Drop a RAW, Open, or pick a Folder.");
             return;
         }
@@ -914,11 +904,18 @@ public sealed class WorkspaceView : View
             _engine.Open(d);
         _restoringView = true;
         BindPhoto(d);
-        _photo.RestoreView(d);
+        if (_isGalleryMode)
+        {
+            _photo.SetZoomMode(ZoomMode.Fit);
+            _photo.RefreshGeometry();
+        }
+        else
+        {
+            _photo.RestoreView(d);
+        }
         _restoringView = false;
         if (!_isGalleryMode)
             RequestViewport(d);
-        _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
         SaveCurrentSession();
         _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
         _curveGraph.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
@@ -949,24 +946,189 @@ public sealed class WorkspaceView : View
         _btnViewerMode.Toggled = !gallery;
         _btnGalleryMode.Toggled = gallery;
 
-        _gallery.Visible = gallery;
-        _photo.Visible = !gallery;
-        _zoomLabel.Visible = !gallery;
-        _viewOverlay.Visible = !gallery;
-        _film.Visible = !gallery;
-
         if (gallery)
         {
+            _photo.Style.Border = new BorderStyle
+            {
+                Width = 1f,
+                Color = Theme.Hairline,
+                Roundness = Theme.Radius
+            };
+            _photo.SetZoomMode(ZoomMode.Fit);
+
+            // Visibility
+            _gallery.Visible = true;
+            _rightDockBar.Visible = true;
+            _photo.Visible = true;
+            _presets.Visible = true;
+
+            // Hide develop-only elements: editing sliders, histogram, left dock, filmstrip, overlay, zoom
+            _leftDockBar.Visible = false;
+            _histogram.Visible = false;
+            _rightColumn.Visible = false;
+            _film.Visible = false;
+            _viewOverlay.Visible = false;
+            _zoomLabel.Visible = false;
+
+            ApplyLayout();
+
             _gallery.Bind(_session.Documents, _session.ActiveIndex);
             _gallery.RefreshThumbs();
+            if (_session.Active != null)
+            {
+                BindPhoto(_session.Active);
+                _photo.SetZoomMode(ZoomMode.Fit);
+                _photo.RefreshGeometry();
+            }
         }
         else
         {
+            _photo.Style.Border = new BorderStyle { Width = 0 };
+
+            _leftDockBar.Visible = true;
+            _presets.Visible = true;
+            _photo.Visible = true;
+            _rightDockBar.Visible = true;
+            _histogram.Visible = true;
+            _rightColumn.Visible = true;
+            _film.Visible = true;
+            _viewOverlay.Visible = true;
+            _zoomLabel.Visible = true;
+
+            _gallery.Visible = false;
+
+            ApplyLayout();
+
             RefreshSession();
             _film.RefreshThumbs();
         }
 
         UpdateTitleBadge();
+    }
+
+    private void ApplyLayout()
+    {
+        if (_photo == null || _presets == null || _gallery == null || _rightDockBar == null ||
+            _leftDockBar == null || _film == null || _rightColumn == null || _histogram == null ||
+            _viewOverlay == null || _zoomLabel == null)
+            return;
+
+        float W = Width;
+        float H = Height;
+        if (W <= 1 || H <= 1) return;
+
+        float L = Theme.LeftW;
+        float R = Theme.RightW;
+        float top = Theme.TopBarH;
+        float film = Theme.FilmH;
+        float leftInset = 10f;
+        float rightInset = 10f;
+        float gap = 10f;
+
+        if (_isGalleryMode)
+        {
+            // --- GALLERY VIEW LAYOUT ---
+            // 1. Right column takes 40% of the view width
+            float galleryColW = GetGalleryColWidth(W);
+            float galleryW = Math.Max(200f, W - galleryColW);
+
+            // Left side: photo grid view (~60% width)
+            _gallery.Transform.SetAbsoluteFrame(0, top, galleryW, H - top);
+            _gallery.Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
+
+            // Right dock background (40% width)
+            _rightDockBar.Transform.SetAbsoluteFrame(W - galleryColW, top, galleryColW, H - top);
+            _rightDockBar.Transform.Anchor = Anchor.Right | Anchor.Top | Anchor.Bottom;
+
+            // In that right column:
+            // Photo preview dominates (~65% height of the column)
+            float availH = Math.Max(200f, H - top - rightInset * 2f - gap);
+            float previewH = (float)Math.Round(availH * 0.65f);
+            float presetsH = Math.Max(120f, availH - previewH);
+            float previewW = galleryColW - rightInset * 2f;
+            float previewX = W - galleryColW + rightInset;
+            float previewY = top + rightInset;
+
+            _photo.Transform.SetAbsoluteFrame(previewX, previewY, previewW, previewH);
+            _photo.Transform.Anchor = Anchor.Right | Anchor.Top;
+            _photo.RefreshGeometry();
+
+            // Presets under photo preview (~35% height)
+            float presetsY = previewY + previewH + gap;
+            _presets.Transform.SetAbsoluteFrame(previewX, presetsY, previewW, presetsH);
+            _presets.Transform.Anchor = Anchor.Right | Anchor.Top | Anchor.Bottom;
+        }
+        else
+        {
+            // --- DEVELOP VIEW LAYOUT ---
+            // 1. Left dock bar
+            _leftDockBar.Transform.SetAbsoluteFrame(0, top, L, H - top - film);
+            _leftDockBar.Transform.Anchor = Anchor.Left | Anchor.Top | Anchor.Bottom;
+
+            // 2. Presets on left dock
+            float presetTop = top + leftInset;
+            float presetH = H - presetTop - leftInset - film;
+            _presets.Transform.SetAbsoluteFrame(leftInset, presetTop, L - leftInset * 2f, presetH);
+            _presets.Transform.Anchor = Anchor.Left | Anchor.Top | Anchor.Bottom;
+
+            // 3. Central photo pane
+            float photoX = L;
+            float photoY = top;
+            float photoW = W - L - R;
+            float photoH = H - top - film;
+            _photo.Transform.SetAbsoluteFrame(photoX, photoY, photoW, photoH);
+            _photo.Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
+            _photo.RefreshGeometry();
+
+            // 4. Right dock bar
+            _rightDockBar.Transform.SetAbsoluteFrame(W - R, top, R, H - top - film);
+            _rightDockBar.Transform.Anchor = Anchor.Right | Anchor.Top | Anchor.Bottom;
+
+            // 5. Histogram on right dock
+            _histogram.Transform.SetAbsoluteFrame(W - R + rightInset, top + rightInset, R - rightInset * 2f, 96f);
+            _histogram.Transform.Anchor = Anchor.Right | Anchor.Top;
+
+            // 6. Right column (editing sliders)
+            float rightDockTop = top + rightInset + 96f + 14f;
+            _rightColumn.Transform.SetAbsoluteFrame(W - R, rightDockTop, R, H - rightDockTop - film);
+            _rightColumn.Transform.Anchor = Anchor.Right | Anchor.Top | Anchor.Bottom;
+
+            // 7. Filmstrip at bottom
+            _film.Transform.SetAbsoluteFrame(0, H - film, W, film);
+            _film.Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Bottom;
+
+            // 8. Floating overlays
+            float overlayW = 88f;
+            float overlayH = 138f;
+            float overlayMargin = 14f;
+            _viewOverlay.Transform.SetAbsoluteFrame(W - R - overlayMargin - overlayW, top + overlayMargin, overlayW, overlayH);
+            _viewOverlay.Transform.Anchor = Anchor.Right | Anchor.Top;
+
+            float zoomW = 56f;
+            float zoomH = 22f;
+            float zoomMargin = 14f;
+            _zoomLabel.Transform.SetAbsoluteFrame(W - R - zoomMargin - zoomW, H - film - zoomMargin - zoomH, zoomW, zoomH);
+            _zoomLabel.Transform.Anchor = Anchor.Right | Anchor.Bottom;
+        }
+
+        UpdateStatusPosition();
+    }
+
+    private sealed class WorkspaceRoot : VisualElement
+    {
+        private readonly WorkspaceView _view;
+        public WorkspaceRoot(WorkspaceView view)
+        {
+            _view = view;
+            Name = "WorkspaceRoot";
+            IsClickthrough = true;
+            ZIndex = -100;
+        }
+
+        protected override void LayoutChildren()
+        {
+            _view.ApplyLayout();
+        }
     }
 
     private void UpdateTitleBadge()
@@ -1032,10 +1194,19 @@ public sealed class WorkspaceView : View
         {
             _restoringView = true;
             BindPhoto(doc);
-            _photo.RestoreView(doc);
+            if (_isGalleryMode)
+            {
+                _photo.SetZoomMode(ZoomMode.Fit);
+                _photo.RefreshGeometry();
+            }
+            else
+            {
+                _photo.RestoreView(doc);
+            }
             _restoringView = false;
             _photo.SetBefore(doc.Proxy);
-            RequestViewport(doc);
+            if (!_isGalleryMode)
+                RequestViewport(doc);
         }
         else
         {
@@ -1044,7 +1215,6 @@ public sealed class WorkspaceView : View
                 _photo.SetDeveloped(best, owns: false);
         }
 
-        _nav.Image = doc.Preview ?? doc.Look ?? doc.Display ?? doc.Thumb;
         _histogram.SetBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _curveGraph.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
         _exposureCurveControl.SetHistogramBins(doc.HistogramR, doc.HistogramG, doc.HistogramB, doc.HistogramY);
@@ -1706,7 +1876,6 @@ public sealed class WorkspaceView : View
             _histogram.SetBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
             _curveGraph.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
             _exposureCurveControl.SetHistogramBins(d.HistogramR, d.HistogramG, d.HistogramB, d.HistogramY);
-            _nav.Image = d.Preview ?? d.Look ?? d.Thumb ?? d.Display;
         }
 
         _engine.FillMissingThumbs(_session.Documents);
@@ -1921,6 +2090,16 @@ public sealed class WorkspaceView : View
             if (key == Key.Enter || key == Key.E) { SetViewMode(false); return; }
             if (key == Key.P) { ToggleReady(true); return; }
             if (key == Key.X) { ToggleReady(false); return; }
+            if (key == Key.Left && _session.ActiveIndex > 0)
+            {
+                _session.Select(_session.ActiveIndex - 1);
+                return;
+            }
+            if (key == Key.Right && _session.ActiveIndex < _session.Documents.Count - 1)
+            {
+                _session.Select(_session.ActiveIndex + 1);
+                return;
+            }
             // In gallery mode, NEVER fall through to develop view shortcuts (crop, zoom, rotate, etc.)!
             return;
         }
@@ -2046,15 +2225,12 @@ public sealed class WorkspaceView : View
         if (_photo.IsFreeZoom)
         {
             _zoomLabel.Text = $"{_photo.Zoom * 100:0}%";
-            _nav.SetMode(Math.Abs(_photo.Zoom - 1f) < 0.01f ? "1:1" : "");
         }
         else
         {
             _zoomLabel.Text = _photo.ZoomMode == ZoomMode.Fit ? "Fit" :
                 _photo.ZoomMode == ZoomMode.Fill ? "Fill" :
                 $"{_photo.Zoom * 100:0}%";
-            _nav.SetMode(_photo.ZoomMode == ZoomMode.Fill ? "Fill" :
-                _photo.ZoomMode == ZoomMode.OneToOne ? "1:1" : "Fit");
         }
     }
 
@@ -2117,6 +2293,15 @@ public sealed class WorkspaceView : View
         float pillH = 26f;
         float pillX = L + (photoW - pillW) * 0.5f;
         float pillY = Height - film - pillH - 12f;
+
+        if (_isGalleryMode)
+        {
+            float galleryColW = GetGalleryColWidth(Width);
+            float galleryW = Math.Max(200f, Width - galleryColW);
+            pillW = Math.Clamp(textW + 40f, 130f, galleryW - 40f);
+            pillX = (galleryW - pillW) * 0.5f;
+            pillY = Height - pillH - 16f;
+        }
 
         _status.Transform.SetAbsoluteFrame(pillX, pillY, pillW, pillH);
     }

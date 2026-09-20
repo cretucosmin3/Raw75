@@ -118,6 +118,141 @@ public class IconButton : VisualElement
         set => SetIcon(value);
     }
 
+    private SKColor? _iconColor;
+    private SKColor? _toggledBackColor;
+    private SKColor? _toggledBorderColor;
+    private SKColor? _toggledIconColor;
+
+    [BuilderProperty("Icon Color", "Appearance")]
+    public SKColor? IconColor
+    {
+        get => _iconColor;
+        set
+        {
+            if (_iconColor == value) return;
+            _iconColor = value;
+            ApplyChrome();
+        }
+    }
+
+    [BuilderProperty("Toggled Back Color", "Appearance")]
+    public SKColor? ToggledBackColor
+    {
+        get => _toggledBackColor;
+        set
+        {
+            if (_toggledBackColor == value) return;
+            _toggledBackColor = value;
+            ApplyChrome();
+        }
+    }
+
+    [BuilderProperty("Toggled Border Color", "Appearance")]
+    public SKColor? ToggledBorderColor
+    {
+        get => _toggledBorderColor;
+        set
+        {
+            if (_toggledBorderColor == value) return;
+            _toggledBorderColor = value;
+            ApplyChrome();
+        }
+    }
+
+    [BuilderProperty("Toggled Icon Color", "Appearance")]
+    public SKColor? ToggledIconColor
+    {
+        get => _toggledIconColor;
+        set
+        {
+            if (_toggledIconColor == value) return;
+            _toggledIconColor = value;
+            ApplyChrome();
+        }
+    }
+
+    private float? _toggledBorderWidth;
+
+    [BuilderProperty("Toggled Border Width", "Appearance", min: 0f, max: 4f, step: 0.5f)]
+    public float? ToggledBorderWidth
+    {
+        get => _toggledBorderWidth;
+        set
+        {
+            if (_toggledBorderWidth == value) return;
+            _toggledBorderWidth = value;
+            ApplyChrome();
+        }
+    }
+
+    private bool _showUnderscore;
+    private float _underscoreHeight = 3f;
+    private float? _underscoreWidth;
+    private SKColor? _underscoreColor;
+    private VisualElement? _underlineElement;
+
+    [BuilderProperty("Show Underscore", "Appearance")]
+    public bool ShowUnderscore
+    {
+        get => _showUnderscore;
+        set
+        {
+            if (_showUnderscore == value) return;
+            _showUnderscore = value;
+            if (_showUnderscore)
+            {
+                _enable3DEffect = false;
+                EnsureUnderlineElement();
+            }
+            else if (_underlineElement != null)
+            {
+                _underlineElement.Visible = false;
+            }
+            ApplyChrome();
+            InvalidateLayout();
+        }
+    }
+
+    [BuilderProperty("Underscore Height", "Appearance", min: 1f, max: 10f, step: 0.5f)]
+    public float UnderscoreHeight
+    {
+        get => _underscoreHeight;
+        set
+        {
+            if (Math.Abs(_underscoreHeight - value) < 0.01f) return;
+            _underscoreHeight = value;
+            InvalidateLayout();
+        }
+    }
+
+    [BuilderProperty("Underscore Width", "Appearance", min: 0f, max: 500f, step: 1f)]
+    public float? UnderscoreWidth
+    {
+        get => _underscoreWidth;
+        set
+        {
+            if (_underscoreWidth == value) return;
+            _underscoreWidth = value;
+            InvalidateLayout();
+        }
+    }
+
+    [BuilderProperty("Underscore Color", "Appearance")]
+    public SKColor? UnderscoreColor
+    {
+        get => _underscoreColor;
+        set
+        {
+            if (_underscoreColor == value) return;
+            _underscoreColor = value;
+            if (_underlineElement?.Style != null)
+            {
+                _underlineElement.Style.BackColor = _underscoreColor ?? Theme.Accent;
+                InvalidatePaint();
+            }
+        }
+    }
+
     public float FontSize
     {
         get => _labelElement.Style?.Text?.Size ?? 12f;
@@ -310,13 +445,14 @@ public class IconButton : VisualElement
 
         bool hasIcon = _iconElement != null;
         bool hasText = !string.IsNullOrEmpty(_caption);
+        float totalW = 0f;
 
         if (hasIcon && hasText)
         {
             float iconSz = Math.Clamp(Math.Min(15f, h - 8f), 12f, 16f);
             float iconGap = 5f;
             float textW = _labelElement.Style?.Text?.Paint?.MeasureText(_caption) ?? (_caption.Length * 7.5f);
-            float totalW = iconSz + iconGap + textW;
+            totalW = iconSz + iconGap + textW;
 
             // Smart centering: center [Icon + Gap + Text] as a unified block within the button width.
             // When button width is tight, allow hugging closer to left margin so the icon and text fit comfortably.
@@ -341,6 +477,7 @@ public class IconButton : VisualElement
         else if (hasIcon)
         {
             float sz = Math.Clamp(Math.Min(w - 6f, h - 6f), 14f, 18f);
+            totalW = sz;
             _iconElement!.Transform.SetAbsoluteFrame(ox + (w - sz) * 0.5f, oy + (h - sz) * 0.5f, sz, sz);
             _iconElement.Visible = true;
 
@@ -354,6 +491,7 @@ public class IconButton : VisualElement
             }
 
             float textW = _labelElement.Style?.Text?.Paint?.MeasureText(_caption) ?? (_caption.Length * 7.5f);
+            totalW = textW;
             float actualW = Math.Max(w, textW + 4f);
             float textOx = (w >= actualW) ? ox : ox + (w - actualW) * 0.5f;
 
@@ -368,6 +506,22 @@ public class IconButton : VisualElement
         {
             if (_iconElement != null) _iconElement.Visible = false;
             _labelElement.Visible = false;
+        }
+
+        if (_underlineElement != null)
+        {
+            if (_showUnderscore && _underlineElement.Visible)
+            {
+                float barH = _underscoreHeight;
+                float barW = _underscoreWidth ?? (totalW > 0 ? Math.Min(w - 12f, totalW + 16f) : Math.Max(16f, w - 16f));
+                float barX = ox + (w - barW) * 0.5f;
+                float barY = oy + h - barH;
+                _underlineElement.Transform.SetAbsoluteFrame(barX, barY, barW, barH);
+            }
+            else
+            {
+                _underlineElement.Visible = false;
+            }
         }
     }
 
@@ -391,13 +545,31 @@ public class IconButton : VisualElement
 
     private void ApplyChrome()
     {
+        if (_showUnderscore)
+        {
+            ApplyUnderscoreChrome();
+            return;
+        }
+
+        if (_underlineElement != null)
+        {
+            _underlineElement.Visible = false;
+        }
+
+        bool customToggled = _toggled && _toggledBackColor.HasValue;
         bool accent = _primary || _toggled;
-        bool outline = Theme.OutlineAccent && accent;
+        bool outline = Theme.OutlineAccent && accent && !customToggled;
         SKColor fill;
         SKColor border;
         SKColor text;
 
-        if (outline)
+        if (customToggled)
+        {
+            fill = _toggledBackColor!.Value;
+            border = _toggledBorderColor ?? Theme.HairlineStrong;
+            text = _toggledIconColor ?? _iconColor ?? Theme.Text;
+        }
+        else if (outline)
         {
             fill = Theme.Button;
             border = Theme.Accent;
@@ -424,10 +596,11 @@ public class IconButton : VisualElement
         else if (_hovered)
         {
             fill = outline ? Theme.ButtonHover : (accent ? Theme.Lighten(fill, 16) : Theme.ButtonHover);
-            border = outline ? Theme.AccentHover : (accent ? Theme.Lighten(Theme.Accent, 24) : Theme.HairlineStrong);
+            border = outline ? Theme.AccentHover : (accent ? Theme.Lighten(border, 24) : Theme.HairlineStrong);
         }
 
-        float borderW = outline ? 2f : 1f;
+        float defaultBorderW = outline ? 2f : 1f;
+        float borderW = (_toggled && _toggledBorderWidth.HasValue) ? _toggledBorderWidth.Value : defaultBorderW;
         bool fillChanged = Style.BackColor != fill;
         bool borderChanged = Style.Border.Color != border || Math.Abs(Style.Border.Width - borderW) > 0.01f;
         Style.BackColor = fill;
@@ -450,10 +623,14 @@ public class IconButton : VisualElement
                 _labelElement.Style.Text.Color = text;
         }
 
+        SKColor targetIconColor = (_toggled && _toggledIconColor.HasValue)
+            ? _toggledIconColor.Value
+            : (_iconColor ?? text);
+
         bool iconChanged = false;
-        if (_iconElement != null && _iconElement.BackgroundImageTintColor != text)
+        if (_iconElement != null && _iconElement.BackgroundImageTintColor != targetIconColor)
         {
-            _iconElement.BackgroundImageTintColor = text;
+            _iconElement.BackgroundImageTintColor = targetIconColor;
             iconChanged = true;
         }
 
@@ -469,11 +646,88 @@ public class IconButton : VisualElement
             InvalidatePaint();
     }
 
+    private void EnsureUnderlineElement()
+    {
+        if (_underlineElement != null) return;
+
+        _underlineElement = new VisualElement
+        {
+            Name = $"{Name}_Underline",
+            IsClickthrough = true,
+            Interactive = false,
+            Visible = false,
+            Style = new ElementStyle
+            {
+                BackColor = _underscoreColor ?? Theme.Accent,
+                Border = new BorderStyle
+                {
+                    Width = 0,
+                    Color = SKColors.Transparent,
+                    Roundness = 1.5f
+                }
+            }
+        };
+        AddChild(_underlineElement);
+    }
+
+    private void ApplyUnderscoreChrome()
+    {
+        EnsureUnderlineElement();
+
+        bool active = _primary || _toggled;
+
+        Style.BackColor = SKColors.Transparent;
+        Style.Border.Color = SKColors.Transparent;
+        Style.Border.Width = 0f;
+        Style.Border.Roundness = 0f;
+        if (Style.Shadow != null)
+        {
+            Style.Shadow.Color = SKColors.Transparent;
+        }
+
+        SKColor textColor = active ? Theme.Text : (_hovered ? Theme.Text : Theme.TextSecondary);
+        int weight = active ? 600 : 500;
+
+        if (_labelElement.Style?.Text != null)
+        {
+            if (Style?.Text != null && Math.Abs(_labelElement.Style.Text.Size - Style.Text.Size) > 0.1f)
+            {
+                _labelElement.Style.Text.Size = Style.Text.Size;
+            }
+            _labelElement.Style.Text.Color = textColor;
+            _labelElement.Style.Text.Weight = weight;
+        }
+
+        if (_iconElement != null)
+        {
+            _iconElement.BackgroundImageTintColor = _iconColor ?? textColor;
+        }
+
+        if (_underlineElement != null)
+        {
+            bool visibilityChanged = _underlineElement.Visible != active;
+            _underlineElement.Visible = active;
+            _underlineElement.Style.BackColor = _underscoreColor ?? Theme.Accent;
+            if (visibilityChanged && active)
+            {
+                InvalidateLayout();
+            }
+        }
+
+        Transform.ScaleX = 1f;
+        Transform.ScaleY = 1f;
+
+        InvalidatePaint();
+    }
+
     public void RefreshTheme()
     {
         if (Style?.Border != null)
             Style.Border.Roundness = Theme.RadiusSm;
-        Theme.ApplyButtonShadow(Style);
+        if (!_showUnderscore)
+            Theme.ApplyButtonShadow(Style);
+        if (_underlineElement?.Style != null)
+            _underlineElement.Style.BackColor = _underscoreColor ?? Theme.Accent;
         ApplyChrome();
     }
 }
