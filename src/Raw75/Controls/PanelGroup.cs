@@ -16,6 +16,7 @@ namespace Raw75.Controls;
 public class PanelGroup : VisualElement
 {
     private readonly VisualElement _header;
+    private readonly VisualElement _divider;
     private readonly CheckToggle _toggle;
     private readonly VisualElement _chevronEl;
     private readonly VisualElement _titleEl;
@@ -70,6 +71,7 @@ public class PanelGroup : VisualElement
             Shadow = new ShadowStyle(0, 2.5f, 3, 3, new SKColor(0, 0, 0, 75))
         };
 
+        float innerR = Math.Max(0, Theme.Radius - 1f);
         _header = new VisualElement
         {
             Name = $"{Name}_Header",
@@ -79,12 +81,24 @@ public class PanelGroup : VisualElement
                 BackColor = Theme.SectionHeader,
                 Border = new BorderStyle
                 {
-                    Width = 1,
-                    Color = Theme.HairlineSubtle,
-                    Roundness = 0
+                    Width = 0,
+                    RoundnessTopLeft = innerR,
+                    RoundnessTopRight = innerR,
+                    RoundnessBottomLeft = 0,
+                    RoundnessBottomRight = 0
                 }
             }
         };
+
+        _divider = new VisualElement
+        {
+            Name = $"{Name}_Divider",
+            Style = new ElementStyle
+            {
+                BackColor = Theme.HairlineSubtle
+            }
+        };
+        AddChild(_divider);
 
         _toggle = new CheckToggle(initialChecked: true);
         _toggle.CheckedChanged += isChecked =>
@@ -266,7 +280,18 @@ public class PanelGroup : VisualElement
         {
             _header.Style.BackColor = Theme.SectionHeader;
             if (_header.Style.Border != null)
-                _header.Style.Border.Color = Theme.HairlineSubtle;
+            {
+                _header.Style.Border.Width = 0;
+                float innerR = Math.Max(0, Theme.Radius - 1f);
+                _header.Style.Border.RoundnessTopLeft = innerR;
+                _header.Style.Border.RoundnessTopRight = innerR;
+                _header.Style.Border.RoundnessBottomLeft = _expanded ? 0f : innerR;
+                _header.Style.Border.RoundnessBottomRight = _expanded ? 0f : innerR;
+            }
+        }
+        if (_divider.Style != null)
+        {
+            _divider.Style.BackColor = Theme.HairlineSubtle;
         }
         if (_titleEl.Style?.Text != null)
             _titleEl.Style.Text.Color = _sectionEnabled ? Theme.Text : Theme.TextDisabled;
@@ -324,7 +349,9 @@ public class PanelGroup : VisualElement
         float originY = Transform.Computed.Y;
         float w = Math.Max(1f, Transform.Width);
 
-        _header.Transform.SetAbsoluteFrame(originX, originY, w, Theme.GroupHeadH);
+        _header.Transform.SetAbsoluteFrame(originX + 1f, originY + 1f, w - 2f, Theme.GroupHeadH - 2f);
+        _divider.Transform.SetAbsoluteFrame(originX + 1f, originY + Theme.GroupHeadH - 1f, w - 2f, 1f);
+        _divider.Visible = _expanded;
 
         // Layout checkbox toggle on the far left
         float toggleSize = 18f;
@@ -392,6 +419,13 @@ public class PanelGroup : VisualElement
         {
             if (_body[i] != null)
                 _body[i].Visible = _expanded;
+        }
+        _divider.Visible = _expanded;
+        if (_header.Style?.Border != null)
+        {
+            float innerR = Math.Max(0, Theme.Radius - 1f);
+            _header.Style.Border.RoundnessBottomLeft = _expanded ? 0f : innerR;
+            _header.Style.Border.RoundnessBottomRight = _expanded ? 0f : innerR;
         }
         InvalidateLayout();
         Parent?.InvalidateLayout();

@@ -20,6 +20,7 @@ public class PresetList : VisualElement
     private const float RowH = 28f;
 
     private readonly VisualElement _header;
+    private readonly VisualElement _divider;
     private readonly VisualElement _headerTitle;
     private readonly IconButton _copy;
     private readonly IconButton _paste;
@@ -49,6 +50,7 @@ public class PresetList : VisualElement
             Shadow = new ShadowStyle(0, 2.5f, 3, 3, new SKColor(0, 0, 0, 75))
         };
 
+        float innerR = Math.Max(0, Theme.Radius - 1f);
         _header = new VisualElement
         {
             Name = "PresetList_Header",
@@ -57,12 +59,24 @@ public class PresetList : VisualElement
                 BackColor = Theme.SectionHeader,
                 Border = new BorderStyle
                 {
-                    Width = 1,
-                    Color = Theme.HairlineSubtle,
-                    Roundness = 0
+                    Width = 0,
+                    RoundnessTopLeft = innerR,
+                    RoundnessTopRight = innerR,
+                    RoundnessBottomLeft = 0,
+                    RoundnessBottomRight = 0
                 }
             }
         };
+
+        _divider = new VisualElement
+        {
+            Name = "PresetList_Divider",
+            Style = new ElementStyle
+            {
+                BackColor = Theme.HairlineSubtle
+            }
+        };
+        AddChild(_divider);
 
         _headerTitle = new VisualElement
         {
@@ -114,7 +128,18 @@ public class PresetList : VisualElement
         {
             _header.Style.BackColor = Theme.SectionHeader;
             if (_header.Style.Border != null)
-                _header.Style.Border.Color = Theme.HairlineSubtle;
+            {
+                _header.Style.Border.Width = 0;
+                float innerR = Math.Max(0, Theme.Radius - 1f);
+                _header.Style.Border.RoundnessTopLeft = innerR;
+                _header.Style.Border.RoundnessTopRight = innerR;
+                _header.Style.Border.RoundnessBottomLeft = 0;
+                _header.Style.Border.RoundnessBottomRight = 0;
+            }
+        }
+        if (_divider.Style != null)
+        {
+            _divider.Style.BackColor = Theme.HairlineSubtle;
         }
         if (_headerTitle.Style?.Text != null)
             _headerTitle.Style.Text.Color = Theme.Text;
@@ -175,7 +200,8 @@ public class PresetList : VisualElement
         float h = Math.Max(1f, Transform.Height);
 
         // Header bar
-        _header.Transform.SetAbsoluteFrame(originX, originY, w, HeaderH);
+        _header.Transform.SetAbsoluteFrame(originX + 1f, originY + 1f, w - 2f, HeaderH - 2f);
+        _divider.Transform.SetAbsoluteFrame(originX + 1f, originY + HeaderH - 1f, w - 2f, 1f);
         _headerTitle.Transform.SetAbsoluteFrame(originX + 8f, originY + (HeaderH - 18f) * 0.5f, w - 16f, 18f);
 
         // Copy and Paste action buttons in a single row
