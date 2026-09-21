@@ -206,28 +206,23 @@ public sealed class WorkspaceView : View
         folder.Transform.Anchor = Anchor.Left | Anchor.Top;
         folder.Clicked += OpenWorkspace;
 
-        float navY = (top - 32) * 0.5f;
-        AddElement(new VisualElement
-        {
-            Name = "NavSplit",
-            IsClickthrough = true,
-            Style = new ElementStyle { BackColor = Theme.Hairline },
-            Transform = new Transform(318, navY + 6, 1, 20)
-            {
-                Anchor = Anchor.Left | Anchor.Top
-            }
-        });
+        float devW = 120f;
+        float galW = 112f;
+        float navGap = 0f;
+        float totalNavW = galW + navGap + devW;
+        float galX = (float)Math.Round((W - totalNavW) * 0.5f);
+        float devX = galX + galW + navGap;
 
-        _btnGalleryMode = Chip("Gallery", 328, 0f, 112, top, iconName: "gallery");
+        _btnGalleryMode = Chip("Gallery", galX, 0f, galW, top, iconName: "gallery");
         _btnGalleryMode.ShowUnderscore = true;
         _btnGalleryMode.FontSize = 14f;
-        _btnGalleryMode.Transform.Anchor = Anchor.Left | Anchor.Top;
+        _btnGalleryMode.Transform.Anchor = Anchor.Top;
         _btnGalleryMode.Clicked += () => SetViewMode(true);
 
-        _btnViewerMode = Chip("Develop", 444, 0f, 120, top, iconName: "viewer");
+        _btnViewerMode = Chip("Develop", devX, 0f, devW, top, iconName: "viewer");
         _btnViewerMode.ShowUnderscore = true;
         _btnViewerMode.FontSize = 14f;
-        _btnViewerMode.Transform.Anchor = Anchor.Left | Anchor.Top;
+        _btnViewerMode.Transform.Anchor = Anchor.Top;
         _btnViewerMode.Toggled = true;
         _btnViewerMode.Clicked += () => SetViewMode(false);
 
@@ -1026,6 +1021,20 @@ public sealed class WorkspaceView : View
         float leftInset = 10f;
         float rightInset = 10f;
         float gap = 10f;
+
+        if (_btnViewerMode != null && _btnGalleryMode != null)
+        {
+            float devW = 120f;
+            float galW = 112f;
+            float navGap = 0f;
+            float totalNavW = galW + navGap + devW;
+            float galX = (float)Math.Round((W - totalNavW) * 0.5f);
+            float devX = galX + galW + navGap;
+            _btnGalleryMode.Transform.SetAbsoluteFrame(galX, 0f, galW, top);
+            _btnGalleryMode.Transform.Anchor = Anchor.Top;
+            _btnViewerMode.Transform.SetAbsoluteFrame(devX, 0f, devW, top);
+            _btnViewerMode.Transform.Anchor = Anchor.Top;
+        }
 
         if (_isGalleryMode)
         {
