@@ -385,9 +385,7 @@ public static class DevelopRenderer
         Set(u, "u_texture", s.EnableLocalContrast ? s.Texture / 100f : 0f);
         Set(u, "u_vignette", s.EnableGeometry ? s.VignetteAmount / 100f : 0f);
         Set(u, "u_vignetteMidpoint", s.EnableGeometry ? s.VignetteMidpoint / 100f : 0.5f);
-        Set(u, "u_gradeShadow", s.EnableHsl ? new[] { s.GradingShadowHue / 360f, s.GradingShadowSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeHighlight", s.EnableHsl ? new[] { s.GradingHighlightHue / 360f, s.GradingHighlightSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeBalance", s.EnableHsl ? s.GradingBalance / 100f : 0f);
+        ColorGradeMath.BindUniforms((name, value) => Set(u, name, value), s);
         Set(u, "u_localFast", fast ? 1f : 0f);
         Set(u, "u_showClipping", showClipping ? 1f : 0f);
         GetCurveTexture(s, out float hasCurve, out float curveMode);
@@ -542,9 +540,7 @@ public static class DevelopRenderer
         Set(u, "u_sigFilmFog", sig.FilmFog);
         Set(u, "u_sigFilmPower", sig.FilmPower);
         Set(u, "u_sigPaperPower", sig.PaperPower);
-        Set(u, "u_gradeShadow", s.EnableHsl ? new[] { s.GradingShadowHue / 360f, s.GradingShadowSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeHighlight", s.EnableHsl ? new[] { s.GradingHighlightHue / 360f, s.GradingHighlightSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeBalance", s.EnableHsl ? s.GradingBalance / 100f : 0f);
+        ColorGradeMath.BindUniforms((name, value) => Set(u, name, value), s);
         Set(u, "u_showClipping", showClipping ? 1f : 0f);
         GetCurveTexture(s, out float hasCurve, out float curveMode);
         Set(u, "u_hasCurve", hasCurve);
@@ -1298,9 +1294,10 @@ public static class DevelopRenderer
             uniform float4 u_hsl3;
             uniform float4 u_hsl4;
             uniform float4 u_hsl5;
-            uniform float2 u_gradeShadow;
-            uniform float2 u_gradeHighlight;
-            uniform float u_gradeBalance;
+            uniform float4 u_gradeShadow;
+            uniform float4 u_gradeMid;
+            uniform float4 u_gradeHighlight;
+            uniform float2 u_gradeMix;
             uniform float u_toneMode;
             uniform float u_sigMagnitude;
             uniform float u_sigPaperExp;
@@ -1393,6 +1390,32 @@ public static class DevelopRenderer
                     hue2rgb(p, q, h),
                     hue2rgb(p, q, h - 0.3333333)
                 );
+            }
+
+            float3 apply_color_grading(float3 color) {
+                float active = abs(u_gradeShadow.x) + abs(u_gradeShadow.y) + abs(u_gradeShadow.z) + abs(u_gradeShadow.w)
+                    + abs(u_gradeMid.x) + abs(u_gradeMid.y) + abs(u_gradeMid.z) + abs(u_gradeMid.w)
+                    + abs(u_gradeHighlight.x) + abs(u_gradeHighlight.y) + abs(u_gradeHighlight.z) + abs(u_gradeHighlight.w);
+                if (active < 0.00001) {
+                    return color;
+                }
+                float luma = luma2020(max(color, 0.0));
+                float balance = u_gradeMix.y;
+                float blending = u_gradeMix.x;
+                float shadow_crossover = 0.1 + max(0.0, -balance) * 0.5;
+                float highlight_crossover = 0.5 - max(0.0, balance) * 0.5;
+                float feather = max(0.001, 0.2 * blending);
+                float final_shadow_crossover = min(shadow_crossover, highlight_crossover - 0.01);
+                float tSh = clamp((luma - (final_shadow_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float shadow_mask = 1.0 - tSh * tSh * (3.0 - 2.0 * tSh);
+                float tHl = clamp((luma - (highlight_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float highlight_mask = tHl * tHl * (3.0 - 2.0 * tHl);
+                float midtone_mask = max(0.0, 1.0 - shadow_mask - highlight_mask);
+                float3 graded = color;
+                graded = graded + float3(u_gradeShadow.x, u_gradeShadow.y, u_gradeShadow.z) * shadow_mask + float3(u_gradeShadow.w * shadow_mask);
+                graded = graded + float3(u_gradeMid.x, u_gradeMid.y, u_gradeMid.z) * midtone_mask + float3(u_gradeMid.w * midtone_mask);
+                graded = graded + float3(u_gradeHighlight.x, u_gradeHighlight.y, u_gradeHighlight.z) * highlight_mask + float3(u_gradeHighlight.w * highlight_mask);
+                return graded;
             }
 
             float2 apply_geom(float2 uv) {
@@ -1674,25 +1697,7 @@ public static class DevelopRenderer
                 hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
                 hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
                 col = hsl_to_rgb(hsl);
-
-                // Color Grading
-                if (u_gradeShadow.y > 0.001 || u_gradeHighlight.y > 0.001) {
-                    float lumG = max(luma2020(col), 0.00001);
-                    float evG = log2(lumG / 0.18) + u_gradeBalance * 1.5;
-                    float shdW = 1.0 - smoother(evG, -2.5, 0.5);
-                    float hlW = smoother(evG, -0.5, 2.5);
-
-                    if (u_gradeShadow.y > 0.001 && shdW > 0.001) {
-                        float3 sTint = hsl_to_rgb(float3(u_gradeShadow.x * 360.0, 1.0, 0.5));
-                        float3 sVec = sTint - float3(luma2020(sTint));
-                        col = max(col + sVec * lumG * (u_gradeShadow.y * 0.50 * shdW), 0.0);
-                    }
-                    if (u_gradeHighlight.y > 0.001 && hlW > 0.001) {
-                        float3 hTint = hsl_to_rgb(float3(u_gradeHighlight.x * 360.0, 1.0, 0.5));
-                        float3 hVec = hTint - float3(luma2020(hTint));
-                        col = max(col + hVec * lumG * (u_gradeHighlight.y * 0.50 * hlW), 0.0);
-                    }
-                }
+                col = apply_color_grading(col);
                 return max(col, 0.0);
             }
 
@@ -1863,9 +1868,10 @@ public static class DevelopRenderer
             uniform float u_texture;
             uniform float u_vignette;
             uniform float u_vignetteMidpoint;
-            uniform float2 u_gradeShadow;
-            uniform float2 u_gradeHighlight;
-            uniform float u_gradeBalance;
+            uniform float4 u_gradeShadow;
+            uniform float4 u_gradeMid;
+            uniform float4 u_gradeHighlight;
+            uniform float2 u_gradeMix;
             uniform float u_localFast;
             uniform float u_showClipping;
             uniform float u_hasCurve;
@@ -1958,6 +1964,32 @@ public static class DevelopRenderer
                     hue2rgb(p, q, h),
                     hue2rgb(p, q, h - 0.3333333)
                 );
+            }
+
+            float3 apply_color_grading(float3 color) {
+                float active = abs(u_gradeShadow.x) + abs(u_gradeShadow.y) + abs(u_gradeShadow.z) + abs(u_gradeShadow.w)
+                    + abs(u_gradeMid.x) + abs(u_gradeMid.y) + abs(u_gradeMid.z) + abs(u_gradeMid.w)
+                    + abs(u_gradeHighlight.x) + abs(u_gradeHighlight.y) + abs(u_gradeHighlight.z) + abs(u_gradeHighlight.w);
+                if (active < 0.00001) {
+                    return color;
+                }
+                float luma = luma2020(max(color, 0.0));
+                float balance = u_gradeMix.y;
+                float blending = u_gradeMix.x;
+                float shadow_crossover = 0.1 + max(0.0, -balance) * 0.5;
+                float highlight_crossover = 0.5 - max(0.0, balance) * 0.5;
+                float feather = max(0.001, 0.2 * blending);
+                float final_shadow_crossover = min(shadow_crossover, highlight_crossover - 0.01);
+                float tSh = clamp((luma - (final_shadow_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float shadow_mask = 1.0 - tSh * tSh * (3.0 - 2.0 * tSh);
+                float tHl = clamp((luma - (highlight_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float highlight_mask = tHl * tHl * (3.0 - 2.0 * tHl);
+                float midtone_mask = max(0.0, 1.0 - shadow_mask - highlight_mask);
+                float3 graded = color;
+                graded = graded + float3(u_gradeShadow.x, u_gradeShadow.y, u_gradeShadow.z) * shadow_mask + float3(u_gradeShadow.w * shadow_mask);
+                graded = graded + float3(u_gradeMid.x, u_gradeMid.y, u_gradeMid.z) * midtone_mask + float3(u_gradeMid.w * midtone_mask);
+                graded = graded + float3(u_gradeHighlight.x, u_gradeHighlight.y, u_gradeHighlight.z) * highlight_mask + float3(u_gradeHighlight.w * highlight_mask);
+                return graded;
             }
 
             float2 apply_geom(float2 uv) {
@@ -2255,25 +2287,7 @@ public static class DevelopRenderer
                 hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
                 hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
                 col = hsl_to_rgb(hsl);
-
-                // Color Grading (Split Toning)
-                if (u_gradeShadow.y > 0.001 || u_gradeHighlight.y > 0.001) {
-                    float lumG = max(luma2020(col), 0.00001);
-                    float evG = log2(lumG / 0.18) + u_gradeBalance * 1.5;
-                    float shdW = 1.0 - smoother(evG, -2.5, 0.5);
-                    float hlW = smoother(evG, -0.5, 2.5);
-
-                    if (u_gradeShadow.y > 0.001 && shdW > 0.001) {
-                        float3 sTint = hsl_to_rgb(float3(u_gradeShadow.x * 360.0, 1.0, 0.5));
-                        float3 sVec = sTint - float3(luma2020(sTint));
-                        col = max(col + sVec * lumG * (u_gradeShadow.y * 0.50 * shdW), 0.0);
-                    }
-                    if (u_gradeHighlight.y > 0.001 && hlW > 0.001) {
-                        float3 hTint = hsl_to_rgb(float3(u_gradeHighlight.x * 360.0, 1.0, 0.5));
-                        float3 hVec = hTint - float3(luma2020(hTint));
-                        col = max(col + hVec * lumG * (u_gradeHighlight.y * 0.50 * hlW), 0.0);
-                    }
-                }
+                col = apply_color_grading(col);
                 return max(col, 0.0);
             }
 

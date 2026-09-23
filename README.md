@@ -21,7 +21,8 @@ UI is built with [Blossom](https://github.com/cretucosmin3/Blossom), with real-t
 ### Color & Grading
 - **White Balance & Tint**: High-precision Kelvin temperature and green-magenta tint balancing.
 - **Vibrance & Saturation**: Perceptual saturation enhancement with skin tone protection.
-- **HSL Tool**: 6-color band editor for custom Hue, Saturation, and Lightness adjustments.
+- **Color Editor**: 6-color HSL mixer, Vibrance, and match mid-gray.
+- **Color Grading**: 3-way wheels for Shadows, Midtones, and Highlights with blending and balance.
 - **3D LUT Support**: Load `.cube` LUT profiles directly into the GPU shader pipeline.
 
 ### Detail & Reconstruction

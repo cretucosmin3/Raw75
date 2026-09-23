@@ -632,40 +632,8 @@ internal static class DevelopCpu
         g = lum + (g - lum) * (1f + sat);
         b = lum + (b - lum) * (1f + sat);
 
-        // Color Grading (Split Toning)
-        if (s.EnableHsl && (s.GradingShadowSat > 0.001f || s.GradingHighlightSat > 0.001f))
-        {
-            float lumG = MathF.Max(Luma(r, g, b), 0.00001f);
-            float evG = MathF.Log2(lumG / 0.18f) + (s.GradingBalance / 100f) * 1.5f;
-            float shdW = 1f - Smooth(evG, -2.5f, 0.5f);
-            float hlW = Smooth(evG, -0.5f, 2.5f);
-
-            if (s.GradingShadowSat > 0.001f && shdW > 0.001f)
-            {
-                HslToRgb(s.GradingShadowHue, 1f, 0.5f, out float tr, out float tg, out float tb);
-                float tLum = Luma(tr, tg, tb);
-                float vr = tr - tLum;
-                float vg = tg - tLum;
-                float vb = tb - tLum;
-                float amt = (s.GradingShadowSat / 100f) * shdW * 0.50f * lumG;
-                r = MathF.Max(r + vr * amt, 0f);
-                g = MathF.Max(g + vg * amt, 0f);
-                b = MathF.Max(b + vb * amt, 0f);
-            }
-
-            if (s.GradingHighlightSat > 0.001f && hlW > 0.001f)
-            {
-                HslToRgb(s.GradingHighlightHue, 1f, 0.5f, out float tr, out float tg, out float tb);
-                float tLum = Luma(tr, tg, tb);
-                float vr = tr - tLum;
-                float vg = tg - tLum;
-                float vb = tb - tLum;
-                float amt = (s.GradingHighlightSat / 100f) * hlW * 0.50f * lumG;
-                r = MathF.Max(r + vr * amt, 0f);
-                g = MathF.Max(g + vg * amt, 0f);
-                b = MathF.Max(b + vb * amt, 0f);
-            }
-        }
+        // Color Grading (3-way)
+        ColorGradeMath.Apply(ref r, ref g, ref b, s);
     }
 
     // ref: sigmoid tone curve
@@ -760,34 +728,6 @@ internal static class DevelopCpu
         float t = (x - a) / (b - a);
         t = Clamp01(t);
         return t * t * (3f - 2f * t);
-    }
-
-    private static void HslToRgb(float hDeg, float s, float l, out float r, out float g, out float b)
-    {
-        float h = (hDeg % 360f) / 360f;
-        if (h < 0f) h += 1f;
-        s = Math.Clamp(s, 0f, 1f);
-        l = Math.Clamp(l, 0f, 1f);
-        if (s < 1e-5f)
-        {
-            r = g = b = l;
-            return;
-        }
-        float q = l < 0.5f ? l * (1f + s) : l + s - l * s;
-        float p = 2f * l - q;
-        r = Hue2Rgb(p, q, h + 0.3333333f);
-        g = Hue2Rgb(p, q, h);
-        b = Hue2Rgb(p, q, h - 0.3333333f);
-    }
-
-    private static float Hue2Rgb(float p, float q, float t)
-    {
-        if (t < 0f) t += 1f;
-        if (t > 1f) t -= 1f;
-        if (t < 0.1666667f) return p + (q - p) * 6f * t;
-        if (t < 0.5f) return q;
-        if (t < 0.6666667f) return p + (q - p) * (0.6666667f - t) * 6f;
-        return p;
     }
 
     internal static float ToLin1(float s)

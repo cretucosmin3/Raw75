@@ -61,6 +61,7 @@ public sealed class WorkspaceView : View
     private PanelGroup _toneGroup = null!;
     private PanelGroup _reconGroup = null!;
     private PanelGroup _hslGroup = null!;
+    private PanelGroup _gradingGroup = null!;
     private PanelGroup _detailGroup = null!;
     private PanelGroup _geomGroup = null!;
 
@@ -100,12 +101,7 @@ public sealed class WorkspaceView : View
     private SliderRow _dehaze = null!;
     private SliderRow _dehazeDistance = null!;
 
-    // Color grading (split toning)
-    private SliderRow _gradeShadowHue = null!;
-    private SliderRow _gradeShadowSat = null!;
-    private SliderRow _gradeHighlightHue = null!;
-    private SliderRow _gradeHighlightSat = null!;
-    private SliderRow _gradeBalance = null!;
+    private ColorGradingPanel _grading = null!;
 
     // Lens
     private SliderRow _vignette = null!;
@@ -663,8 +659,8 @@ public sealed class WorkspaceView : View
         _reconGroup.EnableReset(ResetReconstruction, "Reset Reconstruction");
         _reconGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableReconstruction = en);
 
-        // 7. Color Editor & Grading
-        _hslGroup = new PanelGroup("Color Editor & Grading");
+        // 7. Color Editor (HSL mixer)
+        _hslGroup = new PanelGroup("Color Editor");
         _hslSelector = new HslBandSelector();
         _hslSelector.BandSelected += OnHslBandSelected;
         _hslGroup.AddBody(_hslSelector);
@@ -679,17 +675,6 @@ public sealed class WorkspaceView : View
         _vib = BindSlider(_hslGroup, "Vibrance", -100, 100, "0",
             (s, v) => s.Vibrance = v, s => s.Vibrance);
 
-        _gradeShadowHue = BindSlider(_hslGroup, "Shadow Hue", 0f, 360f, "0°",
-            (s, v) => s.GradingShadowHue = v, s => s.GradingShadowHue, 220f);
-        _gradeShadowSat = BindSlider(_hslGroup, "Shadow Sat", 0f, 100f, "0",
-            (s, v) => s.GradingShadowSat = v, s => s.GradingShadowSat, 0f);
-        _gradeHighlightHue = BindSlider(_hslGroup, "Highlight Hue", 0f, 360f, "0°",
-            (s, v) => s.GradingHighlightHue = v, s => s.GradingHighlightHue, 40f);
-        _gradeHighlightSat = BindSlider(_hslGroup, "Highlight Sat", 0f, 100f, "0",
-            (s, v) => s.GradingHighlightSat = v, s => s.GradingHighlightSat, 0f);
-        _gradeBalance = BindSlider(_hslGroup, "Balance", -100f, 100f, "0",
-            (s, v) => s.GradingBalance = v, s => s.GradingBalance, 0f);
-
         _matchGray = new IconButton("Match mid-gray", "scale");
         _matchGray.Clicked += () =>
         {
@@ -701,10 +686,39 @@ public sealed class WorkspaceView : View
             PushLook(fast: false, settle: true);
         };
         _hslGroup.AddBody(_matchGray);
-        _hslGroup.EnableReset(ResetHsl, "Reset Color Editor & Grading");
+        _hslGroup.EnableReset(ResetHsl, "Reset Color Editor");
         _hslGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHsl = en);
 
-        // 8. Detail & Noise Reduction
+        // 8. Color Grading
+        _gradingGroup = new PanelGroup("Color Grading");
+        _grading = new ColorGradingPanel();
+        _grading.Changed += () =>
+        {
+            if (_sync) return;
+            var d = _session.Active;
+            if (d == null) return;
+            _grading.SaveToSettings(d.Settings);
+            CopyCropInto(d);
+            PushLook(fast: _sliderDrag, settle: !_sliderDrag);
+        };
+        _grading.DragStarted += () =>
+        {
+            _sliderDrag = true;
+            _session.Active?.Undo.BeginDrag(_session.Active.Settings);
+        };
+        _grading.DragEnded += () =>
+        {
+            _sliderDrag = false;
+            var d = _session.Active;
+            if (d == null) return;
+            d.Undo.EndDrag(d.Settings);
+            PushLook(fast: false, settle: true);
+        };
+        _gradingGroup.AddBody(_grading);
+        _gradingGroup.EnableReset(ResetColorGrading, "Reset Color Grading");
+        _gradingGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableColorGrading = en);
+
+        // 9. Detail & Noise Reduction
         _detailGroup = new PanelGroup("Detail & Noise Reduction");
         _sharp = BindSlider(_detailGroup, "Sharpen", 0, 150, "0",
             (s, v) => s.Sharpen = v, s => s.Sharpen, 0f);
@@ -759,6 +773,7 @@ public sealed class WorkspaceView : View
         host.AddBody(_toneGroup);
         host.AddBody(_reconGroup);
         host.AddBody(_hslGroup);
+        host.AddBody(_gradingGroup);
         host.AddBody(_detailGroup);
         host.AddBody(_geomGroup);
     }
@@ -1290,6 +1305,7 @@ public sealed class WorkspaceView : View
         _toneGroup.SectionEnabled = s.EnableTone;
         _reconGroup.SectionEnabled = s.EnableReconstruction;
         _hslGroup.SectionEnabled = s.EnableHsl;
+        _gradingGroup.SectionEnabled = s.EnableColorGrading;
         _detailGroup.SectionEnabled = s.EnableDetail;
         _geomGroup.SectionEnabled = s.EnableGeometry;
 
@@ -1317,11 +1333,7 @@ public sealed class WorkspaceView : View
         _texture.Value = s.Texture;
         _dehaze.Value = s.Dehaze;
         _dehazeDistance.Value = s.DehazeDistance;
-        _gradeShadowHue.Value = s.GradingShadowHue;
-        _gradeShadowSat.Value = s.GradingShadowSat;
-        _gradeHighlightHue.Value = s.GradingHighlightHue;
-        _gradeHighlightSat.Value = s.GradingHighlightSat;
-        _gradeBalance.Value = s.GradingBalance;
+        _grading.LoadFromSettings(s);
         _sharp.Value = s.Sharpen;
         _noise.Value = s.Noise != 0 ? s.Noise : (s.DenoiseLuma > 0 ? -s.DenoiseLuma : 0);
         _photo.StraightenPreview = s.Straighten;
@@ -1472,14 +1484,30 @@ public sealed class WorkspaceView : View
         }
         d.Settings.Vibrance = 0;
         d.Settings.MatchGray = false;
-        d.Settings.GradingShadowHue = 220f;
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Color Editor");
+    }
+
+    private void ResetColorGrading()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.GradingShadowHue = 0f;
         d.Settings.GradingShadowSat = 0f;
-        d.Settings.GradingHighlightHue = 40f;
+        d.Settings.GradingShadowLum = 0f;
+        d.Settings.GradingMidHue = 0f;
+        d.Settings.GradingMidSat = 0f;
+        d.Settings.GradingMidLum = 0f;
+        d.Settings.GradingHighlightHue = 0f;
         d.Settings.GradingHighlightSat = 0f;
+        d.Settings.GradingHighlightLum = 0f;
+        d.Settings.GradingBlending = 50f;
         d.Settings.GradingBalance = 0f;
         PullSliders(d);
         PushLook(fast: false, settle: true);
-        SetStatus("Reset Color Editor & Grading");
+        SetStatus("Reset Color Grading");
     }
 
     private void ResetDetail()

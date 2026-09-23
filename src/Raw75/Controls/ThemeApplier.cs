@@ -47,6 +47,9 @@ public static class ThemeApplier
             case HslBandSelector hsl:
                 hsl.RefreshTheme();
                 break;
+            case ColorGradingPanel grade:
+                grade.RefreshTheme();
+                break;
             case SettingsDialog s:
                 s.RefreshTheme();
                 break;

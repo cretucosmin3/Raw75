@@ -111,8 +111,13 @@ internal static class Program
             VignetteMidpoint = 40f,
             GradingShadowHue = 215f,
             GradingShadowSat = 35f,
+            GradingShadowLum = -10f,
+            GradingMidHue = 30f,
+            GradingMidSat = 20f,
             GradingHighlightHue = 42f,
             GradingHighlightSat = 25f,
+            GradingHighlightLum = 8f,
+            GradingBlending = 55f,
             GradingBalance = 15f
         };
         var clone = s.Clone();
@@ -129,6 +134,10 @@ internal static class Program
         clone.Texture = 10f;
         if (s.LooksLike(clone))
             throw new InvalidOperationException("LooksLike failed to detect Texture mismatch!");
+        clone.Texture = s.Texture;
+        clone.GradingMidSat = 40f;
+        if (s.LooksLike(clone))
+            throw new InvalidOperationException("LooksLike failed to detect GradingMidSat mismatch!");
         Console.WriteLine("PASSED.");
 
         // 3. CPU Pipeline processing check
