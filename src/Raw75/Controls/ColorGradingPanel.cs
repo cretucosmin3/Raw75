@@ -1,5 +1,6 @@
 using System;
 using Blossom.Core.Visual;
+using Blossom.Core.Visual.Enums;
 using Raw75.Develop;
 using SkiaSharp;
 
@@ -12,8 +13,8 @@ namespace Raw75.Controls;
 public sealed class ColorGradingPanel : VisualElement
 {
     private const float PairGap = 8f;
-    private const float RowGap = 22f;
-    private const float SliderSpacer = 22f;
+    private const float RowGap = 12f;
+    private const float SliderSpacer = 32f;
     private const float MaxWheel = 168f;
 
     private readonly ColorWheelControl _midtones;
@@ -31,6 +32,7 @@ public sealed class ColorGradingPanel : VisualElement
     public ColorGradingPanel()
     {
         Name = "ColorGradingPanel";
+        Overflow = OverflowMode.Visible;
         Style = new ElementStyle { BackColor = SKColors.Transparent };
 
         _midtones = new ColorWheelControl("Midtones");
@@ -44,7 +46,7 @@ public sealed class ColorGradingPanel : VisualElement
         {
             Name = "ColorGrading_Spacer",
             IsClickthrough = true,
-            Style = new ElementStyle { BackColor = Theme.HairlineSubtle }
+            Style = new ElementStyle { BackColor = Theme.Hairline }
         };
 
         _blending = new SliderRow("Blending", 0f, 100f, "0");
@@ -106,7 +108,7 @@ public sealed class ColorGradingPanel : VisualElement
     public void RefreshTheme()
     {
         if (_spacer.Style != null)
-            _spacer.Style.BackColor = Theme.HairlineSubtle;
+            _spacer.Style.BackColor = Theme.Hairline;
         _blending.RefreshTheme();
         _balance.RefreshTheme();
         InvalidatePaint();
@@ -116,9 +118,10 @@ public sealed class ColorGradingPanel : VisualElement
     {
         float w = maxWidth > 0 ? maxWidth : Theme.RightW;
         float wheel = MeasureWheel(w);
-        float h = ColorWheelControl.HeightForWidth(wheel)
-                  + RowGap
-                  + ColorWheelControl.HeightForWidth(wheel)
+        float wheelH = ColorWheelControl.HeightForWidth(wheel);
+        float botY = BottomRowOffset(wheel);
+        float h = botY
+                  + wheelH
                   + SliderSpacer
                   + Theme.RowH
                   + Theme.SliderGap
@@ -138,17 +141,20 @@ public sealed class ColorGradingPanel : VisualElement
 
         float pairW = wheel * 2f + PairGap;
         float pairX = ox + (w - pairW) * 0.5f;
-        float botY = oy + wheelH + RowGap;
+        float botY = oy + BottomRowOffset(wheel);
         _shadows.Transform.SetAbsoluteFrame(pairX, botY, wheel, wheelH);
         _highlights.Transform.SetAbsoluteFrame(pairX + wheel + PairGap, botY, wheel, wheelH);
 
-        float spacerY = wheelH + RowGap + wheelH + (SliderSpacer - 1f) * 0.5f;
-        _spacer.Transform.SetAbsoluteFrame(ox + 12f, oy + spacerY, Math.Max(1f, w - 24f), 1f);
+        float slidersY = BottomRowOffset(wheel) + wheelH + SliderSpacer;
+        _spacer.Transform.SetAbsoluteFrame(ox + 8f, oy + slidersY - SliderSpacer * 0.5f, Math.Max(1f, w - 16f), 1f);
 
-        float y = wheelH + RowGap + wheelH + SliderSpacer;
-        _blending.Transform.SetAbsoluteFrame(ox, oy + y, w, Theme.RowH);
-        y += Theme.RowH + Theme.SliderGap;
-        _balance.Transform.SetAbsoluteFrame(ox, oy + y, w, Theme.RowH);
+        _blending.Transform.SetAbsoluteFrame(ox, oy + slidersY, w, Theme.RowH);
+        _balance.Transform.SetAbsoluteFrame(ox, oy + slidersY + Theme.RowH + Theme.SliderGap, w, Theme.RowH);
+    }
+
+    private static float BottomRowOffset(float wheel)
+    {
+        return ColorWheelControl.HeightForWidth(wheel) + RowGap;
     }
 
     private static float MeasureWheel(float width)

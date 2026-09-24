@@ -17,8 +17,9 @@ namespace Raw75.Controls;
 public sealed class ColorWheelControl : VisualElement
 {
     public const float LabelH = 16f;
-    public const float LumH = 22f;
-    public const float Gap = 4f;
+    public const float LumH = 20f;
+    public const float Gap = 8f;
+    private const float SunSlot = 18f;
 
     private float _hue;
     private float _sat;
@@ -49,6 +50,7 @@ public sealed class ColorWheelControl : VisualElement
         RangeLabel = label ?? "";
         Name = $"ColorWheel_{RangeLabel}";
         Cursor = StandardCursor.Hand;
+        Overflow = OverflowMode.Visible;
         Style = new ElementStyle { BackColor = SKColors.Transparent };
 
         Events.OnMouseDown += OnMouseDown;
@@ -107,11 +109,12 @@ public sealed class ColorWheelControl : VisualElement
         float wheel = Math.Max(8f, Math.Min(w, h - LabelH - Gap - LumH));
         float wheelX = (w - wheel) * 0.5f;
         _wheelRect = new SKRect(wheelX, LabelH, wheelX + wheel, LabelH + wheel);
-        _lumRect = new SKRect(0, h - LumH, w, h);
+        _lumRect = new SKRect(SunSlot, h - LumH, w, h);
 
         DrawLabel(canvas);
         DrawDisk(canvas, _wheelRect);
         DrawPointer(canvas, _wheelRect);
+        DrawSun(canvas, SunSlot * 0.5f, _lumRect.MidY);
         DrawLumSlider(canvas, _lumRect);
     }
 
@@ -173,24 +176,48 @@ public sealed class ColorWheelControl : VisualElement
         float dist = (_sat / 100f) * r;
         float px = cx + MathF.Cos(rad) * dist;
         float py = cy + MathF.Sin(rad) * dist;
-        float pr = _draggingWheel ? 7f : 5.5f;
+        float pr = _draggingWheel ? 8.5f : 7f;
 
         ColorGradeMath.HsvToRgb(_hue, _sat / 100f, 1f, out float rr, out float gg, out float bb);
         SKColor fill = _sat > 5f
             ? new SKColor((byte)(rr * 255f), (byte)(gg * 255f), (byte)(bb * 255f))
-            : SKColors.Transparent;
+            : Theme.WellHover;
 
-        using var shadow = new SKPaint { Color = new SKColor(0, 0, 0, 120), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2.5f };
+        using var shadow = new SKPaint { Color = new SKColor(0, 0, 0, 140), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3f };
         canvas.DrawCircle(px, py, pr, shadow);
 
-        if (fill.Alpha > 0)
-        {
-            using var fillPaint = new SKPaint { Color = fill, IsAntialias = true };
-            canvas.DrawCircle(px, py, pr, fillPaint);
-        }
+        using var fillPaint = new SKPaint { Color = fill, IsAntialias = true };
+        canvas.DrawCircle(px, py, pr, fillPaint);
 
         using var border = new SKPaint { Color = SKColors.White, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2f };
         canvas.DrawCircle(px, py, pr, border);
+
+        using var pip = new SKPaint
+        {
+            Color = _sat > 5f ? new SKColor(20, 20, 24, 220) : SKColors.White,
+            IsAntialias = true
+        };
+        canvas.DrawCircle(px, py, 1.8f, pip);
+    }
+
+    private static void DrawSun(SKCanvas canvas, float cx, float cy)
+    {
+        using var paint = new SKPaint
+        {
+            Color = Theme.TextDim,
+            IsAntialias = true,
+            StrokeWidth = 1.15f,
+            StrokeCap = SKStrokeCap.Round,
+            Style = SKPaintStyle.Stroke
+        };
+        canvas.DrawCircle(cx, cy, 2.6f, paint);
+        for (int i = 0; i < 8; i++)
+        {
+            float a = i * (MathF.PI / 4f);
+            float c = MathF.Cos(a);
+            float s = MathF.Sin(a);
+            canvas.DrawLine(cx + c * 4.1f, cy + s * 4.1f, cx + c * 6.4f, cy + s * 6.4f, paint);
+        }
     }
 
     private void DrawLumSlider(SKCanvas canvas, SKRect lum)
@@ -266,6 +293,13 @@ public sealed class ColorWheelControl : VisualElement
             CapturePointer();
             DragStarted?.Invoke();
             ApplyWheel(local.X, local.Y);
+            args.Handled = true;
+            return;
+        }
+
+        if (local.X >= 0f && local.X < SunSlot && _lumRect.Contains(SunSlot, local.Y))
+        {
+            Set(_hue, _sat, 0f, fire: true);
             args.Handled = true;
             return;
         }
@@ -354,7 +388,7 @@ public sealed class ColorWheelControl : VisualElement
     {
         float cx = _wheelRect.MidX;
         float cy = _wheelRect.MidY;
-        float r = _wheelRect.Width * 0.5f + 4f;
+        float r = _wheelRect.Width * 0.5f + 8f;
         float dx = x - cx;
         float dy = y - cy;
         return dx * dx + dy * dy <= r * r;
@@ -390,6 +424,17 @@ public sealed class ColorWheelControl : VisualElement
         {
             Set(hue, sat, _lum, fire: true);
         }
+    }
+
+    public override bool HitTestLocal(float localX, float localY)
+    {
+        if (_wheelRect.Width < 1f)
+            return base.HitTestLocal(localX, localY);
+        if (_labelRect.Contains(localX, localY))
+            return true;
+        if (localY >= _lumRect.Top && localY <= _lumRect.Bottom && localX >= 0f && localX <= Transform.Width)
+            return true;
+        return HitWheel(localX, localY);
     }
 
     private void ApplyLum(float localX)
