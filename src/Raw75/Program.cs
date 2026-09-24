@@ -363,6 +363,108 @@ internal static class Program
 
         Console.WriteLine("PASSED.");
 
+        Console.Write("8. Checking adaptive look presets... ");
+        var dark = GrayLinear(48, 48, 0.04f);
+        var bright = GrayLinear(48, 48, 0.45f);
+        var darkM = Raw75.Pipeline.SceneAnalyzer.Measure(dark);
+        var brightM = Raw75.Pipeline.SceneAnalyzer.Measure(bright);
+        if (darkM.LogMeanEv >= brightM.LogMeanEv)
+            throw new InvalidOperationException("Dark buffer should measure lower LogMeanEv than bright.");
+
+        var authored = new Raw75.Develop.DevelopSettings { Exposure = 2.2f, Contrast = 40f };
+        var lookM = Raw75.Pipeline.SceneAnalyzer.MeasureLook(dark, authored);
+        var preset = new Raw75.Presets.LookPreset
+        {
+            Source = darkM,
+            Look = lookM,
+            Settings = authored
+        };
+        var dest = new Raw75.Develop.DevelopSettings { BaseExposure = 0.8f, CropW = 0.5f, CropH = 0.5f };
+        Raw75.Presets.AdaptiveLook.Apply(preset, dest, brightM);
+        if (dest.Exposure > 1.0f)
+            throw new InvalidOperationException($"Bright dest should not keep +2.2 EV (got {dest.Exposure}).");
+        if (MathF.Abs(dest.BaseExposure - 0.8f) > 0.001f || dest.CropW < 0.4f)
+            throw new InvalidOperationException("Adaptive apply must keep dest BaseExposure and crop.");
+
+        var curvePreset = new Raw75.Presets.LookPreset
+        {
+            Source = darkM,
+            Look = lookM,
+            Settings = new Raw75.Develop.DevelopSettings
+            {
+                EnableExposureCurve = true,
+                ExposureCurve = new[]
+                {
+                    new Raw75.Pipeline.ExposureCurvePoint(0f, 128f, 1f),
+                    new Raw75.Pipeline.ExposureCurvePoint(48f, 200f, 1f),
+                    new Raw75.Pipeline.ExposureCurvePoint(255f, 128f, 1f)
+                }
+            }
+        };
+        var destCurve = new Raw75.Develop.DevelopSettings();
+        Raw75.Presets.AdaptiveLook.Apply(curvePreset, destCurve, brightM);
+        if (!destCurve.EnableExposureCurve || destCurve.ExposureCurve == null || destCurve.ExposureCurve.Length != 3)
+            throw new InvalidOperationException("Curve look must stay in curve mode.");
+        if (destCurve.ExposureCurve[1].X <= 48f + 1f)
+            throw new InvalidOperationException("Exposure curve X should remap toward brighter dest percentiles.");
+
+        var legacy = Raw75.Presets.PresetStore.Deserialize("{ \"Contrast\": 30 }");
+        if (legacy.Settings == null || Math.Abs(legacy.Settings.Contrast - 30f) > 0.01f || legacy.CanAdapt)
+            throw new InvalidOperationException("Legacy preset JSON should load as exact Contrast 30.");
+
+        if (Math.Abs(Raw75.Presets.AdaptiveLook.NeedScale(1f, 0f)) > 0.001f)
+            throw new InvalidOperationException("Zero dest need must scale to 0.");
+        if (Math.Abs(Raw75.Presets.AdaptiveLook.NeedScale(0.05f, 1f) - 1f) > 0.001f)
+            throw new InvalidOperationException("Tiny author need must keep scale 1.");
+
+        var held = MixedLinear(48, 48, 0.12f, 1.6f);
+        var heldSettings = new Raw75.Develop.DevelopSettings { Exposure = 0.4f, Highlights = -55f, Whites = -30f };
+        var heldSrc = Raw75.Pipeline.SceneAnalyzer.Measure(held);
+        var heldLook = Raw75.Pipeline.SceneAnalyzer.MeasureLook(held, heldSettings);
+        var blown = GrayLinear(48, 48, 1.4f);
+        var blownM = Raw75.Pipeline.SceneAnalyzer.Measure(blown);
+        var heldPreset = new Raw75.Presets.LookPreset
+        {
+            Source = heldSrc,
+            Look = heldLook,
+            Settings = heldSettings
+        };
+        var blownDest = new Raw75.Develop.DevelopSettings();
+        Raw75.Presets.AdaptiveLook.Apply(heldPreset, blownDest, blownM);
+        if (blownDest.Highlights > -10f && blownDest.Whites > -10f)
+            throw new InvalidOperationException($"Overexposed dest should invert to hold highlights (H={blownDest.Highlights}, W={blownDest.Whites}).");
+        Console.WriteLine("PASSED.");
+
         Console.WriteLine("=== All Raw75 Pipeline Smoke Tests Passed Successfully ===");
+    }
+
+    private static Raw75.Imaging.RasterBuffer GrayLinear(int w, int h, float luma)
+    {
+        float[] lin = new float[w * h * 4];
+        for (int i = 0; i < w * h; i++)
+        {
+            int o = i * 4;
+            lin[o] = luma;
+            lin[o + 1] = luma;
+            lin[o + 2] = luma;
+            lin[o + 3] = 1f;
+        }
+        return new Raw75.Imaging.RasterBuffer(lin, w, h);
+    }
+
+    private static Raw75.Imaging.RasterBuffer MixedLinear(int w, int h, float body, float spec)
+    {
+        float[] lin = new float[w * h * 4];
+        for (int i = 0; i < w * h; i++)
+        {
+            int x = i % w;
+            float luma = x > w * 3 / 4 ? spec : body;
+            int o = i * 4;
+            lin[o] = luma;
+            lin[o + 1] = luma;
+            lin[o + 2] = luma;
+            lin[o + 3] = 1f;
+        }
+        return new Raw75.Imaging.RasterBuffer(lin, w, h);
     }
 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using Raw75.Develop;
+using Raw75.Pipeline;
 
 namespace Raw75.Presets;
 
@@ -32,7 +33,7 @@ public static class PresetStore
         return [.. names];
     }
 
-    public static DevelopSettings? Load(string name)
+    public static LookPreset? Load(string name)
     {
         if (!TryFileName(name, out var file))
             return null;
@@ -44,33 +45,12 @@ public static class PresetStore
                 continue;
 
             var json = File.ReadAllText(path);
-            var settings = JsonSerializer.Deserialize<DevelopSettings>(json, JsonOptions);
-            if (settings == null)
+            var preset = Deserialize(json);
+            if (preset?.Settings == null)
                 continue;
-            if (settings.Hsl == null || settings.Hsl.Length != 6)
-                settings.Hsl = DevelopSettings.CreateHsl();
-            if (settings.CurveRgb == null || settings.CurveRgb.Length < 2)
-                settings.CurveRgb = Raw75.Pipeline.CurveMath.DefaultCurve();
-            if (settings.CurveRed == null || settings.CurveRed.Length < 2)
-                settings.CurveRed = Raw75.Pipeline.CurveMath.DefaultCurve();
-            if (settings.CurveGreen == null || settings.CurveGreen.Length < 2)
-                settings.CurveGreen = Raw75.Pipeline.CurveMath.DefaultCurve();
-            if (settings.CurveBlue == null || settings.CurveBlue.Length < 2)
-                settings.CurveBlue = Raw75.Pipeline.CurveMath.DefaultCurve();
-            if (settings.ExposureCurve == null || settings.ExposureCurve.Length < 2)
-                settings.ExposureCurve = Raw75.Pipeline.CurveMath.DefaultExposureCurve();
-
-            // Presets never carry transforms or crop/rotation
-            settings.CropX = 0;
-            settings.CropY = 0;
-            settings.CropW = 0;
-            settings.CropH = 0;
-            settings.Straighten = 0;
-            settings.Rotate90 = 0;
-            settings.FlipH = false;
-            settings.FlipV = false;
-
-            return settings;
+            NormalizeSettings(preset.Settings);
+            StripTransforms(preset.Settings);
+            return preset;
         }
 
         return null;
@@ -94,27 +74,67 @@ public static class PresetStore
         return true;
     }
 
-    public static void Save(string name, DevelopSettings s)
+    public static void Save(string name, DevelopSettings s, SceneMetrics? source = null, SceneMetrics? look = null)
     {
         ArgumentNullException.ThrowIfNull(s);
         if (!TryFileName(name, out var file))
             throw new ArgumentException("Invalid preset name.", nameof(name));
 
         var clean = s.Clone();
-        // Remove transform adjustments from presets (crop, rotation, flips, straighten)
-        clean.CropX = 0;
-        clean.CropY = 0;
-        clean.CropW = 0;
-        clean.CropH = 0;
-        clean.Straighten = 0;
-        clean.Rotate90 = 0;
-        clean.FlipH = false;
-        clean.FlipV = false;
+        StripTransforms(clean);
         clean.EnableGeometry = true;
+        clean.BaseExposure = 0f;
+
+        var preset = new LookPreset
+        {
+            Settings = clean,
+            Source = source,
+            Look = look
+        };
 
         Directory.CreateDirectory(UserDir);
-        var json = JsonSerializer.Serialize(clean, JsonOptions);
+        var json = JsonSerializer.Serialize(preset, JsonOptions);
         File.WriteAllText(Path.Combine(UserDir, file), json);
+    }
+
+    internal static LookPreset Deserialize(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("Settings", out _))
+        {
+            return JsonSerializer.Deserialize<LookPreset>(json, JsonOptions) ?? new LookPreset();
+        }
+
+        var settings = JsonSerializer.Deserialize<DevelopSettings>(json, JsonOptions) ?? new DevelopSettings();
+        return new LookPreset { Settings = settings };
+    }
+
+    private static void NormalizeSettings(DevelopSettings settings)
+    {
+        if (settings.Hsl == null || settings.Hsl.Length != 6)
+            settings.Hsl = DevelopSettings.CreateHsl();
+        if (settings.CurveRgb == null || settings.CurveRgb.Length < 2)
+            settings.CurveRgb = CurveMath.DefaultCurve();
+        if (settings.CurveRed == null || settings.CurveRed.Length < 2)
+            settings.CurveRed = CurveMath.DefaultCurve();
+        if (settings.CurveGreen == null || settings.CurveGreen.Length < 2)
+            settings.CurveGreen = CurveMath.DefaultCurve();
+        if (settings.CurveBlue == null || settings.CurveBlue.Length < 2)
+            settings.CurveBlue = CurveMath.DefaultCurve();
+        if (settings.ExposureCurve == null || settings.ExposureCurve.Length < 2)
+            settings.ExposureCurve = CurveMath.DefaultExposureCurve();
+    }
+
+    private static void StripTransforms(DevelopSettings settings)
+    {
+        settings.CropX = 0;
+        settings.CropY = 0;
+        settings.CropW = 0;
+        settings.CropH = 0;
+        settings.Straighten = 0;
+        settings.Rotate90 = 0;
+        settings.FlipH = false;
+        settings.FlipV = false;
     }
 
     private static void Collect(string dir, ISet<string> names)

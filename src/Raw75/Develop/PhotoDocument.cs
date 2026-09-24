@@ -1,5 +1,6 @@
 using System;
 using Raw75.Imaging;
+using Raw75.Pipeline;
 using Raw75.Views;
 using SkiaSharp;
 
@@ -70,6 +71,9 @@ public sealed class PhotoDocument : IDisposable
     public float[] HistogramG { get; } = new float[256];
     public float[] HistogramB { get; } = new float[256];
     public float[] HistogramY { get; } = new float[256];
+
+    /// <summary>Undeveloped scene stats, filled when the working raster is assigned.</summary>
+    internal SceneMetrics? SourceMetrics { get; set; }
 
     public bool IsDisposed { get; private set; }
 

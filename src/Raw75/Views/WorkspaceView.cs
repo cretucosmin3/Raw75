@@ -1712,37 +1712,11 @@ public sealed class WorkspaceView : View
         var p = PresetStore.Load(name);
         if (d == null || p == null) return;
         d.Undo.Push(d.Settings);
-        bool keepWb = Math.Abs(p.Temperature) < 0.01f && Math.Abs(p.Tint) < 0.01f;
-        bool keepEv = Math.Abs(p.Exposure) < 0.001f;
-        float t = d.Settings.Temperature, ti = d.Settings.Tint, ev = d.Settings.Exposure;
-
-        // Preserve active photo's geometry and crop (presets never modify transforms)
-        float cropX = d.Settings.CropX;
-        float cropY = d.Settings.CropY;
-        float cropW = d.Settings.CropW;
-        float cropH = d.Settings.CropH;
-        float straighten = d.Settings.Straighten;
-        int rotate90 = d.Settings.Rotate90;
-        bool flipH = d.Settings.FlipH;
-        bool flipV = d.Settings.FlipV;
-        bool enableGeom = d.Settings.EnableGeometry;
-
-        d.Settings.CopyFrom(p);
-        if (keepWb) { d.Settings.Temperature = t; d.Settings.Tint = ti; }
-        if (keepEv) d.Settings.Exposure = ev;
-
-        d.Settings.CropX = cropX;
-        d.Settings.CropY = cropY;
-        d.Settings.CropW = cropW;
-        d.Settings.CropH = cropH;
-        d.Settings.Straighten = straighten;
-        d.Settings.Rotate90 = rotate90;
-        d.Settings.FlipH = flipH;
-        d.Settings.FlipV = flipV;
-        d.Settings.EnableGeometry = enableGeom;
-
+        SceneMetrics? destMetrics = d.SourceMetrics ?? MeasureActiveSource(d);
+        AdaptiveLook.Apply(p, d.Settings, destMetrics);
         PullSliders(d);
         PushLook(fast: false, settle: true);
+        SetStatus(p.CanAdapt && destMetrics != null ? "Applied look " + name : "Applied preset " + name);
     }
 
     private void SavePreset()
@@ -1757,9 +1731,14 @@ public sealed class WorkspaceView : View
         if (d == null) return;
         try
         {
-            PresetStore.Save(name, d.Settings);
+            RasterBuffer src = MetricRaster(d);
+            SceneMetrics? source = d.SourceMetrics;
+            if (source == null && src.HasPixels)
+                source = SceneAnalyzer.Measure(src);
+            SceneMetrics? look = src.HasPixels ? SceneAnalyzer.MeasureLook(src, d.Settings) : null;
+            PresetStore.Save(name, d.Settings, source, look);
             _presets.SetItems(PresetStore.Names());
-            SetStatus("Saved preset " + name);
+            SetStatus(look != null ? "Saved look " + name : "Saved preset " + name);
         }
         catch (Exception ex)
         {
@@ -1776,6 +1755,23 @@ public sealed class WorkspaceView : View
         }
         _presets.SetItems(PresetStore.Names());
         SetStatus("Deleted " + name);
+    }
+
+    private static RasterBuffer MetricRaster(PhotoDocument d)
+    {
+        if (d.LiveRgba.HasPixels)
+            return d.LiveRgba;
+        return d.SourceRgba;
+    }
+
+    private static SceneMetrics? MeasureActiveSource(PhotoDocument d)
+    {
+        RasterBuffer src = MetricRaster(d);
+        if (!src.HasPixels)
+            return d.SourceMetrics;
+        var metrics = SceneAnalyzer.Measure(src);
+        d.SourceMetrics = metrics;
+        return metrics;
     }
 
     private void OpenFiles()

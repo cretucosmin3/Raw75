@@ -569,17 +569,19 @@ public sealed class DevelopEngine
                         doc.NativeHeight = raster.Height;
                     }
 
+                    RasterBuffer metricSrc = doc.LiveRgba.HasPixels ? doc.LiveRgba : raster;
+                    doc.SourceMetrics = SceneAnalyzer.Measure(metricSrc);
                     if (doc.SourceLinear)
                     {
                         if (!doc.HasSavedSettings && Math.Abs(doc.Settings.Exposure) < 0.001f)
                         {
-                            float autoEv = AutoExposureEstimator.Estimate(doc.LiveRgba.HasPixels ? doc.LiveRgba : raster);
+                            float autoEv = AutoExposureEstimator.Estimate(metricSrc);
                             doc.Settings.Exposure = Math.Max(0.5f, autoEv);
                             doc.Settings.BaseExposure = doc.Settings.Exposure;
                         }
                         else if (doc.Settings.BaseExposure == 0f)
                         {
-                            float autoEv = AutoExposureEstimator.Estimate(doc.LiveRgba.HasPixels ? doc.LiveRgba : raster);
+                            float autoEv = AutoExposureEstimator.Estimate(metricSrc);
                             doc.Settings.BaseExposure = Math.Max(0.5f, autoEv);
                         }
                     }
