@@ -78,7 +78,7 @@ internal static class AdaptiveLook
 
         if (dest.EnableExposure && dest.EnableExposureCurve)
         {
-            dest.ExposureCurve = InvertCurve(preset, dest.ExposureCurve, destSource);
+            dest.ExposureCurve = RestyleCurve(preset, dest.ExposureCurve, destSource, evMean);
         }
         else if (dest.EnableExposure)
         {
@@ -107,63 +107,57 @@ internal static class AdaptiveLook
         dest.Contrast = Math.Clamp(dest.Contrast * NeedScale(authorC, destCNeed), -100f, 100f);
     }
 
-    private static float PercentileNeed(SceneMetrics look, SceneMetrics dest, float p)
-    {
-        float lookEv = EvAt(look, p);
-        float destEv = EvAt(dest, p);
-        return lookEv - destEv;
-    }
-
-    private static float EvAt(SceneMetrics m, float p)
-    {
-        if (m.EvAtP == null || m.EvAtP.Length < 2)
-        {
-            if (p <= 0.05f) return m.P5Ev;
-            if (p >= 0.99f) return m.P99Ev;
-            if (p >= 0.95f) return m.P95Ev;
-            if (p <= 0.5f) return m.P50Ev;
-            return m.LogMeanEv;
-        }
-        return AdaptiveLook.XAtPercentile(ToFloatKnots(m.EvAtP), p * 100f);
-    }
-
-    private static float[] ToFloatKnots(float[] ev)
-    {
-        return ev;
-    }
-
-    private static ExposureCurvePoint[] InvertCurve(LookPreset preset, ExposureCurvePoint[]? points, SceneMetrics destSource)
+    /// <summary>
+    /// Keep the authored curve's shape (shadow lift, highlight hold, mid clarity).
+    /// Move knots onto this file's percentiles, scale the overall lift like the EV slider,
+    /// and add extra hold at the bright end when this file is hotter than the look.
+    /// </summary>
+    private static ExposureCurvePoint[] RestyleCurve(
+        LookPreset preset,
+        ExposureCurvePoint[]? points,
+        SceneMetrics destSource,
+        float destLiftEv)
     {
         var source = preset.Source!;
         var look = preset.Look!;
         if (points == null || points.Length < 2)
             points = CurveMath.DefaultExposureCurve();
 
+        float authorMeanEv = 0f;
+        for (int i = 0; i < points.Length; i++)
+            authorMeanEv += CurveYToEv(points[i].Y);
+        authorMeanEv /= points.Length;
+        float dcScale = NeedScale(authorMeanEv, destLiftEv);
+
+        float extraHi = 0f;
+        if (look.HasToneStats && destSource.HasToneStats)
+        {
+            if (destSource.P99Ev > look.P99Ev + 0.15f)
+                extraHi = Math.Clamp(destSource.P99Ev - look.P99Ev, 0f, 1.5f);
+            else if (destSource.ClipHigh > look.ClipHigh + 0.02f)
+                extraHi = Math.Clamp((destSource.ClipHigh - look.ClipHigh) * 4f, 0f, 1.2f);
+        }
+
         var mapped = new ExposureCurvePoint[points.Length];
         for (int i = 0; i < points.Length; i++)
         {
             float p = PercentileOfX(source.GammaX, points[i].X);
             float x = XAtPercentile(destSource.GammaX, p);
-            float neededEv = EvAt(look, p / 100f) - EvAt(destSource, p / 100f);
-            float y = 128f + neededEv * (127f / 5f);
-            mapped[i] = new ExposureCurvePoint(x, Math.Clamp(y, 0f, 255f), points[i].Curvature);
+            float ev = CurveYToEv(points[i].Y);
+            float shapeEv = ev - authorMeanEv;
+            float newEv = authorMeanEv * dcScale + shapeEv;
+            if (p > 70f && extraHi > 0f)
+                newEv -= extraHi * ((p - 70f) / 30f);
+            mapped[i] = new ExposureCurvePoint(x, EvToCurveY(newEv), points[i].Curvature);
         }
 
-        Array.Sort(mapped, (a, b) => a.X.CompareTo(b.X));
-        mapped[0] = new ExposureCurvePoint(0f, mapped[0].Y, mapped[0].Curvature);
-        mapped[^1] = new ExposureCurvePoint(255f, mapped[^1].Y, mapped[^1].Curvature);
-        const float minDx = 1f;
-        for (int i = 1; i < mapped.Length; i++)
-        {
-            if (mapped[i].X <= mapped[i - 1].X + minDx)
-            {
-                float x = Math.Min(255f, mapped[i - 1].X + minDx);
-                mapped[i] = new ExposureCurvePoint(x, mapped[i].Y, mapped[i].Curvature);
-            }
-        }
-        mapped[^1] = new ExposureCurvePoint(255f, mapped[^1].Y, mapped[^1].Curvature);
-        return mapped;
+        return FinishCurve(mapped);
     }
+
+    private static float CurveYToEv(float y) => (y - 128f) * (5f / 127f);
+
+    private static float EvToCurveY(float ev) =>
+        Math.Clamp(128f + ev * (127f / 5f), 0f, 255f);
 
     private static float InvertLift(float destEv, float lookEv, bool shadow)
     {
@@ -178,12 +172,10 @@ internal static class AdaptiveLook
     {
         var source = preset.Source!;
         var look = preset.Look!;
-        float authorLift = look.LogMeanEv - source.LogMeanEv;
         float destNeed = look.LogMeanEv - destSource.LogMeanEv;
-        float liftScale = NeedScale(authorLift, destNeed);
 
         if (dest.EnableExposure && dest.EnableExposureCurve)
-            dest.ExposureCurve = RemapCurve(dest.ExposureCurve, source.GammaX, destSource.GammaX, liftScale);
+            dest.ExposureCurve = RestyleCurve(preset, dest.ExposureCurve, destSource, destNeed);
         else if (dest.EnableExposure)
             dest.Exposure = MathF.Round(Math.Clamp(destNeed, -5f, 5f) * 100f) / 100f;
 
@@ -204,24 +196,8 @@ internal static class AdaptiveLook
         return Math.Clamp(destNeed / authorDelta, 0f, MaxScale);
     }
 
-    internal static ExposureCurvePoint[] RemapCurve(
-        ExposureCurvePoint[]? points,
-        float[] sourceX,
-        float[] destX,
-        float yScale)
+    private static ExposureCurvePoint[] FinishCurve(ExposureCurvePoint[] mapped)
     {
-        if (points == null || points.Length < 2)
-            return CurveMath.DefaultExposureCurve();
-
-        var mapped = new ExposureCurvePoint[points.Length];
-        for (int i = 0; i < points.Length; i++)
-        {
-            float p = PercentileOfX(sourceX, points[i].X);
-            float x = XAtPercentile(destX, p);
-            float y = 128f + (points[i].Y - 128f) * yScale;
-            mapped[i] = new ExposureCurvePoint(x, Math.Clamp(y, 0f, 255f), points[i].Curvature);
-        }
-
         Array.Sort(mapped, (a, b) => a.X.CompareTo(b.X));
         mapped[0] = new ExposureCurvePoint(0f, mapped[0].Y, mapped[0].Curvature);
         mapped[^1] = new ExposureCurvePoint(255f, mapped[^1].Y, mapped[^1].Curvature);

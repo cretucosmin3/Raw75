@@ -407,6 +407,8 @@ internal static class Program
             throw new InvalidOperationException("Curve look must stay in curve mode.");
         if (destCurve.ExposureCurve[1].X <= 48f + 1f)
             throw new InvalidOperationException("Exposure curve X should remap toward brighter dest percentiles.");
+        if (destCurve.ExposureCurve[1].Y < 160f)
+            throw new InvalidOperationException($"Curve style lift should survive apply (Y={destCurve.ExposureCurve[1].Y}).");
 
         var legacy = Raw75.Presets.PresetStore.Deserialize("{ \"Contrast\": 30 }");
         if (legacy.Settings == null || Math.Abs(legacy.Settings.Contrast - 30f) > 0.01f || legacy.CanAdapt)
