@@ -24,6 +24,8 @@ internal static class AdaptiveLook
         int rotate90 = dest.Rotate90;
         bool flipH = dest.FlipH, flipV = dest.FlipV;
         bool enableGeom = dest.EnableGeometry;
+        bool enableSpots = dest.EnableSpotRemoval;
+        var spots = dest.Spots;
         float baseEv = dest.BaseExposure;
         float temp = dest.Temperature, tint = dest.Tint;
         float ev = dest.Exposure;
@@ -43,6 +45,8 @@ internal static class AdaptiveLook
         dest.FlipH = flipH;
         dest.FlipV = flipV;
         dest.EnableGeometry = enableGeom;
+        dest.EnableSpotRemoval = enableSpots;
+        dest.Spots = spots;
         dest.BaseExposure = baseEv;
         if (keepWb)
         {

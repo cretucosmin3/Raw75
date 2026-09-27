@@ -135,6 +135,7 @@ public static class PresetStore
         settings.Rotate90 = 0;
         settings.FlipH = false;
         settings.FlipV = false;
+        settings.Spots = new List<SpotPatch>();
     }
 
     private static void Collect(string dir, ISet<string> names)

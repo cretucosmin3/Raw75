@@ -64,6 +64,9 @@ public sealed class WorkspaceView : View
     private PanelGroup _gradingGroup = null!;
     private PanelGroup _detailGroup = null!;
     private PanelGroup _geomGroup = null!;
+    private PanelGroup _spotGroup = null!;
+    private IconButton _btnSpot = null!;
+    private SliderRow _spotSize = null!, _spotFeather = null!;
 
     private SliderRow _temp = null!, _tint = null!, _ev = null!, _con = null!, _sat = null!;
     private IconButton _btnExpSlider = null!;
@@ -350,6 +353,29 @@ public sealed class WorkspaceView : View
             if (_btnCropGeom != null) _btnCropGeom.Toggled = false;
             PushLook(fast: false, settle: true);
         };
+        _photo.SpotsChanged += () =>
+        {
+            if (_sync) return;
+            PushLook(fast: true, settle: false);
+            SyncSpotSliders();
+        };
+        _photo.SpotEditBegan += () =>
+        {
+            _sliderDrag = true;
+            _session.Active?.Undo.BeginDrag(_session.Active.Settings);
+        };
+        _photo.SpotEditEnded += () =>
+        {
+            _sliderDrag = false;
+            var d = _session.Active;
+            if (d != null)
+            {
+                d.Undo.EndDrag(d.Settings);
+                WorkspaceStore.SaveSettings(d);
+            }
+            PushLook(fast: false, settle: true);
+        };
+        _photo.SpotSelectionChanged += SyncSpotSliders;
 
         // Floating photo view overlay: top-right corner of photo viewport
         float overlayW = 88f;
@@ -764,6 +790,41 @@ public sealed class WorkspaceView : View
             _photo.StraightenPreview = en ? s.Straighten : 0f;
         });
 
+        _spotGroup = new PanelGroup("Spot Removal");
+        _btnSpot = new IconButton("Add Spot", "spot");
+        _btnSpot.Clicked += ToggleSpotTool;
+        _spotGroup.AddBody(_btnSpot);
+        _spotSize = BindSlider(_spotGroup, "Size", 1f, 100f, "0",
+            (s, v) =>
+            {
+                int i = _photo.SelectedSpotIndex;
+                if (s.Spots == null || i < 0 || i >= s.Spots.Count) return;
+                s.Spots[i].Radius = SpotPatch.SizeToRadius(v);
+                _photo.InvalidatePaint();
+            },
+            s =>
+            {
+                int i = _photo.SelectedSpotIndex;
+                if (s.Spots == null || i < 0 || i >= s.Spots.Count) return 30f;
+                return SpotPatch.RadiusToSize(s.Spots[i].Radius);
+            }, 30f);
+        _spotFeather = BindSlider(_spotGroup, "Diffusion", 0f, 100f, "0",
+            (s, v) =>
+            {
+                int i = _photo.SelectedSpotIndex;
+                if (s.Spots == null || i < 0 || i >= s.Spots.Count) return;
+                s.Spots[i].Feather = Math.Clamp(v / 100f, 0f, 1f);
+                _photo.InvalidatePaint();
+            },
+            s =>
+            {
+                int i = _photo.SelectedSpotIndex;
+                if (s.Spots == null || i < 0 || i >= s.Spots.Count) return 40f;
+                return s.Spots[i].Feather * 100f;
+            }, 40f);
+        _spotGroup.EnableReset(ResetSpots, "Reset Spot Removal");
+        _spotGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableSpotRemoval = en);
+
         UpdateReconModeUi(new DevelopSettings());
 
         host.AddBody(_wbGroup);
@@ -776,6 +837,7 @@ public sealed class WorkspaceView : View
         host.AddBody(_gradingGroup);
         host.AddBody(_detailGroup);
         host.AddBody(_geomGroup);
+        host.AddBody(_spotGroup);
     }
 
     private void OnSectionToggled(Action<DevelopSettings> apply)
@@ -950,8 +1012,11 @@ public sealed class WorkspaceView : View
     private void SetViewMode(bool gallery)
     {
         if (gallery && _photo.CropTool)
-        {
             _photo.CancelCrop();
+        if (gallery && _photo.SpotTool)
+        {
+            _photo.EndSpotTool();
+            if (_btnSpot != null) _btnSpot.Toggled = false;
         }
 
         _isGalleryMode = gallery;
@@ -1308,6 +1373,8 @@ public sealed class WorkspaceView : View
         _gradingGroup.SectionEnabled = s.EnableColorGrading;
         _detailGroup.SectionEnabled = s.EnableDetail;
         _geomGroup.SectionEnabled = s.EnableGeometry;
+        _spotGroup.SectionEnabled = s.EnableSpotRemoval;
+        SyncSpotSliders();
 
         _temp.Value = s.Temperature;
         _tint.Value = s.Tint;
@@ -1539,6 +1606,53 @@ public sealed class WorkspaceView : View
         PullSliders(d);
         PushLook(fast: false, settle: true);
         SetStatus("Reset Rotation, Geometry & Lens");
+    }
+
+    private void ResetSpots()
+    {
+        var d = _session.Active;
+        if (d == null) return;
+        d.Undo.Push(d.Settings);
+        d.Settings.Spots = new List<SpotPatch>();
+        _photo.SelectSpot(-1);
+        PullSliders(d);
+        PushLook(fast: false, settle: true);
+        SetStatus("Reset Spot Removal");
+    }
+
+    private void SyncSpotSliders()
+    {
+        var d = _session.Active;
+        if (d == null || _spotSize == null) return;
+        bool had = _sync;
+        _sync = true;
+        int i = _photo.SelectedSpotIndex;
+        if (d.Settings.Spots != null && i >= 0 && i < d.Settings.Spots.Count)
+        {
+            _spotSize.Value = SpotPatch.RadiusToSize(d.Settings.Spots[i].Radius);
+            _spotFeather.Value = d.Settings.Spots[i].Feather * 100f;
+        }
+        _sync = had;
+        if (_btnSpot != null)
+            _btnSpot.Toggled = _photo.SpotTool;
+        _photo.InvalidatePaint();
+    }
+
+    private void ToggleSpotTool()
+    {
+        if (_isGalleryMode || _session.Active == null)
+            return;
+        if (_photo.SpotTool)
+        {
+            _photo.EndSpotTool();
+            if (_btnSpot != null) _btnSpot.Toggled = false;
+            return;
+        }
+        if (_photo.CropTool)
+            _photo.CancelCrop();
+        if (_btnSpot != null) _btnSpot.Toggled = true;
+        _photo.BeginSpotTool();
+        SetStatus("Click the photo to add a spot. Drag the dashed circle to set the source. Shift+scroll = size, Ctrl+scroll = diffusion.");
     }
 
     private void AutoWhiteBalance()
@@ -2162,7 +2276,31 @@ public sealed class WorkspaceView : View
                 return;
             }
         }
+        if (_photo.SpotTool)
+        {
+            if (key == Key.Escape)
+            {
+                _photo.EndSpotTool();
+                if (_btnSpot != null) _btnSpot.Toggled = false;
+                return;
+            }
+            if (key == Key.Delete || key == Key.Backspace)
+            {
+                var d = _session.Active;
+                if (d != null)
+                {
+                    d.Undo.Push(d.Settings);
+                    if (_photo.DeleteSelectedSpot())
+                    {
+                        WorkspaceStore.SaveSettings(d);
+                        PushLook(fast: false, settle: true);
+                    }
+                }
+                return;
+            }
+        }
         if (key == Key.C) { ToggleCrop(); return; }
+        if (key == Key.Q) { ToggleSpotTool(); return; }
         if (key == Key.F) _photo.SetZoomMode(ZoomMode.Fit);
         if (key == Key.Z || key == Key.Space)
             _photo.ToggleZoom();
@@ -2214,6 +2352,8 @@ public sealed class WorkspaceView : View
         int targetRot = d.Settings.Rotate90;
         bool targetFlipH = d.Settings.FlipH;
         bool targetFlipV = d.Settings.FlipV;
+        bool targetSpotsEn = d.Settings.EnableSpotRemoval;
+        var targetSpots = d.Settings.Spots;
 
         d.Settings.CopyFrom(_copiedSettings);
 
@@ -2225,6 +2365,8 @@ public sealed class WorkspaceView : View
         d.Settings.Rotate90 = targetRot;
         d.Settings.FlipH = targetFlipH;
         d.Settings.FlipV = targetFlipV;
+        d.Settings.EnableSpotRemoval = targetSpotsEn;
+        d.Settings.Spots = targetSpots;
 
         PullSliders(d);
         WorkspaceStore.SaveSettings(d);

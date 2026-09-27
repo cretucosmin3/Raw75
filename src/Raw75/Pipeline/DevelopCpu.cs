@@ -116,6 +116,9 @@ internal static class DevelopCpu
                     b = ToLin1(rgba[si + 2] / 255f);
                 }
 
+                if (s.EnableSpotRemoval && s.Spots != null && s.Spots.Count > 0)
+                    SpotHeal.ApplyCpu(ref r, ref g, ref b, sx, sy, sw, sh, linSrc, rgba, linearSrc, s.Spots);
+
                 // Vignette in cropped dest space (same as GPU Stage 3).
                 if (s.EnableGeometry && MathF.Abs(s.VignetteAmount) > 0.001f)
                 {

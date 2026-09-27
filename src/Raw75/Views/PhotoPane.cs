@@ -54,6 +54,14 @@ public sealed class PhotoPane : VisualElement
         _tileBeforeLook.InvalidateAll();
     }
 
+    private void InvalidateSpotLooks()
+    {
+        _look.InvalidateSpots();
+        _tileLook.InvalidateSpots();
+        _beforeLook.InvalidateSpots();
+        _tileBeforeLook.InvalidateSpots();
+    }
+
     private DevelopSettings GetBaselineSettings()
     {
         var b = new DevelopSettings();
@@ -232,6 +240,24 @@ public sealed class PhotoPane : VisualElement
     private string? _cropHoverId;
 
     public bool CropTool => _cropTool;
+
+    private bool _spotTool;
+    private int _selectedSpot = -1;
+    private int _hoverSpot = -1;
+    private SpotPart _hoverPart = SpotPart.None;
+    private SpotPart _dragPart = SpotPart.None;
+    private float _dragDx, _dragDy;
+    private bool _pendingSpotClick;
+
+    private enum SpotPart { None, Dest, Src }
+
+    public bool SpotTool => _spotTool;
+    public int SelectedSpotIndex => _selectedSpot;
+
+    public event Action? SpotsChanged;
+    public event Action? SpotEditBegan;
+    public event Action? SpotEditEnded;
+    public event Action? SpotSelectionChanged;
 
     public event Action? CropCommitted;
     public event Action? CropCancelled;
@@ -863,6 +889,9 @@ public sealed class PhotoPane : VisualElement
             DrawCropBar(canvas, pane);
         }
 
+        if (_spotTool && HasPhoto)
+            DrawSpots(canvas, pane);
+
         if (_splitBefore)
         {
             float x = w * _splitT;
@@ -1327,6 +1356,14 @@ public sealed class PhotoPane : VisualElement
             }
         }
 
+        if (_spotTool)
+        {
+            if (OnSpotPointerDown(e.Relative.X, e.Relative.Y))
+                return;
+            _pendingSpotClick = true;
+            return;
+        }
+
         if (_cropTool)
         {
             if (HitCropBar(e.Relative.X, e.Relative.Y))
@@ -1365,6 +1402,16 @@ public sealed class PhotoPane : VisualElement
             e.Handled = true;
             return;
         }
+
+        if (_spotTool && _dragPart != SpotPart.None)
+        {
+            OnSpotPointerMove(e.Relative.X, e.Relative.Y);
+            e.Handled = true;
+            return;
+        }
+
+        if (_pendingSpotClick && _didDrag)
+            _pendingSpotClick = false;
 
         if (!_didDrag)
             return;
@@ -1423,7 +1470,15 @@ public sealed class PhotoPane : VisualElement
         _pointerDown = false;
         _splitDrag = false;
         bool wasCrop = _crop.Active != CropHandle.None;
+        bool wasSpot = _spotTool && _dragPart != SpotPart.None;
         bool wasDrag = _didDrag;
+        bool placeSpot = _pendingSpotClick && !wasDrag;
+        _pendingSpotClick = false;
+        if (wasSpot)
+        {
+            _dragPart = SpotPart.None;
+            SpotEditEnded?.Invoke();
+        }
         _crop.EndDrag();
         ReleasePointer();
         ApplyCropCursor(e.Relative.X, e.Relative.Y);
@@ -1437,7 +1492,13 @@ public sealed class PhotoPane : VisualElement
                 ViewSettled?.Invoke();
         }
 
-        if (wasDrag || wasCrop || wasSplit || _cropTool || !HasPhoto)
+        if (placeSpot)
+        {
+            AddSpotAt(_downLocal.X, _downLocal.Y);
+            return;
+        }
+
+        if (wasDrag || wasCrop || wasSpot || _cropTool || _spotTool || !HasPhoto)
             return;
 
         ToggleClickZoom(e.Relative);
@@ -1447,6 +1508,12 @@ public sealed class PhotoPane : VisualElement
     {
         if (!HasPhoto || e.Offset.Y == 0f)
             return;
+
+        if (_spotTool && OnSpotScroll(e.Offset.Y))
+        {
+            e.Handled = true;
+            return;
+        }
 
         float w = Transform.Computed.Width;
         float h = Transform.Computed.Height;
@@ -1521,6 +1588,19 @@ public sealed class PhotoPane : VisualElement
                 InvalidatePaint();
         }
 
+        if (_spotTool)
+        {
+            HitSpot(_pointerLocal.X, _pointerLocal.Y, out int idx, out SpotPart part);
+            if (idx != _hoverSpot || part != _hoverPart)
+            {
+                _hoverSpot = idx;
+                _hoverPart = part;
+                Cursor = part != SpotPart.None ? StandardCursor.Hand : StandardCursor.Default;
+                InvalidatePaint();
+            }
+            return;
+        }
+
         if (!_cropTool)
             return;
         string? id = CropBarIdAt(_pointerLocal.X, _pointerLocal.Y);
@@ -1541,15 +1621,20 @@ public sealed class PhotoPane : VisualElement
             return;
         _crop.Hover = CropHandle.None;
         _cropHoverId = null;
-        if (!_cropTool)
+        if (!_cropTool && !_spotTool)
             Cursor = null;
         CropCursors.Reset();
+        _hoverSpot = -1;
+        _hoverPart = SpotPart.None;
         if (_cropTool)
             InvalidatePaint();
     }
 
     private bool ShiftHeld =>
         (ParentView?.Events.IsShiftDown ?? false) || Events.IsShiftDown;
+
+    private bool CtrlHeld =>
+        (ParentView?.Events.IsControlDown ?? false) || Events.IsControlDown;
 
     private void ApplyCropCursor(float lx, float ly)
     {
@@ -1852,6 +1937,7 @@ public sealed class PhotoPane : VisualElement
         StraightenPreview = _savedStraighten;
         if (_crop.W < 0.001f || _crop.H < 0.001f)
             _crop.ResetFull();
+        EndSpotTool();
         _cropTool = true;
         _crop.EndDrag();
         _crop.Hover = CropHandle.None;
@@ -2154,6 +2240,310 @@ public sealed class PhotoPane : VisualElement
             SyncViewToSource(force: true);
         InvalidatePaint();
         CropChanged?.Invoke();
+    }
+
+    public void BeginSpotTool()
+    {
+        if (_cropTool)
+            CancelCrop();
+        _spotTool = true;
+        Cursor = StandardCursor.Default;
+        InvalidatePaint();
+    }
+
+    public void EndSpotTool()
+    {
+        if (!_spotTool)
+            return;
+        _spotTool = false;
+        _dragPart = SpotPart.None;
+        _pendingSpotClick = false;
+        _hoverSpot = -1;
+        _hoverPart = SpotPart.None;
+        Cursor = null;
+        InvalidatePaint();
+    }
+
+    public bool DeleteSelectedSpot()
+    {
+        if (_settings?.Spots == null || _selectedSpot < 0 || _selectedSpot >= _settings.Spots.Count)
+            return false;
+        _settings.Spots.RemoveAt(_selectedSpot);
+        _selectedSpot = Math.Min(_selectedSpot, _settings.Spots.Count - 1);
+        SpotSelectionChanged?.Invoke();
+        SpotsChanged?.Invoke();
+        InvalidateSpotLooks();
+        InvalidatePaint();
+        return true;
+    }
+
+    public void SelectSpot(int index)
+    {
+        int next = _settings?.Spots == null ? -1 : Math.Clamp(index, -1, _settings.Spots.Count - 1);
+        if (_settings?.Spots != null && _settings.Spots.Count == 0)
+            next = -1;
+        if (next == _selectedSpot)
+            return;
+        _selectedSpot = next;
+        SpotSelectionChanged?.Invoke();
+        InvalidatePaint();
+    }
+
+    private bool OnSpotPointerDown(float lx, float ly)
+    {
+        HitSpot(lx, ly, out int idx, out SpotPart part);
+        if (idx >= 0 && part != SpotPart.None)
+        {
+            _selectedSpot = idx;
+            _dragPart = part;
+            GetSpotScreen(_settings!.Spots[idx], out float dx, out float dy, out float sx, out float sy, out _);
+            if (part == SpotPart.Dest)
+            {
+                _dragDx = lx - dx;
+                _dragDy = ly - dy;
+            }
+            else
+            {
+                _dragDx = lx - sx;
+                _dragDy = ly - sy;
+            }
+            SpotSelectionChanged?.Invoke();
+            SpotEditBegan?.Invoke();
+            InvalidatePaint();
+            return true;
+        }
+
+        return false;
+    }
+
+    private void AddSpotAt(float lx, float ly)
+    {
+        if (!DestToSourceUv(lx, ly, out float ux, out float uy))
+            return;
+        var spots = _settings!.Spots ??= new List<SpotPatch>();
+        float radius = _selectedSpot >= 0 && _selectedSpot < spots.Count
+            ? spots[_selectedSpot].Radius
+            : 0.028f;
+        float feather = _selectedSpot >= 0 && _selectedSpot < spots.Count
+            ? spots[_selectedSpot].Feather
+            : 0.4f;
+        float offset = Math.Clamp(radius * 2.2f, 0.03f, 0.12f);
+        float srcX = Math.Clamp(ux + offset, 0.02f, 0.98f);
+        float srcY = Math.Clamp(uy, 0.02f, 0.98f);
+        spots.Add(new SpotPatch
+        {
+            DestX = Math.Clamp(ux, 0.02f, 0.98f),
+            DestY = Math.Clamp(uy, 0.02f, 0.98f),
+            SrcX = srcX,
+            SrcY = srcY,
+            Radius = radius,
+            Feather = feather
+        });
+        _selectedSpot = spots.Count - 1;
+        SpotSelectionChanged?.Invoke();
+        SpotEditBegan?.Invoke();
+        SpotEditEnded?.Invoke();
+        SpotsChanged?.Invoke();
+        InvalidateSpotLooks();
+        InvalidatePaint();
+    }
+
+    private void OnSpotPointerMove(float lx, float ly)
+    {
+        if (_settings?.Spots == null || _selectedSpot < 0 || _selectedSpot >= _settings.Spots.Count)
+            return;
+        if (!DestToSourceUv(lx - _dragDx, ly - _dragDy, out float ux, out float uy))
+            return;
+        var p = _settings.Spots[_selectedSpot];
+        ux = Math.Clamp(ux, 0.01f, 0.99f);
+        uy = Math.Clamp(uy, 0.01f, 0.99f);
+        if (_dragPart == SpotPart.Dest)
+        {
+            p.DestX = ux;
+            p.DestY = uy;
+        }
+        else if (_dragPart == SpotPart.Src)
+        {
+            p.SrcX = ux;
+            p.SrcY = uy;
+        }
+        SpotsChanged?.Invoke();
+        InvalidateSpotLooks();
+        InvalidatePaint();
+    }
+
+    private bool OnSpotScroll(float wheelY)
+    {
+        bool size = ShiftHeld && !CtrlHeld;
+        bool diffusion = CtrlHeld;
+        if (!size && !diffusion)
+            return false;
+
+        HitSpot(_pointerLocal.X, _pointerLocal.Y, out int idx, out SpotPart part);
+        if (idx < 0)
+            idx = _selectedSpot;
+        if (_settings?.Spots == null || idx < 0 || idx >= _settings.Spots.Count)
+            return false;
+        if (part == SpotPart.None && idx != _selectedSpot && _hoverPart == SpotPart.None)
+            return false;
+
+        var p = _settings.Spots[idx];
+        _selectedSpot = idx;
+        if (diffusion)
+        {
+            p.Feather = Math.Clamp(p.Feather + MathF.Sign(wheelY) * 0.04f, 0f, 1f);
+        }
+        else
+        {
+            float sz = SpotPatch.RadiusToSize(p.Radius);
+            sz = Math.Clamp(sz + MathF.Sign(wheelY) * 3f, 1f, 100f);
+            p.Radius = SpotPatch.SizeToRadius(sz);
+        }
+        SpotSelectionChanged?.Invoke();
+        SpotsChanged?.Invoke();
+        InvalidateSpotLooks();
+        InvalidatePaint();
+        return true;
+    }
+
+    private void HitSpot(float lx, float ly, out int index, out SpotPart part)
+    {
+        index = -1;
+        part = SpotPart.None;
+        if (_settings?.Spots == null || _settings.Spots.Count == 0)
+            return;
+        float best = float.MaxValue;
+        for (int i = 0; i < _settings.Spots.Count; i++)
+        {
+            GetSpotScreen(_settings.Spots[i], out float dx, out float dy, out float sx, out float sy, out float r);
+            float pad = Math.Max(r, 10f);
+            float dd = (lx - dx) * (lx - dx) + (ly - dy) * (ly - dy);
+            float ds = (lx - sx) * (lx - sx) + (ly - sy) * (ly - sy);
+            if (dd <= pad * pad && dd < best)
+            {
+                best = dd;
+                index = i;
+                part = SpotPart.Dest;
+            }
+            if (ds <= pad * pad && ds < best)
+            {
+                best = ds;
+                index = i;
+                part = SpotPart.Src;
+            }
+        }
+    }
+
+    private void GetSpotScreen(SpotPatch p, out float dx, out float dy, out float sx, out float sy, out float rPx)
+    {
+        GetFrameSize(out int fw, out int fh);
+        var dest = ImageDest;
+        DevelopGeom.SourceUvToDest(p.DestX, p.DestY, dest, _settings, fw, fh, out dx, out dy);
+        DevelopGeom.SourceUvToDest(p.SrcX, p.SrcY, dest, _settings, fw, fh, out sx, out sy);
+        float minSide = Math.Min(Math.Max(fw, 1), Math.Max(fh, 1));
+        float rUv = Math.Clamp(p.Radius, SpotPatch.MinRadius, SpotPatch.MaxRadius);
+        DevelopGeom.SourceUvToDest(
+            Math.Clamp(p.DestX + rUv * minSide / Math.Max(fw, 1), 0f, 1f),
+            p.DestY, dest, _settings, fw, fh, out float rx, out float ry);
+        rPx = Math.Max(4f, MathF.Abs(rx - dx));
+    }
+
+    private bool DestToSourceUv(float lx, float ly, out float sx, out float sy)
+    {
+        GetFrameSize(out int fw, out int fh);
+        return DevelopGeom.DestToSourceUv(lx, ly, ImageDest, _settings, fw, fh, out sx, out sy);
+    }
+
+    private void DrawSpots(SKCanvas canvas, SKRect pane)
+    {
+        if (_settings?.Spots == null)
+            return;
+        canvas.Save();
+        canvas.ClipRect(pane);
+        for (int i = 0; i < _settings.Spots.Count; i++)
+        {
+            bool sel = i == _selectedSpot;
+            GetSpotScreen(_settings.Spots[i], out float dx, out float dy, out float sx, out float sy, out float r);
+            DrawSpotPair(canvas, dx, dy, sx, sy, r, _settings.Spots[i].Feather, sel);
+        }
+        canvas.Restore();
+    }
+
+    private static void DrawSpotPair(SKCanvas canvas, float dx, float dy, float sx, float sy, float r, float feather, bool selected)
+    {
+        SKColor destCol = selected ? Theme.Accent : new SKColor(255, 255, 255, 230);
+        SKColor srcCol = selected ? new SKColor(120, 200, 255, 240) : new SKColor(200, 220, 255, 180);
+        using var line = new SKPaint
+        {
+            Color = selected ? destCol : new SKColor(255, 255, 255, 160),
+            IsAntialias = true,
+            StrokeWidth = selected ? 1.8f : 1.2f,
+            Style = SKPaintStyle.Stroke,
+            StrokeCap = SKStrokeCap.Round
+        };
+        canvas.DrawLine(sx, sy, dx, dy, line);
+        DrawArrowHead(canvas, sx, sy, dx, dy, line);
+
+        using var destStroke = new SKPaint
+        {
+            Color = destCol,
+            IsAntialias = true,
+            StrokeWidth = selected ? 2.2f : 1.5f,
+            Style = SKPaintStyle.Stroke
+        };
+        canvas.DrawCircle(dx, dy, r, destStroke);
+        using var srcStroke = new SKPaint
+        {
+            Color = srcCol,
+            IsAntialias = true,
+            StrokeWidth = selected ? 2f : 1.3f,
+            PathEffect = SKPathEffect.CreateDash(new[] { 5f, 4f }, 0),
+            Style = SKPaintStyle.Stroke
+        };
+        canvas.DrawCircle(sx, sy, r, srcStroke);
+
+        float inner = r * (1f - Math.Clamp(feather, 0f, 1f));
+        if (inner > 2.5f && inner < r - 0.8f)
+        {
+            using var destInner = new SKPaint
+            {
+                Color = new SKColor(destCol.Red, destCol.Green, destCol.Blue, selected ? (byte)200 : (byte)140),
+                IsAntialias = true,
+                StrokeWidth = 1.15f,
+                Style = SKPaintStyle.Stroke
+            };
+            canvas.DrawCircle(dx, dy, inner, destInner);
+            using var srcInner = new SKPaint
+            {
+                Color = new SKColor(srcCol.Red, srcCol.Green, srcCol.Blue, selected ? (byte)190 : (byte)130),
+                IsAntialias = true,
+                StrokeWidth = 1.15f,
+                Style = SKPaintStyle.Stroke
+            };
+            canvas.DrawCircle(sx, sy, inner, srcInner);
+        }
+
+        using var destFill = new SKPaint { Color = new SKColor(255, 255, 255, selected ? (byte)40 : (byte)18), IsAntialias = true };
+        canvas.DrawCircle(dx, dy, r, destFill);
+        using var srcFill = new SKPaint { Color = new SKColor(120, 200, 255, selected ? (byte)36 : (byte)14), IsAntialias = true };
+        canvas.DrawCircle(sx, sy, r, srcFill);
+    }
+
+    private static void DrawArrowHead(SKCanvas canvas, float x0, float y0, float x1, float y1, SKPaint paint)
+    {
+        float vx = x1 - x0;
+        float vy = y1 - y0;
+        float len = MathF.Sqrt(vx * vx + vy * vy);
+        if (len < 8f)
+            return;
+        float ux = vx / len;
+        float uy = vy / len;
+        float ah = 8f;
+        float aw = 5f;
+        float bx = x1 - ux * ah;
+        float by = y1 - uy * ah;
+        canvas.DrawLine(x1, y1, bx + -uy * aw, by + ux * aw, paint);
+        canvas.DrawLine(x1, y1, bx + uy * aw, by + -ux * aw, paint);
     }
 
     public override void Dispose()

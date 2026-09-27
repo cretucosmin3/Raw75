@@ -437,6 +437,34 @@ internal static class Program
             throw new InvalidOperationException($"Overexposed dest should invert to hold highlights (H={blownDest.Highlights}, W={blownDest.Whites}).");
         Console.WriteLine("PASSED.");
 
+        Console.Write("9. Checking spot heal CPU clone... ");
+        int sw = 32, sh = 32;
+        float[] linSpot = new float[sw * sh * 4];
+        for (int y = 0; y < sh; y++)
+        {
+            for (int x = 0; x < sw; x++)
+            {
+                int o = (y * sw + x) * 4;
+                float v = x < 16 ? 0.05f : 0.8f;
+                linSpot[o] = v;
+                linSpot[o + 1] = v;
+                linSpot[o + 2] = v;
+                linSpot[o + 3] = 1f;
+            }
+        }
+        var spotRaster = new Raw75.Imaging.RasterBuffer(linSpot, sw, sh);
+        var sSpot = new Raw75.Develop.DevelopSettings
+        {
+            EnableSpotRemoval = true,
+            Spots = { new Raw75.Develop.SpotPatch { DestX = 0.25f, DestY = 0.5f, SrcX = 0.75f, SrcY = 0.5f, Radius = 0.2f, Feather = 0.1f } }
+        };
+        var rSpot = Raw75.Pipeline.DevelopCpu.Apply(spotRaster, sSpot, fast: true);
+        int left = ((sh / 2) * sw + 4) * 4;
+        int right = ((sh / 2) * sw + 24) * 4;
+        if (rSpot.Rgba![left] < rSpot.Rgba[right] - 40)
+            throw new InvalidOperationException("Spot heal should copy bright source into the dark destination.");
+        Console.WriteLine("PASSED.");
+
         Console.WriteLine("=== All Raw75 Pipeline Smoke Tests Passed Successfully ===");
     }
 

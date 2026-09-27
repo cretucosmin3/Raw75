@@ -35,6 +35,7 @@ UI is built with [Blossom](https://github.com/cretucosmin3/Blossom), with real-t
 - **Photo Canvas**: Smooth zoom & pan, 1:1 pixel inspection, and center-fit.
 - **Before / After**: Instant side-by-side and split-view preview modes.
 - **Crop & Geometry**: Interactive on-canvas crop handles, straighten angle adjustment, 90° rotation, and flips.
+- **Spot Removal**: Heal a region from another with two linked circles, size, and edge diffusion.
 - **Presets**: Built-in recipes apply exactly. Saved looks also store scene metrics so exposure, the exposure curve, and tone sliders retarget to the photo you apply them to.
 - **Export**: Full-resolution rendering to JPEG (with original EXIF metadata preserved), PNG, WebP, and TIFF.
 
