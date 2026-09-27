@@ -154,8 +154,52 @@ internal static class SpotHeal
         _ = minSide;
         if (dstX < -0.2f || dstY < -0.2f || dstX > 1.2f || dstY > 1.2f)
             return false;
+        float ru = radiusPx / Math.Max(w, 1);
+        float rv = radiusPx / Math.Max(h, 1);
+        if (srcX - ru < 0f || srcY - rv < 0f || srcX + ru > 1f || srcY + rv > 1f)
+            return false;
         return radiusPx >= 0.5f;
     }
+
+    /// <summary>
+    /// Grow a visible source AABB so a zoomed tile also contains source circles
+    /// for dests in view. Returns false if the union would be too large.
+    /// </summary>
+    public static bool ExpandAabbForSpots(DevelopSettings s, ref SKRect aabb, int fw, int fh)
+    {
+        if (!HasSpots(s) || fw < 1 || fh < 1)
+            return false;
+        float minSide = Math.Min(fw, fh);
+        SKRect vis = aabb;
+        SKRect extra = aabb;
+        bool hit = false;
+        int n = Math.Min(s.Spots.Count, MaxSpots);
+        for (int i = 0; i < n; i++)
+        {
+            var p = s.Spots[i];
+            float ru = Math.Clamp(p.Radius, SpotPatch.MinRadius, SpotPatch.MaxRadius) * minSide / fw;
+            float rv = Math.Clamp(p.Radius, SpotPatch.MinRadius, SpotPatch.MaxRadius) * minSide / fh;
+            var destR = new SKRect(p.DestX - ru, p.DestY - rv, p.DestX + ru, p.DestY + rv);
+            destR.Inflate(ru * 0.15f, rv * 0.15f);
+            if (!RectsOverlap(destR, vis))
+                continue;
+            extra.Union(destR);
+            extra.Union(new SKRect(p.SrcX - ru, p.SrcY - rv, p.SrcX + ru, p.SrcY + rv));
+            hit = true;
+        }
+        if (!hit)
+            return false;
+        extra.Inflate(0.004f, 0.004f);
+        extra.Intersect(new SKRect(0f, 0f, 1f, 1f));
+        float visArea = Math.Max(1e-8f, vis.Width * vis.Height);
+        if (extra.Width * extra.Height > visArea * 8f)
+            return false;
+        aabb = extra;
+        return true;
+    }
+
+    private static bool RectsOverlap(SKRect a, SKRect b) =>
+        a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
 
     private static void SampleBilinear(
         float[]? linear, byte[]? rgba, bool isLinear, int sw, int sh,

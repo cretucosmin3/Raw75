@@ -532,8 +532,26 @@ public sealed class PhotoPane : VisualElement
         sourceAabb = DevelopGeom.VisibleSourceAabb(dest, vis, _settings, fw, fh);
         if (sourceAabb.Width < 1e-5f || sourceAabb.Height < 1e-5f)
             return false;
-        screenW = Math.Max(1, (int)MathF.Ceiling(vis.Width));
-        screenH = Math.Max(1, (int)MathF.Ceiling(vis.Height));
+        SKRect visAabb = sourceAabb;
+        if (_settings != null && SpotHeal.ExpandAabbForSpots(_settings, ref sourceAabb, fw, fh))
+        {
+            float sx = sourceAabb.Width / Math.Max(1e-6f, visAabb.Width);
+            float sy = sourceAabb.Height / Math.Max(1e-6f, visAabb.Height);
+            screenW = Math.Max(1, (int)MathF.Ceiling(vis.Width * sx));
+            screenH = Math.Max(1, (int)MathF.Ceiling(vis.Height * sy));
+            const int maxEdge = 4096;
+            if (screenW > maxEdge || screenH > maxEdge)
+            {
+                float k = maxEdge / (float)Math.Max(screenW, screenH);
+                screenW = Math.Max(1, (int)(screenW * k));
+                screenH = Math.Max(1, (int)(screenH * k));
+            }
+        }
+        else
+        {
+            screenW = Math.Max(1, (int)MathF.Ceiling(vis.Width));
+            screenH = Math.Max(1, (int)MathF.Ceiling(vis.Height));
+        }
         return true;
     }
 
