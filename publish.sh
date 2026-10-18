@@ -12,19 +12,9 @@ cd "$ROOT"
 
 PROJECT="$ROOT/src/Raw75/Raw75.csproj"
 PUBLISH="$ROOT/publish"
-if [[ -d "$ROOT/external/Blossom/src/Blossom" ]]; then
-  DEFAULT_BLOSSOM="$ROOT/external/Blossom"
-else
-  DEFAULT_BLOSSOM="$(cd "$ROOT/../Blossom" 2>/dev/null && pwd || echo "")"
-fi
-BLOSSOM_ROOT="${BLOSSOM_ROOT:-$DEFAULT_BLOSSOM}"
 
 if [[ ! -f "$PROJECT" ]]; then
   echo "error: missing $PROJECT" >&2
-  exit 1
-fi
-if [[ ! -d "$BLOSSOM_ROOT/src/Blossom" ]]; then
-  echo "error: Blossom not found at $BLOSSOM_ROOT (set BLOSSOM_ROOT)" >&2
   exit 1
 fi
 
@@ -33,7 +23,6 @@ fi
 PUBLISH_PROPS=(
   -c Release
   --self-contained true
-  -p:BlossomRoot="$BLOSSOM_ROOT/"
   -p:PublishReadyToRun=true
   -p:PublishReadyToRunComposite=true
   -p:TieredCompilation=true
@@ -78,12 +67,6 @@ publish_rid() {
 
 stage_linux() {
   local out="$PUBLISH/linux-x64"
-  local glfw="$BLOSSOM_ROOT/glfw/libglfw.so.3.3"
-  if [[ -f "$glfw" ]]; then
-    rm -f "$out/libglfw.so.3"
-    cp -f "$glfw" "$out/libglfw.so.3"
-    chmod +x "$out/libglfw.so.3"
-  fi
   local n="$out/runtimes/linux-x64/native"
   local raw=""
   if [[ -f "$out/libraw_r.so.23" ]]; then
@@ -96,7 +79,7 @@ stage_linux() {
     cp -f "$raw" "$out/libraw.so"
   fi
   local f
-  for f in libjpeg.so.8 libgomp.so.1 liblcms2.so libSkiaSharp.so; do
+  for f in libjpeg.so.8 libgomp.so.1 liblcms2.so libSkiaSharp.so libglfw.so.3; do
     [[ -f "$n/$f" ]] && cp -f "$n/$f" "$out/"
   done
   if [[ -x "$out/Raw75" ]]; then
@@ -109,10 +92,6 @@ stage_linux() {
 
 stage_windows() {
   local out="$PUBLISH/win-x64"
-  local glfw="$BLOSSOM_ROOT/glfw/glfw3-x64.dll"
-  if [[ -f "$glfw" ]]; then
-    cp -f "$glfw" "$out/glfw3.dll"
-  fi
   local n="$out/runtimes/win-x64/native"
   local raw=""
   if [[ -f "$out/raw_r.dll" ]]; then
@@ -125,7 +104,7 @@ stage_windows() {
     cp -f "$raw" "$out/libraw.dll"
   fi
   local f
-  for f in jpeg8.dll lcms2.dll zlib1.dll libSkiaSharp.dll; do
+  for f in jpeg8.dll lcms2.dll zlib1.dll libSkiaSharp.dll glfw3.dll; do
     [[ -f "$n/$f" ]] && cp -f "$n/$f" "$out/"
   done
   if [[ ! -f "$out/Raw75.exe" ]]; then
@@ -135,7 +114,7 @@ stage_windows() {
 }
 
 echo "Repo     $ROOT"
-echo "Blossom  $BLOSSOM_ROOT"
+echo "Blossom  NuGet package (see src/Raw75/Raw75.csproj)"
 echo "Output   $PUBLISH/{linux-x64,win-x64}"
 mkdir -p "$PUBLISH"
 

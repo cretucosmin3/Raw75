@@ -10,10 +10,13 @@ public sealed class Session : IDisposable
     public int ActiveIndex { get; private set; } = -1;
     public int CacheLimit { get; set; } = 1;
 
+    public HashSet<int> SelectedIndices { get; } = new();
+
     public PhotoDocument? Active =>
         ActiveIndex >= 0 && ActiveIndex < Documents.Count ? Documents[ActiveIndex] : null;
 
     public event Action? Changed;
+    public event Action? SelectionChanged;
 
     public PhotoDocument Add(string path, bool select = true)
     {
@@ -32,7 +35,10 @@ public sealed class Session : IDisposable
         if (select)
         {
             ActiveIndex = Documents.Count - 1;
+            SelectedIndices.Clear();
+            SelectedIndices.Add(ActiveIndex);
             Changed?.Invoke();
+            SelectionChanged?.Invoke();
             EvictWorking();
         }
         return doc;
@@ -44,15 +50,72 @@ public sealed class Session : IDisposable
             d.Dispose();
         Documents.Clear();
         ActiveIndex = -1;
+        SelectedIndices.Clear();
         Changed?.Invoke();
+        SelectionChanged?.Invoke();
     }
 
     public void Select(int index)
     {
         if (index < 0 || index >= Documents.Count) return;
         ActiveIndex = index;
+        SelectedIndices.Clear();
+        SelectedIndices.Add(index);
+        Changed?.Invoke();
+        SelectionChanged?.Invoke();
+        EvictWorking();
+    }
+
+    public void SetActiveOnly(int index)
+    {
+        if (index < 0 || index >= Documents.Count) return;
+        ActiveIndex = index;
         Changed?.Invoke();
         EvictWorking();
+    }
+
+    public void ToggleSelection(int index)
+    {
+        if (index < 0 || index >= Documents.Count) return;
+        if (SelectedIndices.Contains(index))
+        {
+            if (SelectedIndices.Count > 1)
+                SelectedIndices.Remove(index);
+        }
+        else
+        {
+            SelectedIndices.Add(index);
+        }
+        ActiveIndex = index;
+        Changed?.Invoke();
+        SelectionChanged?.Invoke();
+        EvictWorking();
+    }
+
+    public void SelectRange(int fromIndex, int toIndex)
+    {
+        if (Documents.Count == 0) return;
+        int start = Math.Clamp(Math.Min(fromIndex, toIndex), 0, Documents.Count - 1);
+        int end = Math.Clamp(Math.Max(fromIndex, toIndex), 0, Documents.Count - 1);
+        for (int i = start; i <= end; i++)
+            SelectedIndices.Add(i);
+        ActiveIndex = toIndex;
+        Changed?.Invoke();
+        SelectionChanged?.Invoke();
+        EvictWorking();
+    }
+
+    public IReadOnlyList<PhotoDocument> GetSelectedDocuments()
+    {
+        var list = new List<PhotoDocument>();
+        for (int i = 0; i < Documents.Count; i++)
+        {
+            if (SelectedIndices.Contains(i))
+                list.Add(Documents[i]);
+        }
+        if (list.Count == 0 && Active != null)
+            list.Add(Active);
+        return list;
     }
 
     public void EvictWorking()

@@ -6,6 +6,7 @@ using Blossom;
 using Blossom.Core;
 using Sdcb.LibRaw;
 using SkiaSharp;
+using Raw75.Io;
 
 namespace Raw75.Imaging;
 
@@ -201,6 +202,14 @@ internal static class RawDecoder
         if (IsRawPath(path))
             return null;
 
+        if (HdrTiff.IsHdrTiff(path))
+        {
+            if (HdrTiff.TryRead(path, out var hdrRaster, out metadata))
+            {
+                return Limit(hdrRaster, ProxyLongEdge(hdrRaster.Width, hdrRaster.Height));
+            }
+        }
+
         try
         {
             byte[] bytes = File.ReadAllBytes(path);
@@ -250,6 +259,12 @@ internal static class RawDecoder
     {
         if (IsRawPath(path))
             return null;
+
+        if (HdrTiff.IsHdrTiff(path))
+        {
+            if (HdrTiff.TryRead(path, out var hdrRaster, out _))
+                return hdrRaster;
+        }
 
         try
         {
@@ -573,6 +588,12 @@ internal static class RawDecoder
                 catch { }
             }
             return meta;
+        }
+
+        if (HdrTiff.IsHdrTiff(path))
+        {
+            if (HdrTiff.TryRead(path, out _, out var hdrMeta) && hdrMeta != null)
+                return hdrMeta;
         }
 
         try

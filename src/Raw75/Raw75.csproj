@@ -11,19 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="$(BlossomRoot)src\Blossom\Blossom.csproj" />
-  </ItemGroup>
-
-  <!-- Vendored GLFW used by Blossom/Silk.NET at runtime (not copied into this repo). -->
-  <ItemGroup>
-    <None Include="$(BlossomRoot)glfw\**\*">
-      <Link>%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      <Visible>false</Visible>
-    </None>
-  </ItemGroup>
-  <ItemGroup>
+    <PackageReference Include="Blossom" Version="0.3.7" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="Sdcb.LibRaw" Version="0.21.1.7" />
     <PackageReference Include="Sdcb.LibRaw.runtime.linux64" Version="0.21.1" />
     <PackageReference Include="Sdcb.LibRaw.runtime.win64" Version="0.21.1" />

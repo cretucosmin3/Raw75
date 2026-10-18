@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using Raw75.Pipeline;
 
@@ -33,8 +34,10 @@ public sealed class DevelopSettings
     public bool EnableTone { get; set; } = true;
     public bool EnableReconstruction { get; set; } = true;
     public bool EnableHsl { get; set; } = true;
+    public bool EnableColorGrading { get; set; } = true;
     public bool EnableDetail { get; set; } = true;
     public bool EnableGeometry { get; set; } = true;
+    public bool EnableSpotRemoval { get; set; } = true;
 
     // White balance. Temp/Tint 0 = as shot (camera multipliers).
     public float Temperature { get; set; } // -100..100 (amber/blue offset)
@@ -85,12 +88,18 @@ public sealed class DevelopSettings
     public float LocalContrastShadows { get; set; } = 0.0f;    // -100..100
     public float LocalContrastMidtones { get; set; } = 50.0f;  // 0..100
 
-    // --- Color Grading (Split Toning) ---
-    public float GradingShadowHue { get; set; } = 220.0f;      // 0..360 (default teal/blue)
-    public float GradingShadowSat { get; set; } = 0.0f;        // 0..100
-    public float GradingHighlightHue { get; set; } = 40.0f;    // 0..360 (default warm amber)
-    public float GradingHighlightSat { get; set; } = 0.0f;     // 0..100
-    public float GradingBalance { get; set; } = 0.0f;          // -100..100
+    // --- Color Grading (3-way) ---
+    public float GradingShadowHue { get; set; }       // 0..360
+    public float GradingShadowSat { get; set; }       // 0..100
+    public float GradingShadowLum { get; set; }       // -100..100
+    public float GradingMidHue { get; set; }          // 0..360
+    public float GradingMidSat { get; set; }          // 0..100
+    public float GradingMidLum { get; set; }          // -100..100
+    public float GradingHighlightHue { get; set; }    // 0..360
+    public float GradingHighlightSat { get; set; }    // 0..100
+    public float GradingHighlightLum { get; set; }    // -100..100
+    public float GradingBlending { get; set; } = 50.0f; // 0..100
+    public float GradingBalance { get; set; }          // -100..100
 
     // Reds, Oranges, Yellows, Greens, Aquas, Blues
     public HslBand[] Hsl { get; set; } = CreateHsl();
@@ -115,6 +124,8 @@ public sealed class DevelopSettings
     public float VignetteAmount { get; set; } = 0.0f;    // -100..100 (optical falloff correction or creative vignette)
     public float VignetteMidpoint { get; set; } = 50.0f; // 0..100
 
+    public List<SpotPatch> Spots { get; set; } = new();
+
     [JsonIgnore]
     public bool HasCrop =>
         CropW > 0.001f && CropH > 0.001f
@@ -136,6 +147,7 @@ public sealed class DevelopSettings
         c.CurveGreen = CurveGreen != null ? (CurvePoint[])CurveGreen.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         c.CurveBlue = CurveBlue != null ? (CurvePoint[])CurveBlue.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         c.ExposureCurve = ExposureCurve != null ? (ExposureCurvePoint[])ExposureCurve.Clone() : Raw75.Pipeline.CurveMath.DefaultExposureCurve();
+        c.Spots = CloneSpots(Spots);
         return c;
     }
 
@@ -153,8 +165,10 @@ public sealed class DevelopSettings
         EnableTone = src.EnableTone;
         EnableReconstruction = src.EnableReconstruction;
         EnableHsl = src.EnableHsl;
+        EnableColorGrading = src.EnableColorGrading;
         EnableDetail = src.EnableDetail;
         EnableGeometry = src.EnableGeometry;
+        EnableSpotRemoval = src.EnableSpotRemoval;
 
         Temperature = src.Temperature;
         Tint = src.Tint;
@@ -188,8 +202,14 @@ public sealed class DevelopSettings
         LocalContrastMidtones = src.LocalContrastMidtones;
         GradingShadowHue = src.GradingShadowHue;
         GradingShadowSat = src.GradingShadowSat;
+        GradingShadowLum = src.GradingShadowLum;
+        GradingMidHue = src.GradingMidHue;
+        GradingMidSat = src.GradingMidSat;
+        GradingMidLum = src.GradingMidLum;
         GradingHighlightHue = src.GradingHighlightHue;
         GradingHighlightSat = src.GradingHighlightSat;
+        GradingHighlightLum = src.GradingHighlightLum;
+        GradingBlending = src.GradingBlending;
         GradingBalance = src.GradingBalance;
         Sharpen = src.Sharpen;
         Noise = src.Noise;
@@ -216,6 +236,7 @@ public sealed class DevelopSettings
         CurveBlue = src.CurveBlue != null ? (CurvePoint[])src.CurveBlue.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         if (src.Hsl != null && src.Hsl.Length == 6)
             Array.Copy(src.Hsl, Hsl, 6);
+        Spots = CloneSpots(src.Spots);
     }
 
     public bool LooksLike(DevelopSettings o)
@@ -229,8 +250,10 @@ public sealed class DevelopSettings
             && EnableTone == o.EnableTone
             && EnableReconstruction == o.EnableReconstruction
             && EnableHsl == o.EnableHsl
+            && EnableColorGrading == o.EnableColorGrading
             && EnableDetail == o.EnableDetail
             && EnableGeometry == o.EnableGeometry
+            && EnableSpotRemoval == o.EnableSpotRemoval
             && EnableCurve == o.EnableCurve
             && Temperature == o.Temperature && Tint == o.Tint
             && Exposure == o.Exposure && BaseExposure == o.BaseExposure && Contrast == o.Contrast
@@ -247,8 +270,10 @@ public sealed class DevelopSettings
             && AtmosphereDepthMax == o.AtmosphereDepthMax && Texture == o.Texture
             && LocalContrastHighlights == o.LocalContrastHighlights
             && LocalContrastShadows == o.LocalContrastShadows && LocalContrastMidtones == o.LocalContrastMidtones
-            && GradingShadowHue == o.GradingShadowHue && GradingShadowSat == o.GradingShadowSat
-            && GradingHighlightHue == o.GradingHighlightHue && GradingHighlightSat == o.GradingHighlightSat && GradingBalance == o.GradingBalance
+            && GradingShadowHue == o.GradingShadowHue && GradingShadowSat == o.GradingShadowSat && GradingShadowLum == o.GradingShadowLum
+            && GradingMidHue == o.GradingMidHue && GradingMidSat == o.GradingMidSat && GradingMidLum == o.GradingMidLum
+            && GradingHighlightHue == o.GradingHighlightHue && GradingHighlightSat == o.GradingHighlightSat && GradingHighlightLum == o.GradingHighlightLum
+            && GradingBlending == o.GradingBlending && GradingBalance == o.GradingBalance
             && Sharpen == o.Sharpen && Noise == o.Noise && DenoiseLuma == o.DenoiseLuma && DenoiseChroma == o.DenoiseChroma
             && LutPath == o.LutPath && LutAmount == o.LutAmount
             && CropX == o.CropX && CropY == o.CropY && CropW == o.CropW && CropH == o.CropH
@@ -259,7 +284,31 @@ public sealed class DevelopSettings
             && CurveEqual(CurveGreen, o.CurveGreen)
             && CurveEqual(CurveBlue, o.CurveBlue)
             && ExposureCurveEqual(ExposureCurve, o.ExposureCurve)
+            && SpotsEqual(Spots, o.Spots)
             && HslEqual(o);
+    }
+
+    private static List<SpotPatch> CloneSpots(List<SpotPatch>? src)
+    {
+        var list = new List<SpotPatch>();
+        if (src == null) return list;
+        for (int i = 0; i < src.Count; i++)
+            list.Add(src[i].Clone());
+        return list;
+    }
+
+    private static bool SpotsEqual(List<SpotPatch>? a, List<SpotPatch>? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        int na = a?.Count ?? 0;
+        int nb = b?.Count ?? 0;
+        if (na != nb) return false;
+        for (int i = 0; i < na; i++)
+        {
+            if (!a![i].LooksLike(b![i]))
+                return false;
+        }
+        return true;
     }
 
     private static bool ExposureCurveEqual(ExposureCurvePoint[]? a, ExposureCurvePoint[]? b)

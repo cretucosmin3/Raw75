@@ -1,5 +1,6 @@
 using System;
 using Blossom.Core.Visual;
+using Blossom.Reactive;
 using SkiaSharp;
 
 namespace Raw75;
@@ -59,37 +60,49 @@ public sealed class UiThemePack
     public byte ShadowAlpha { get; init; } = 70;
 }
 
-/// <summary>Develop chrome tokens. Visual values come from the active <see cref="UiThemePack"/>.</summary>
+/// <summary>
+/// Develop chrome tokens. Every token reads the active <see cref="UiThemePack"/> through the
+/// <see cref="Pack"/> signal, so a <c>Bind</c> effect that paints with tokens re-runs when the
+/// theme changes; reads outside an effect are plain reads.
+/// </summary>
 public static class Theme
 {
     public static event Action? Changed;
 
-    public static string Id { get; private set; } = "midnight";
-    public static string DisplayName { get; private set; } = "Midnight";
-    public static bool IsLight { get; private set; }
-    public static bool OutlineAccent { get; private set; }
-    public static bool UseShadows { get; private set; }
-    public static float ShadowY { get; private set; } = 2f;
-    public static byte ShadowAlpha { get; private set; } = 70;
+    /// <summary>The active pack. Reading it inside an effect subscribes that effect to theme switches.</summary>
+    public static Signal<UiThemePack> Pack => _pack;
 
-    public static SKColor Canvas { get; private set; }
-    public static SKColor Window { get; private set; }
-    public static SKColor TopBar { get; private set; }
-    public static SKColor BottomBar { get; private set; }
-    public static SKColor Panel { get; private set; }
-    public static SKColor PanelAlt { get; private set; }
-    public static SKColor Filmstrip { get; private set; }
-    public static SKColor Section { get; private set; }
-    public static SKColor SectionHeader { get; private set; }
-    public static SKColor SectionHeaderHover { get; private set; }
-    public static SKColor Well { get; private set; }
-    public static SKColor WellHover { get; private set; }
-    public static SKColor Overlay { get; private set; }
-    public static SKColor PhotoWell { get; private set; }
+    private static UiThemePack P => _pack.Value;
 
-    public static SKColor Hairline { get; private set; }
-    public static SKColor HairlineSubtle { get; private set; }
-    public static SKColor HairlineStrong { get; private set; }
+    /// <summary>Subscribes the running effect to theme switches without reading a token.</summary>
+    public static void Observe() => _ = _pack.Value;
+
+    public static string Id => P.Id;
+    public static string DisplayName => P.Name;
+    public static bool IsLight => P.IsLight;
+    public static bool OutlineAccent => P.OutlineAccent;
+    public static bool UseShadows => P.UseShadows;
+    public static float ShadowY => P.ShadowY > 0 ? P.ShadowY : 2f;
+    public static byte ShadowAlpha => P.ShadowAlpha > 0 ? P.ShadowAlpha : (byte)70;
+
+    public static SKColor Canvas => P.Canvas;
+    public static SKColor Window => P.Window;
+    public static SKColor TopBar => P.TopBar;
+    public static SKColor BottomBar => P.BottomBar;
+    public static SKColor Panel => P.Panel;
+    public static SKColor PanelAlt => P.PanelAlt;
+    public static SKColor Filmstrip => P.Filmstrip;
+    public static SKColor Section => P.Section;
+    public static SKColor SectionHeader => P.SectionHeader;
+    public static SKColor SectionHeaderHover => P.SectionHeaderHover;
+    public static SKColor Well => P.Well;
+    public static SKColor WellHover => P.WellHover;
+    public static SKColor Overlay => P.Overlay;
+    public static SKColor PhotoWell => P.PhotoWell;
+
+    public static SKColor Hairline => P.Hairline;
+    public static SKColor HairlineSubtle => P.HairlineSubtle;
+    public static SKColor HairlineStrong => P.HairlineStrong;
 
     public const string FontFamily = "Liberation Sans, Noto Sans, sans-serif";
     public const string MonospaceFontFamily = "Liberation Mono, DejaVu Sans Mono, monospace";
@@ -97,31 +110,39 @@ public static class Theme
         => Blossom.Utils.Fonts.GetTypeface(FontFamily, weight, width, slant);
     public static SKTypeface MonospaceTypeface => Blossom.Utils.Fonts.GetTypeface(MonospaceFontFamily, 400);
 
-    public static SKColor Text { get; private set; }
-    public static SKColor TextSecondary { get; private set; }
-    public static SKColor TextDim { get; private set; }
-    public static SKColor TextDisabled { get; private set; }
+    public static SKColor Text => P.Text;
+    public static SKColor TextSecondary => P.TextSecondary;
+    public static SKColor TextDim => P.TextDim;
+    public static SKColor TextDisabled => P.TextDisabled;
 
-    public static SKColor Accent { get; private set; }
-    public static SKColor AccentHover { get; private set; }
-    public static SKColor AccentPressed { get; private set; }
-    public static SKColor AccentSoft { get; private set; }
-    public static SKColor Selected { get; private set; }
-    public static SKColor Button { get; private set; }
-    public static SKColor ButtonHover { get; private set; }
-    public static SKColor Hover { get; private set; }
-    public static SKColor ButtonTextOnAccent { get; private set; }
-    public static SKColor Success { get; private set; } = new(46, 180, 80);
-    public static SKColor SuccessSoft { get; private set; } = new(46, 180, 80, 140);
-    public static SKColor Favorite { get; private set; } = new(255, 214, 50);
-    public static SKColor FavoriteSoft { get; private set; } = new(255, 214, 50, 140);
+    public static SKColor Accent => P.Accent;
+    public static SKColor AccentHover => P.AccentHover;
+    public static SKColor AccentPressed => P.AccentPressed;
+    public static SKColor AccentSoft => P.Accent.WithAlpha(34);
+    /// <summary>Faint accent tint for selected rows and active segments.</summary>
+    public static SKColor AccentWash => P.Accent.WithAlpha(20);
+    public static SKColor Selected => P.Accent.WithAlpha(44);
+    /// <summary>Readout colour for a parameter that differs from its default.</summary>
+    public static SKColor Modified => P.OutlineAccent ? P.Text : P.Accent;
+    public static SKColor Button => P.Button;
+    public static SKColor ButtonHover => P.ButtonHover;
+    public static SKColor Hover => P.ButtonHover;
+    public static SKColor ButtonTextOnAccent => P.ButtonTextOnAccent;
+    public static SKColor Success { get; } = new(46, 180, 80);
+    public static SKColor SuccessSoft { get; } = new(46, 180, 80, 140);
+    /// <summary>Favourite mark (heart).</summary>
+    public static SKColor Favorite { get; } = new(244, 63, 94);
+    public static SKColor FavoriteSoft { get; } = new(244, 63, 94, 140);
 
-    public static SKColor Track { get; private set; }
-    public static SKColor TrackHover { get; private set; }
-    public static SKColor TrackFill { get; private set; }
-    public static SKColor Handle { get; private set; }
-    public static SKColor HandleHover { get; private set; }
-    public static SKColor HandleActive { get; private set; }
+    /// <summary>Translucent scrim behind modal dialogs.</summary>
+    public static SKColor Scrim => P.IsLight ? new SKColor(20, 20, 24, 110) : new SKColor(0, 0, 0, 150);
+
+    public static SKColor Track => P.Well;
+    public static SKColor TrackHover => P.WellHover;
+    public static SKColor TrackFill => P.Accent;
+    public static SKColor Handle => P.Handle;
+    public static SKColor HandleHover => P.HandleHover;
+    public static SKColor HandleActive => P.HandleActive;
 
     public static SKColor RedChannel { get; } = new(239, 68, 68);
     public static SKColor GreenChannel { get; } = new(34, 197, 94);
@@ -143,24 +164,26 @@ public static class Theme
         (byte)Math.Max(0, c.Blue - d),
         c.Alpha);
 
-    public static float Radius { get; private set; } = 6f;
-    public static float RadiusSm { get; private set; } = 4f;
+    public static float Radius => P.Radius;
+    public static float RadiusSm => P.RadiusSm;
     public const float TopBarH = 48f;
     public const float LeftW = 310f;
     public const float RightW = 356f;
     public const float FilmH = 108f;
-    public const float ToolH = 32f;
+    public const float ToolH = 30f;
     public const float StatusH = 26f;
     public const float GroupHeadH = 32f;
     public const float Pad = 10f;
-    public const float SliderGap = 6f;
+    public const float SliderGap = 4f;
 
-    public const float RowH = 28f;
-    public const float RowHStacked = 34f;
-    public const float SliderLabelW = 88f;
+    public const float RowH = 26f;
+    public const float RowHStacked = 40f;
+    /// <summary>Breathing room above a stacked slider's label row.</summary>
+    public const float StackedTopGap = 6f;
+    public const float SliderLabelW = 84f;
     public const float SliderValueW = 48f;
-    public const float TrackH = 11f;
-    public const float FillH = 5f;
+    public const float TrackH = 10f;
+    public const float FillH = 4f;
     public const float ThumbW = 9f;
     public const float ThumbH = 18f;
     public const float ThumbRadius = 4.5f;
@@ -561,12 +584,52 @@ public static class Theme
         RadiusSm = 2f
     };
 
-    public static readonly UiThemePack[] All = { Midnight, Carbon, Copper, Noir, Moss, Ink, Graphite, Slate, Ash };
-
-    static Theme()
+    public static readonly UiThemePack Tide = new()
     {
-        Apply(Midnight, persist: false, notify: false);
-    }
+        Id = "tide",
+        Name = "Tide",
+        Description = "Neutral dark chrome, teal accent, soft corners.",
+        UseShadows = true,
+        ShadowY = 2.4f,
+        ShadowAlpha = 85,
+        Canvas = new(11, 12, 13),
+        Window = new(19, 20, 22),
+        TopBar = new(25, 26, 28),
+        BottomBar = new(21, 22, 24),
+        Panel = new(21, 22, 24),
+        PanelAlt = new(27, 28, 31),
+        Filmstrip = new(17, 18, 20),
+        Section = new(31, 32, 35),
+        SectionHeader = new(25, 26, 28),
+        SectionHeaderHover = new(37, 39, 42),
+        Well = new(15, 16, 17),
+        WellHover = new(23, 24, 26),
+        Overlay = new(45, 47, 50),
+        PhotoWell = new(9, 10, 11),
+        Hairline = new(255, 255, 255, 26),
+        HairlineSubtle = new(255, 255, 255, 14),
+        HairlineStrong = new(255, 255, 255, 52),
+        Text = new(242, 246, 247),
+        TextSecondary = new(190, 198, 200),
+        TextDim = new(144, 154, 157),
+        TextDisabled = new(98, 106, 109),
+        Accent = new(45, 200, 180),
+        AccentHover = new(80, 220, 200),
+        AccentPressed = new(30, 168, 150),
+        Button = new(34, 36, 39),
+        ButtonHover = new(44, 47, 50),
+        ButtonTextOnAccent = new(8, 24, 22),
+        Handle = new(255, 255, 255),
+        HandleHover = new(200, 245, 238),
+        HandleActive = new(220, 250, 245),
+        Radius = 7f,
+        RadiusSm = 4f
+    };
+
+    public static readonly UiThemePack[] All = { Midnight, Carbon, Copper, Noir, Moss, Ink, Tide, Graphite, Slate, Ash };
+
+    // Declared after the packs: static initializers run in textual order.
+    private static readonly Signal<UiThemePack> _pack = new(Midnight);
 
     public static UiThemePack Find(string? id)
     {
@@ -585,57 +648,7 @@ public static class Theme
     public static void Apply(UiThemePack pack, bool persist = true, bool notify = true)
     {
         ArgumentNullException.ThrowIfNull(pack);
-        Id = pack.Id;
-        DisplayName = pack.Name;
-        IsLight = pack.IsLight;
-        OutlineAccent = pack.OutlineAccent;
-        UseShadows = pack.UseShadows;
-        ShadowY = pack.ShadowY > 0 ? pack.ShadowY : 2f;
-        ShadowAlpha = pack.ShadowAlpha > 0 ? pack.ShadowAlpha : (byte)70;
-
-        Canvas = pack.Canvas;
-        Window = pack.Window;
-        TopBar = pack.TopBar;
-        BottomBar = pack.BottomBar;
-        Panel = pack.Panel;
-        PanelAlt = pack.PanelAlt;
-        Filmstrip = pack.Filmstrip;
-        Section = pack.Section;
-        SectionHeader = pack.SectionHeader;
-        SectionHeaderHover = pack.SectionHeaderHover;
-        Well = pack.Well;
-        WellHover = pack.WellHover;
-        Overlay = pack.Overlay;
-        PhotoWell = pack.PhotoWell;
-
-        Hairline = pack.Hairline;
-        HairlineSubtle = pack.HairlineSubtle;
-        HairlineStrong = pack.HairlineStrong;
-
-        Text = pack.Text;
-        TextSecondary = pack.TextSecondary;
-        TextDim = pack.TextDim;
-        TextDisabled = pack.TextDisabled;
-
-        Accent = pack.Accent;
-        AccentHover = pack.AccentHover;
-        AccentPressed = pack.AccentPressed;
-        AccentSoft = new SKColor(pack.Accent.Red, pack.Accent.Green, pack.Accent.Blue, 34);
-        Selected = new SKColor(pack.Accent.Red, pack.Accent.Green, pack.Accent.Blue, 44);
-        Button = pack.Button;
-        ButtonHover = pack.ButtonHover;
-        Hover = pack.ButtonHover;
-        ButtonTextOnAccent = pack.ButtonTextOnAccent;
-
-        Track = pack.Well;
-        TrackHover = pack.WellHover;
-        TrackFill = pack.Accent;
-        Handle = pack.Handle;
-        HandleHover = pack.HandleHover;
-        HandleActive = pack.HandleActive;
-
-        Radius = pack.Radius;
-        RadiusSm = pack.RadiusSm;
+        _pack.Value = pack;
 
         if (persist)
             Io.UiPrefs.SaveThemeId(pack.Id);

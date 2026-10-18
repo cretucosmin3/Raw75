@@ -3,18 +3,14 @@ using System.Collections.Generic;
 using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using Raw75.Develop;
 using Raw75.Io;
-using Silk.NET.Input;
 using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>
-/// Full-canvas lightbox / gallery grid view:
-/// Displays a multi-column contact sheet with ready/star marks, filter tabs,
-/// and double-click to open in develop view. Virtualized for fast rendering.
-/// </summary>
 public enum GalleryThumbSize
 {
     Small,
@@ -22,34 +18,39 @@ public enum GalleryThumbSize
     Large
 }
 
+/// <summary>
+/// Full-canvas lightbox / gallery grid view:
+/// Displays a multi-column contact sheet with ready / favourite marks, filter tabs,
+/// and double-click to open in develop view. Virtualized for fast rendering.
+/// </summary>
 public sealed class GalleryView : VisualElement
 {
     private const float TopBarH = 46f;
     private const float Gap = 12f;
     private const float Pad = 16f;
 
-    private readonly VisualElement _headerBar;
-    private readonly IconButton _btnFilterAll;
+    private readonly record struct MarkCounts(int Total, int Ready, int Favorites);
+
+    private readonly Stack _headerBar;
+    private readonly VisualElement _headerDivider;
+    private readonly VisualElement _groupSep;
     private readonly IconButton _btnFilterReady;
-    private readonly IconButton _btnFilterStar;
-    private readonly IconButton _btnMarkAll;
-    private readonly IconButton _btnClearAll;
-    private readonly IconButton _btnSizeS;
-    private readonly IconButton _btnSizeM;
-    private readonly IconButton _btnSizeL;
+    private readonly IconButton _btnFilterFavorite;
     private readonly VisualElement _countLabel;
     private readonly GalleryScroller _scroller;
 
-    private GalleryThumbSize _thumbSize = GalleryThumbSize.Small;
+    private readonly Signal<PhotoFilter> _filter = new(PhotoFilter.All);
+    private readonly Signal<GalleryThumbSize> _thumbSize = new(GalleryThumbSize.Small);
+    private readonly Signal<MarkCounts> _counts = new(default);
 
-    private float CardW => _thumbSize switch
+    private float CardW => _thumbSize.Peek() switch
     {
         GalleryThumbSize.Medium => 336f,
         GalleryThumbSize.Large => 456f,
         _ => 240f
     };
 
-    private float CardH => _thumbSize switch
+    private float CardH => _thumbSize.Peek() switch
     {
         GalleryThumbSize.Medium => 360f,
         GalleryThumbSize.Large => 488f,
@@ -63,7 +64,6 @@ public sealed class GalleryView : VisualElement
 
     private IReadOnlyList<PhotoDocument> _docs = Array.Empty<PhotoDocument>();
     private int _activeIndex = -1;
-    private PhotoFilter _filter = PhotoFilter.All;
 
     private int _lastFirstRow = -1;
     private int _lastLastRow = -1;
@@ -73,6 +73,7 @@ public sealed class GalleryView : VisualElement
     private int _lastCols = -1;
 
     public event Action<int>? PhotoSelected;
+    public event Action<int, bool, bool>? SelectionRequested;
     public event Action<int>? PhotoDoubleClicked;
     public event Action<int, bool>? ReadyToggled;
     public event Action<int, bool>? FavoriteToggled;
@@ -80,7 +81,9 @@ public sealed class GalleryView : VisualElement
     public event Action<PhotoFilter>? FilterChanged;
     public event Action<int, float, float>? ContextMenuRequested;
 
-    public PhotoFilter ActiveFilter => _filter;
+    private readonly HashSet<int> _selectedIndices = new();
+
+    public PhotoFilter ActiveFilter => _filter.Value;
 
     public float ScrollY
     {
@@ -91,59 +94,51 @@ public sealed class GalleryView : VisualElement
     public GalleryView()
     {
         Name = "GalleryView";
-        Style = new ElementStyle
+        Style = new ElementStyle { Border = new BorderStyle { Width = 0 } };
+
+        // Header: [filters] | [batch marks] ........ count  [S M L]
+        var btnAll = new IconButton("All");
+        btnAll.Clicked += () => SetFilter(PhotoFilter.All);
+        btnAll.Bind(b =>
         {
-            BackColor = Theme.Canvas,
-            Border = new BorderStyle { Width = 0 }
-        };
+            b.Toggled = _filter.Value == PhotoFilter.All;
+            b.Caption = $"All ({_counts.Value.Total})";
+        });
 
-        _headerBar = new VisualElement
-        {
-            Name = "Gallery_HeaderBar",
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Window,
-                Border = new BorderStyle { Width = 0 }
-            }
-        };
-
-        _btnFilterAll = new IconButton("All (0)");
-        _btnFilterAll.Toggled = true;
-        _btnFilterAll.Clicked += () => SetFilter(PhotoFilter.All);
-
-        _btnFilterReady = new IconButton("Ready (0)", "check");
+        _btnFilterReady = new IconButton("Ready", "check");
         _btnFilterReady.Clicked += () => ToggleFilterFlag(PhotoFilter.Ready);
+        _btnFilterReady.Bind(b =>
+        {
+            b.Toggled = (_filter.Value & PhotoFilter.Ready) != 0;
+            b.Caption = $"Ready ({_counts.Value.Ready})";
+        });
 
-        _btnFilterStar = new IconButton("Starred (0)", "star");
-        _btnFilterStar.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
+        _btnFilterFavorite = new IconButton("Favorites", "heart_filled");
+        _btnFilterFavorite.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
+        _btnFilterFavorite.Bind(b =>
+        {
+            b.Toggled = (_filter.Value & PhotoFilter.Favorite) != 0;
+            b.Caption = $"Favorites ({_counts.Value.Favorites})";
+        });
 
-        _btnMarkAll = new IconButton("Mark All Ready", "check");
-        _btnMarkAll.Clicked += MarkAllReady;
+        _groupSep = new VisualElement { Name = "Gallery_HeaderSep", IsClickthrough = true };
+        _groupSep.Transform.Width = 1f;
+        _groupSep.Transform.Height = 18f;
 
-        _btnClearAll = new IconButton("Clear Ready", "cross");
-        _btnClearAll.Clicked += ClearAllReady;
-
-        _btnSizeS = IconButton.Icon("gallery_size_s");
-        _btnSizeS.Toggled = true;
-        _btnSizeS.Clicked += () => SetThumbSize(GalleryThumbSize.Small);
-
-        _btnSizeM = IconButton.Icon("gallery_size_m");
-        _btnSizeM.Clicked += () => SetThumbSize(GalleryThumbSize.Medium);
-
-        _btnSizeL = IconButton.Icon("gallery_size_l");
-        _btnSizeL.Clicked += () => SetThumbSize(GalleryThumbSize.Large);
+        var markAll = new IconButton("Mark All Ready", "check");
+        markAll.Clicked += () => SetAllReady(true);
+        var clearAll = new IconButton("Clear Ready", "cross");
+        clearAll.Clicked += () => SetAllReady(false);
 
         _countLabel = new VisualElement
         {
             Name = "Gallery_CountLabel",
-            Text = "0 photos",
             IsClickthrough = true,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
                 Text = new TextStyle
                 {
-                    Color = Theme.TextDim,
                     Size = 12,
                     Weight = 500,
                     Alignment = TextAlign.Right,
@@ -151,17 +146,34 @@ public sealed class GalleryView : VisualElement
                 }
             }
         };
+        _countLabel.BindText(() =>
+        {
+            var n = _counts.Value;
+            return $"{n.Total} photos · {n.Ready} ready · {n.Favorites} favorites";
+        });
 
-        _headerBar.AddChild(_btnFilterAll);
-        _headerBar.AddChild(_btnFilterReady);
-        _headerBar.AddChild(_btnFilterStar);
-        _headerBar.AddChild(_btnMarkAll);
-        _headerBar.AddChild(_btnClearAll);
-        _headerBar.AddChild(_btnSizeS);
-        _headerBar.AddChild(_btnSizeM);
-        _headerBar.AddChild(_btnSizeL);
+        _headerBar = new Stack
+        {
+            Name = "Gallery_HeaderBar",
+            Orientation = Orientation.Horizontal,
+            Align = LayoutAlign.Center,
+            Gap = 12f,
+            Padding = new Thickness(Pad, 0, Pad, 0),
+            Style = new ElementStyle { Border = new BorderStyle { Width = 0 } }
+        };
+        _headerBar.AddChild(Cluster("Gallery_Filters", btnAll, _btnFilterReady, _btnFilterFavorite));
+        _headerBar.AddChild(_groupSep);
+        _headerBar.AddChild(Cluster("Gallery_Marks", markAll, clearAll));
         _headerBar.AddChild(_countLabel);
+        Stack.SetGrow(_countLabel, 1f);
+        _headerBar.AddChild(Cluster("Gallery_Sizes",
+            SizeButton("gallery_size_s", GalleryThumbSize.Small),
+            SizeButton("gallery_size_m", GalleryThumbSize.Medium),
+            SizeButton("gallery_size_l", GalleryThumbSize.Large)));
         AddChild(_headerBar);
+
+        _headerDivider = new VisualElement { Name = "Gallery_HeaderDivider", IsClickthrough = true };
+        AddChild(_headerDivider);
 
         _scroller = new GalleryScroller(this)
         {
@@ -170,47 +182,69 @@ public sealed class GalleryView : VisualElement
             OverflowY = OverflowMode.Scroll,
             ScrollbarVisibilityX = ScrollbarVisibility.Hidden,
             ScrollbarVisibilityY = ScrollbarVisibility.Auto,
-            ScrollbarThickness = 8f,
-            ScrollbarRadius = 4f,
-            ScrollbarPadding = 1.5f,
-            ScrollbarThumbColor = new SKColor(160, 160, 160, 140),
-            ScrollbarThumbHoverColor = new SKColor(200, 200, 200, 200),
-            ScrollbarThumbDragColor = Theme.Accent,
+            ScrollbarThickness = 6f,
+            ScrollbarRadius = 3f,
+            ScrollbarPadding = 2f,
             ScrollbarTrackColor = SKColors.Transparent,
             SmoothScroll = true,
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Canvas,
-                Border = new BorderStyle { Width = 0 }
-            }
+            Style = new ElementStyle { Border = new BorderStyle { Width = 0 } }
         };
         AddChild(_scroller);
+
+        this.Bind(_ => ApplyTheme());
     }
 
-    public void RefreshTheme()
+    /// <summary>A tight row of related header buttons.</summary>
+    private static Stack Cluster(string name, params IconButton[] buttons)
+    {
+        var row = new Stack
+        {
+            Name = name,
+            Orientation = Orientation.Horizontal,
+            Align = LayoutAlign.Center,
+            Gap = 4f
+        };
+        foreach (var b in buttons)
+            row.AddChild(b);
+        return row;
+    }
+
+    private IconButton SizeButton(string icon, GalleryThumbSize size)
+    {
+        var btn = IconButton.Icon(icon);
+        btn.Clicked += () => SetThumbSize(size);
+        btn.Bind(b => b.Toggled = _thumbSize.Value == size);
+        return btn;
+    }
+
+    private void ApplyTheme()
     {
         Style.BackColor = Theme.Canvas;
+        _headerBar.Style.BackColor = Theme.Window;
+        _headerDivider.Style.BackColor = Theme.Hairline;
+        _groupSep.Style.BackColor = Theme.Hairline;
+        _countLabel.Style.Text.Color = Theme.TextDim;
+        _btnFilterReady.IconColor = Theme.Success;
+        _btnFilterFavorite.IconColor = Theme.Favorite;
         _scroller.Style.BackColor = Theme.Canvas;
-        _scroller.ScrollbarThumbDragColor = Theme.Accent;
-        if (_headerBar.Style != null)
-        {
-            _headerBar.Style.BackColor = Theme.Window;
-            if (_headerBar.Style.Border != null)
-                _headerBar.Style.Border.Width = 0;
-        }
-        if (_countLabel.Style?.Text != null)
-            _countLabel.Style.Text.Color = Theme.TextDim;
-        foreach (var card in _activeCards.Values)
-            card.RefreshTheme();
-        foreach (var card in _cardPool)
-            card.RefreshTheme();
+        ThumbTile.StyleScrollbars(_scroller);
         InvalidatePaint();
     }
 
-    public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex)
+    public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex, IEnumerable<int>? selectedIndices = null)
     {
         _docs = docs ?? Array.Empty<PhotoDocument>();
         _activeIndex = activeIndex;
+        _selectedIndices.Clear();
+        if (selectedIndices != null)
+        {
+            foreach (var idx in selectedIndices)
+                _selectedIndices.Add(idx);
+        }
+        else if (activeIndex >= 0)
+        {
+            _selectedIndices.Add(activeIndex);
+        }
         _lastFirstRow = -1;
         _lastLastRow = -1;
 
@@ -219,23 +253,32 @@ public sealed class GalleryView : VisualElement
 
         float w = Math.Max(1f, _scroller.Transform.Computed.Width > 0 ? _scroller.Transform.Computed.Width : (_scroller.Transform.Width > 0 ? _scroller.Transform.Width : Transform.Width));
         float h = Math.Max(1f, _scroller.Transform.Computed.Height > 0 ? _scroller.Transform.Computed.Height : Math.Max(1f, Transform.Height - TopBarH));
-        float startY = Pad;
-        float availW = Math.Max(1f, w - Pad * 2f);
-        int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
-        int totalRows = (_filteredIndices.Count + cols - 1) / cols;
-        float totalH = startY + totalRows * (CardH + Gap) + Pad;
-
-        _scroller.SetContentSize(w, Math.Max(totalH, h));
+        _scroller.SetContentSize(w, Math.Max(ContentHeight(w), h));
         UpdateVirtualCards(force: true);
+        InvalidatePaint();
+    }
+
+    public void SetSelection(IEnumerable<int> selectedIndices, int activeIndex)
+    {
+        _selectedIndices.Clear();
+        if (selectedIndices != null)
+        {
+            foreach (var idx in selectedIndices)
+                _selectedIndices.Add(idx);
+        }
+        else if (activeIndex >= 0)
+        {
+            _selectedIndices.Add(activeIndex);
+        }
+        _activeIndex = activeIndex;
+        foreach (var card in _activeCards.Values)
+            card.SetSelection(card.Index == activeIndex, _selectedIndices.Contains(card.Index));
         InvalidatePaint();
     }
 
     public void SetSelected(int index)
     {
-        _activeIndex = index;
-        foreach (var card in _activeCards.Values)
-            card.SetActive(card.Index == index);
-        InvalidatePaint();
+        SetSelection(new[] { index }, index);
     }
 
     public void SetReady(int index, bool ready)
@@ -251,14 +294,7 @@ public sealed class GalleryView : VisualElement
                 break;
             }
         }
-        UpdateFilterCounts();
-
-        if (_filter != PhotoFilter.All)
-        {
-            UpdateFilteredIndices();
-            InvalidateLayout();
-        }
-        InvalidatePaint();
+        OnMarksChanged(PhotoFilter.Ready | PhotoFilter.Favorite);
     }
 
     public void SetFavorite(int index, bool favorite)
@@ -274,14 +310,7 @@ public sealed class GalleryView : VisualElement
                 break;
             }
         }
-        UpdateFilterCounts();
-
-        if (_filter != PhotoFilter.All)
-        {
-            UpdateFilteredIndices();
-            InvalidateLayout();
-        }
-        InvalidatePaint();
+        OnMarksChanged(PhotoFilter.Ready | PhotoFilter.Favorite);
     }
 
     public void RefreshThumbs()
@@ -307,26 +336,20 @@ public sealed class GalleryView : VisualElement
 
     public void SetFilter(PhotoFilter filter)
     {
-        if (_filter == filter) return;
-        _filter = filter;
-        ApplyFilterChrome();
+        if (_filter.Peek() == filter) return;
+        _filter.Value = filter;
         UpdateFilteredIndices();
         ScrollY = 0f;
         InvalidateLayout();
         InvalidatePaint();
-        FilterChanged?.Invoke(_filter);
+        FilterChanged?.Invoke(filter);
     }
 
     public void SetThumbSize(GalleryThumbSize size)
     {
-        if (_thumbSize == size)
-        {
-            ApplySizeChrome();
-            return;
-        }
+        if (_thumbSize.Peek() == size) return;
 
-        _thumbSize = size;
-        ApplySizeChrome();
+        _thumbSize.Value = size;
         _lastFirstRow = -1;
         _lastLastRow = -1;
         _lastCols = -1;
@@ -335,86 +358,67 @@ public sealed class GalleryView : VisualElement
         InvalidatePaint();
     }
 
-    private void ApplySizeChrome()
-    {
-        _btnSizeS.Toggled = _thumbSize == GalleryThumbSize.Small;
-        _btnSizeM.Toggled = _thumbSize == GalleryThumbSize.Medium;
-        _btnSizeL.Toggled = _thumbSize == GalleryThumbSize.Large;
-    }
-
-    private void ToggleFilterFlag(PhotoFilter flag)
-    {
-        SetFilter(_filter ^ flag);
-    }
-
-    private void ApplyFilterChrome()
-    {
-        _btnFilterAll.Toggled = _filter == PhotoFilter.All;
-        _btnFilterReady.Toggled = (_filter & PhotoFilter.Ready) != 0;
-        _btnFilterStar.Toggled = (_filter & PhotoFilter.Favorite) != 0;
-    }
+    private void ToggleFilterFlag(PhotoFilter flag) => SetFilter(_filter.Peek() ^ flag);
 
     private void UpdateFilterCounts()
     {
         int total = _docs.Count;
         int ready = 0;
-        int starred = 0;
+        int favorites = 0;
         for (int i = 0; i < total; i++)
         {
             if (_docs[i].IsReady) ready++;
-            if (_docs[i].IsFavorite) starred++;
+            if (_docs[i].IsFavorite) favorites++;
         }
-
-        _btnFilterAll.Caption = $"All ({total})";
-        _btnFilterReady.Caption = $"Ready ({ready})";
-        _btnFilterStar.Caption = $"Starred ({starred})";
-        _countLabel.Text = $"{total} photos · {ready} ready · {starred} starred";
+        _counts.Value = new MarkCounts(total, ready, favorites);
     }
 
     private void UpdateFilteredIndices()
     {
+        var filter = _filter.Peek();
         _filteredIndices.Clear();
         for (int i = 0; i < _docs.Count; i++)
         {
-            if (PhotoFilterMatch.Matches(_docs[i], _filter))
+            if (PhotoFilterMatch.Matches(_docs[i], filter))
                 _filteredIndices.Add(i);
         }
     }
 
-    private void MarkAllReady()
+    /// <summary>Recounts marks and re-filters when the active filter depends on <paramref name="affected"/>.</summary>
+    private void OnMarksChanged(PhotoFilter affected)
     {
-        for (int i = 0; i < _docs.Count; i++)
-            _docs[i].IsReady = true;
-
-        foreach (var card in _activeCards.Values)
-            card.SetReady(true);
-
         UpdateFilterCounts();
-        if (_filter != PhotoFilter.All)
+        if ((_filter.Peek() & affected) != 0)
         {
             UpdateFilteredIndices();
             InvalidateLayout();
         }
         InvalidatePaint();
+    }
+
+    private void SetAllReady(bool ready)
+    {
+        for (int i = 0; i < _docs.Count; i++)
+            _docs[i].IsReady = ready;
+
+        foreach (var card in _activeCards.Values)
+            card.SetReady(ready);
+
+        OnMarksChanged(PhotoFilter.Ready | PhotoFilter.Favorite);
         BatchReadyChanged?.Invoke();
     }
 
-    private void ClearAllReady()
+    private int Columns(float viewW)
     {
-        for (int i = 0; i < _docs.Count; i++)
-            _docs[i].IsReady = false;
+        float availW = Math.Max(1f, viewW - Pad * 2f);
+        return Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
+    }
 
-        foreach (var card in _activeCards.Values)
-            card.SetReady(false);
-
-        UpdateFilterCounts();
-        if (_filter != PhotoFilter.All)
-        {
-            UpdateFilteredIndices();
-            InvalidateLayout();
-        }
-        InvalidatePaint();
-        BatchReadyChanged?.Invoke();
+    private float ContentHeight(float viewW)
+    {
+        int cols = Columns(viewW);
+        int totalRows = (_filteredIndices.Count + cols - 1) / cols;
+        return Pad + totalRows * (CardH + Gap) + Pad;
     }
 
     protected override void LayoutChildren()
@@ -424,41 +428,12 @@ public sealed class GalleryView : VisualElement
         float w = Math.Max(1f, Transform.Computed.Width);
         float h = Math.Max(1f, Transform.Computed.Height);
 
-        // Header bar layout
         _headerBar.Transform.SetAbsoluteFrame(ox, oy, w, TopBarH);
-        float hx = ox + Pad;
-        float hy = oy + 7f;
-        float btnH = 32f;
+        _headerDivider.Transform.SetAbsoluteFrame(ox, oy + TopBarH - 1f, w, 1f);
 
-        _btnFilterAll.Transform.SetAbsoluteFrame(hx, hy, 90f, btnH); hx += 94f;
-        _btnFilterReady.Transform.SetAbsoluteFrame(hx, hy, 108f, btnH); hx += 112f;
-        _btnFilterStar.Transform.SetAbsoluteFrame(hx, hy, 118f, btnH); hx += 122f;
-
-        _btnMarkAll.Transform.SetAbsoluteFrame(hx, hy, 144f, btnH); hx += 148f;
-        _btnClearAll.Transform.SetAbsoluteFrame(hx, hy, 118f, btnH);
-
-        float sizeBtn = 32f;
-        float sizeGap = 4f;
-        float sizeClusterW = sizeBtn * 3f + sizeGap * 2f;
-        float sizeX = ox + w - Pad - sizeClusterW;
-        _btnSizeS.Transform.SetAbsoluteFrame(sizeX, hy, sizeBtn, btnH); sizeX += sizeBtn + sizeGap;
-        _btnSizeM.Transform.SetAbsoluteFrame(sizeX, hy, sizeBtn, btnH); sizeX += sizeBtn + sizeGap;
-        _btnSizeL.Transform.SetAbsoluteFrame(sizeX, hy, sizeBtn, btnH);
-
-        _countLabel.Transform.SetAbsoluteFrame(ox + w - Pad - sizeClusterW - 12f - 200f, hy + 6f, 200f, 20f);
-
-        // Position scroller below header bar
         float scrollerH = Math.Max(1f, h - TopBarH);
         _scroller.Transform.SetAbsoluteFrame(ox, oy + TopBarH, w, scrollerH);
-
-        // Grid layout calculations inside _scroller
-        float startY = Pad;
-        float availW = Math.Max(1f, w - Pad * 2f);
-        int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
-        int totalRows = (_filteredIndices.Count + cols - 1) / cols;
-        float totalH = startY + totalRows * (CardH + Gap) + Pad;
-
-        _scroller.SetContentSize(w, Math.Max(totalH, scrollerH));
+        _scroller.SetContentSize(w, Math.Max(ContentHeight(w), scrollerH));
         base.LayoutChildren();
 
         UpdateVirtualCards(force: false);
@@ -484,17 +459,18 @@ public sealed class GalleryView : VisualElement
         float w = Math.Max(1f, _scroller.Transform.Computed.Width > 0 ? _scroller.Transform.Computed.Width : _scroller.Transform.Width);
         float h = Math.Max(1f, _scroller.Transform.Computed.Height > 0 ? _scroller.Transform.Computed.Height : _scroller.Transform.Height);
 
+        float cardH = CardH;
         float startY = Pad;
         float availW = Math.Max(1f, w - Pad * 2f);
-        int cols = Math.Max(1, (int)((availW + Gap) / (CardW + Gap)));
+        int cols = Columns(w);
         float actualCellW = (availW - (cols - 1) * Gap) / cols;
 
         int totalCount = _filteredIndices.Count;
         int totalRows = (totalCount + cols - 1) / cols;
-        float rowStride = CardH + Gap;
+        float rowStride = cardH + Gap;
 
         float scrollY = _scroller.ScrollY;
-        int firstRow = Math.Max(0, (int)Math.Floor((scrollY - startY - CardH) / rowStride) - 1);
+        int firstRow = Math.Max(0, (int)Math.Floor((scrollY - startY - cardH) / rowStride) - 1);
         int lastRow = Math.Min(totalRows - 1, (int)Math.Ceiling((scrollY + h - startY) / rowStride) + 1);
 
         bool boundsChanged = ox != _lastOx || oy != _lastOy || w != _lastW || cols != _lastCols;
@@ -537,18 +513,18 @@ public sealed class GalleryView : VisualElement
             int row = itemIdx / cols;
 
             float cx = ox + Pad + col * (actualCellW + Gap);
-            float cy = oy + startY + row * (CardH + Gap);
+            float cy = oy + startY + row * rowStride;
 
             if (_activeCards.TryGetValue(itemIdx, out var card))
             {
                 if (force || card.Index != docIdx)
                 {
-                    card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
-                    card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
+                    card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
+                    card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, cardH);
                 }
                 else if (boundsChanged)
                 {
-                    card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
+                    card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, cardH);
                 }
                 card.Visible = true;
             }
@@ -560,55 +536,52 @@ public sealed class GalleryView : VisualElement
                 }
                 else
                 {
-                    card = new GalleryCard(this);
+                    card = ThumbTile.Create(() => new GalleryCard(this));
                     _scroller.AddChild(card);
                 }
 
-                card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
-                card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
+                card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
+                card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, cardH);
                 card.Visible = true;
                 _activeCards[itemIdx] = card;
             }
         }
     }
 
-    internal void OnCardClicked(int index)
+    private void OnCardClickedWithModifiers(int index, bool ctrl, bool shift)
+    {
+        if (SelectionRequested != null)
+        {
+            SelectionRequested.Invoke(index, ctrl, shift);
+        }
+        else
+        {
+            OnCardClicked(index);
+        }
+    }
+
+    private void OnCardClicked(int index)
     {
         SetSelected(index);
         PhotoSelected?.Invoke(index);
     }
 
-    internal void OnCardDoubleClicked(int index)
+    private void OnCardDoubleClicked(int index)
     {
         SetSelected(index);
         PhotoDoubleClicked?.Invoke(index);
     }
 
-    internal void OnCardReadyToggled(int index, bool ready)
+    private void OnCardReadyToggled(int index, bool ready)
     {
         ReadyToggled?.Invoke(index, ready);
-        UpdateFilterCounts();
-        if ((_filter & PhotoFilter.Ready) != 0)
-        {
-            UpdateFilteredIndices();
-            InvalidateLayout();
-        }
+        OnMarksChanged(PhotoFilter.Ready);
     }
 
-    internal void OnCardFavoriteToggled(int index, bool favorite)
+    private void OnCardFavoriteToggled(int index, bool favorite)
     {
         FavoriteToggled?.Invoke(index, favorite);
-        UpdateFilterCounts();
-        if ((_filter & PhotoFilter.Favorite) != 0)
-        {
-            UpdateFilteredIndices();
-            InvalidateLayout();
-        }
-    }
-
-    internal void OnCardContextMenu(int index, float x, float y)
-    {
-        ContextMenuRequested?.Invoke(index, x, y);
+        OnMarksChanged(PhotoFilter.Favorite);
     }
 
     public override void Dispose()
@@ -645,400 +618,128 @@ public sealed class GalleryView : VisualElement
         }
     }
 
-    private sealed class GalleryCard : VisualElement
+    /// <summary>Contact-sheet card: photo well, file name caption, index pill, ready / favourite badges.</summary>
+    private sealed class GalleryCard : ThumbTile
     {
         private static readonly TimeSpan DoubleClickThreshold = TimeSpan.FromMilliseconds(300);
+        private const float CardPad = 6f;
+        private const float CaptionH = 24f;
+        private const float Badge = 18f;
+        private const float PillH = 18f;
+
+        private static readonly TextPaint CaptionInk = new() { TextSize = 12f };
+        private static readonly TextPaint PillInk = new() { TextSize = 11f };
+        private static SKTypeface? _medium;
+        private static SKTypeface? _semibold;
+        private static SKTypeface Medium => _medium ??= Theme.GetTypeface(500);
+        private static SKTypeface Semibold => _semibold ??= Theme.GetTypeface(600);
 
         private readonly GalleryView _owner;
-        private int _index;
-        private PhotoDocument? _doc;
-        private bool _active;
-        private bool _isReady;
-        private bool _isFavorite;
         private DateTime _lastClickTime = DateTime.MinValue;
-
-        private readonly GalleryThumbWell _thumb;
-        private readonly RichBox _caption;
-        private readonly VisualElement _readyBtn;
-        private readonly VisualElement _starBtn;
-        private readonly VisualElement _indexBadge;
-
-        public int Index => _index;
-        public PhotoDocument? Doc => _doc;
+        private string _pill = "";
+        private string _caption = "";
+        private float _captionFitW = -1f;
+        private string _captionFit = "";
 
         public GalleryCard(GalleryView owner)
         {
             _owner = owner;
-            Cursor = StandardCursor.Hand;
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Section,
-                Border = new BorderStyle
-                {
-                    Width = 1f,
-                    Color = Theme.Hairline,
-                    Roundness = Theme.Radius
-                },
-                Shadow = new ShadowStyle(0, 1.5f, 3, 3, new SKColor(0, 0, 0, 70))
-            };
-
-            _thumb = new GalleryThumbWell(null, () => GetValidImage())
-            {
-                Name = "GalleryCard_Thumb",
-                IsClickthrough = true
-            };
-
-            _caption = new RichBox
-            {
-                Name = "GalleryCard_Caption",
-                Text = "",
-                IsClickthrough = true,
-                Overflow = OverflowMode.Clip,
-                Style = new ElementStyle
-                {
-                    BackColor = SKColors.Transparent,
-                    Text = new TextStyle
-                    {
-                        Color = Theme.Text,
-                        Size = 12,
-                        Weight = 500,
-                        Alignment = TextAlign.Center,
-                        Padding = 4,
-                        Overflow = TextOverflow.Ellipsis,
-                        MaxLines = 1
-                    }
-                }
-            };
-
-            _readyBtn = new VisualElement
-            {
-                Name = "GalleryCard_Ready",
-                Cursor = StandardCursor.Hand,
-                BackgroundImageScale = ImageScaleMode.Contain,
-                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
-                BackgroundImageTintColor = SKColors.White,
-                Style = new ElementStyle
-                {
-                    BackColor = new SKColor(0, 0, 0, 150),
-                    Border = new BorderStyle
-                    {
-                        Width = 1,
-                        Color = Theme.HairlineSubtle,
-                        Roundness = 11f
-                    }
-                }
-            };
-            _readyBtn.Events.OnClick += (_, args) =>
-            {
-                if (args.Button != (int)MouseButton.Left) return;
-                if (_doc == null) return;
-                _isReady = !_isReady;
-                _doc.IsReady = _isReady;
-                UpdateReadyStyle();
-                _owner.OnCardReadyToggled(_index, _isReady);
-                args.Handled = true;
-            };
-
-            _starBtn = new VisualElement
-            {
-                Name = "GalleryCard_Star",
-                Cursor = StandardCursor.Hand,
-                IsClickthrough = true,
-                ZIndex = 5,
-                BackgroundImageScale = ImageScaleMode.Contain,
-                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
-                BackgroundImageTintColor = Theme.Favorite,
-                Padding = new Thickness(0f),
-                Style = new ElementStyle
-                {
-                    BackColor = SKColors.Transparent,
-                    Border = new BorderStyle { Width = 0, Color = SKColors.Transparent, Roundness = 0 }
-                }
-            };
-            _starBtn.Events.OnClick += (_, args) =>
-            {
-                if (args.Button != (int)MouseButton.Left) return;
-                if (_doc == null) return;
-                _isFavorite = !_isFavorite;
-                _doc.IsFavorite = _isFavorite;
-                UpdateStarStyle();
-                _owner.OnCardFavoriteToggled(_index, _isFavorite);
-                args.Handled = true;
-            };
-
-            _indexBadge = new VisualElement
-            {
-                Name = "GalleryCard_Badge",
-                Text = "",
-                IsClickthrough = true,
-                Style = new ElementStyle
-                {
-                    BackColor = new SKColor(0, 0, 0, 150),
-                    Border = new BorderStyle { Width = 1, Color = Theme.HairlineSubtle, Roundness = 4 },
-                    Text = new TextStyle
-                    {
-                        Color = Theme.TextDim,
-                        Size = 11,
-                        Weight = 500,
-                        Alignment = TextAlign.Center,
-                        Padding = 0
-                    }
-                }
-            };
-
-            AddChild(_thumb);
-            AddChild(_caption);
-            AddChild(_readyBtn);
-            AddChild(_starBtn);
-            AddChild(_indexBadge);
-
-            Events.OnMouseEnter += _ =>
-            {
-                if (!_active)
-                {
-                    Style.BackColor = Theme.Hover;
-                    Style.Border.Color = Theme.HairlineStrong;
-                    InvalidatePaint();
-                }
-            };
-            Events.OnMouseLeave += _ =>
-            {
-                if (!_active)
-                {
-                    Style.BackColor = Theme.Section;
-                    Style.Border.Color = CardBorderColor();
-                    InvalidatePaint();
-                }
-            };
-
-            Events.OnMouseUp += (_, args) =>
-            {
-                if (args.Button != (int)MouseButton.Right) return;
-                _owner.OnCardClicked(_index);
-                _owner.OnCardContextMenu(_index, args.Global.X, args.Global.Y);
-                args.Handled = true;
-            };
-            Events.OnClick += (_, args) =>
-            {
-                if (args.Button != (int)MouseButton.Left) return;
-                var now = DateTime.UtcNow;
-                if (now - _lastClickTime < DoubleClickThreshold)
-                {
-                    _lastClickTime = DateTime.MinValue;
-                    _owner.OnCardDoubleClicked(_index);
-                }
-                else
-                {
-                    _lastClickTime = now;
-                    _owner.OnCardClicked(_index);
-                }
-                args.Handled = true;
-            };
         }
 
-        public void Rebind(int index, PhotoDocument doc, bool active)
+        protected override string NamePrefix => "GalleryCard";
+
+        protected override float CornerRadius => Theme.Radius;
+
+        protected override SKRect PhotoRect => new(CardPad, CardPad, W - CardPad, H - CardPad - CaptionH);
+
+        protected override void OnRebind(PhotoDocument doc)
         {
-            bool docChanged = _doc != doc || _index != index;
-            _index = index;
-            _doc = doc;
-            _active = active;
-            _isReady = doc.IsReady;
-            _isFavorite = doc.IsFavorite;
-            Name = $"GalleryCard_{index}";
+            if (doc.Look == null)
+                WorkspaceStore.HydrateLook(doc);
 
-            if (_doc.Look == null)
-                WorkspaceStore.HydrateLook(_doc);
-
-            Style.BackColor = active ? Theme.Selected : Theme.Section;
-            Style.Border.Width = active ? 2f : 1f;
-            Style.Border.Color = active ? Theme.Accent : CardBorderColor();
-            Theme.ApplyCardShadow(Style);
-            if (active && Theme.UseShadows && Style.Shadow != null)
-                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 80);
-
-            _caption.Name = $"{Name}_Caption";
-            _caption.Text = doc.Name;
-            _caption.Style.Text.Color = active ? Theme.Accent : Theme.Text;
-            _caption.InvalidatePaint();
-
-            _thumb.Name = $"{Name}_Thumb";
-            _thumb.SetImage(GetValidImage());
-
-            _indexBadge.Name = $"{Name}_Badge";
-            _indexBadge.Text = $"#{index + 1}";
-            _indexBadge.InvalidatePaint();
-
-            _readyBtn.Name = $"{Name}_Ready";
-            UpdateReadyStyle();
-            _starBtn.Name = $"{Name}_Star";
-            UpdateStarStyle();
-
-            if (docChanged)
-                InvalidateLayout();
-            InvalidatePaint();
-        }
-
-        private SKImage? GetValidImage()
-        {
-            if (_doc == null) return null;
-            if (_doc.Look != null && _doc.Look.Handle != IntPtr.Zero) return _doc.Look;
-            if (_doc.Preview != null && _doc.Preview.Handle != IntPtr.Zero) return _doc.Preview;
-            if (_doc.Thumb != null && _doc.Thumb.Handle != IntPtr.Zero) return _doc.Thumb;
-            return null;
-        }
-
-        public void SetActive(bool active)
-        {
-            _active = active;
-            Style.BackColor = active ? Theme.Selected : Theme.Section;
-            Style.Border.Width = active ? 2f : 1f;
-            Style.Border.Color = active ? Theme.Accent : CardBorderColor();
-            Theme.ApplyCardShadow(Style);
-            if (active && Theme.UseShadows && Style.Shadow != null)
-                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 80);
-            _caption.Style.Text.Color = active ? Theme.Accent : Theme.Text;
-            InvalidatePaint();
-        }
-
-        public void RefreshTheme()
-        {
-            SetActive(_active);
-            UpdateReadyStyle();
-            UpdateStarStyle();
-            if (_caption.Style?.Text != null)
-                _caption.Style.Text.Color = _active ? Theme.Accent : Theme.Text;
-            InvalidatePaint();
-        }
-
-        public void SetReady(bool ready)
-        {
-            _isReady = ready;
-            UpdateReadyStyle();
-        }
-
-        public void SetFavorite(bool favorite)
-        {
-            _isFavorite = favorite;
-            UpdateStarStyle();
-        }
-
-        public void RefreshThumb()
-        {
-            _thumb.SetImage(GetValidImage());
-        }
-
-        private SKColor CardBorderColor()
-        {
-            if (_isReady) return Theme.SuccessSoft;
-            if (_isFavorite) return Theme.FavoriteSoft;
-            return Theme.Hairline;
-        }
-
-        private void UpdateReadyStyle()
-        {
-            _readyBtn.BackgroundSvg = _isReady ? (_readyBtn.BackgroundSvg ?? IconStore.LoadSvg("check")) : null;
-            _readyBtn.Style.BackColor = _isReady ? Theme.Success : new SKColor(0, 0, 0, 150);
-            _readyBtn.Style.Border.Color = _isReady ? Theme.Success : Theme.HairlineSubtle;
-            _readyBtn.Style.Border.Roundness = 11f;
-            _readyBtn.InvalidatePaint();
-            if (!_active)
+            _pill = $"#{Index + 1}";
+            if (_caption != doc.Name)
             {
-                Style.Border.Color = CardBorderColor();
-                InvalidatePaint();
+                _caption = doc.Name;
+                _captionFitW = -1f;
             }
         }
 
-        private void UpdateStarStyle()
+        protected override void OnPrimaryClick(bool ctrl, bool shift)
         {
-            _starBtn.BackgroundSvg = _isFavorite ? (_starBtn.BackgroundSvg ?? IconStore.LoadSvg("star_filled")) : null;
-            _starBtn.BackgroundImageTintColor = Theme.Favorite;
-            _starBtn.IsClickthrough = !_isFavorite;
-            _starBtn.Style.BackColor = SKColors.Transparent;
-            _starBtn.Style.Border.Width = 0;
-            _starBtn.Style.Border.Color = SKColors.Transparent;
-            _starBtn.InvalidatePaint();
-            if (!_active)
+            var now = DateTime.UtcNow;
+            if (now - _lastClickTime < DoubleClickThreshold)
             {
-                Style.Border.Color = CardBorderColor();
-                InvalidatePaint();
+                _lastClickTime = DateTime.MinValue;
+                _owner.OnCardDoubleClicked(Index);
+                return;
             }
+            _lastClickTime = now;
+            _owner.OnCardClickedWithModifiers(Index, ctrl, shift);
         }
+
+        protected override void OnContextMenu(float x, float y)
+        {
+            _owner.OnCardClicked(Index);
+            _owner.ContextMenuRequested?.Invoke(Index, x, y);
+        }
+
+        protected override void OnReadyToggled(bool ready) => _owner.OnCardReadyToggled(Index, ready);
+
+        protected override void OnFavoriteToggled(bool favorite) => _owner.OnCardFavoriteToggled(Index, favorite);
 
         protected override void LayoutChildren()
         {
             float ox = Transform.Computed.X;
             float oy = Transform.Computed.Y;
-            float w = Math.Max(1f, Transform.Width);
             float h = Math.Max(1f, Transform.Height);
-
-            float pad = 6f;
-            float captionH = 24f;
-            float thumbH = Math.Max(10f, h - captionH - pad * 2f);
-
-            _thumb.Transform.SetAbsoluteFrame(ox + pad, oy + pad, w - pad * 2f, thumbH);
-            _caption.Transform.SetAbsoluteFrame(ox + pad, oy + pad + thumbH, w - pad * 2f, captionH);
-            _readyBtn.Transform.SetAbsoluteFrame(ox + pad + 4f, oy + pad + 4f, 22f, 22f);
-            _starBtn.Transform.SetAbsoluteFrame(ox + pad + 4f, oy + pad + thumbH - 22f, 20f, 20f);
-            _indexBadge.Transform.SetAbsoluteFrame(ox + w - pad - 34f, oy + pad + 4f, 30f, 20f);
+            float photoBottom = h - CardPad - CaptionH;
+            ReadyBadge.Transform.SetAbsoluteFrame(ox + CardPad + 6f, oy + CardPad + 6f, Badge, Badge);
+            FavoriteBadge.Transform.SetAbsoluteFrame(ox + CardPad + 6f, oy + photoBottom - 6f - Badge, Badge, Badge);
         }
-    }
 
-    private sealed class GalleryThumbWell : VisualElement
-    {
-        private static readonly SKPaint SmoothPaint = new()
+        protected override void PaintOverlay(SKCanvas c)
         {
-            FilterQuality = SKFilterQuality.Medium,
-            IsAntialias = true
-        };
+            var photo = PhotoRect;
+            PaintPill(c, photo);
 
-        private readonly Func<SKImage?>? _imageProvider;
-        private SKImage? _image;
-
-        public GalleryThumbWell(SKImage? image, Func<SKImage?>? imageProvider = null)
-        {
-            _image = image;
-            _imageProvider = imageProvider;
-            Style = new ElementStyle
+            // File name, ellipsized to the card; fitting is cached per width.
+            float maxW = W - CardPad * 2f - 8f;
+            CaptionInk.Typeface = Medium;
+            if (Math.Abs(maxW - _captionFitW) > 0.5f)
             {
-                BackColor = Theme.Well,
-                Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.HairlineSubtle,
-                    Roundness = Theme.RadiusSm
-                }
-            };
-            Overflow = OverflowMode.Clip;
-        }
-
-        public void SetImage(SKImage? img)
-        {
-            _image = img;
-            InvalidatePaint();
-        }
-
-        protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
-        {
-            if (_image == null || _image.Handle == IntPtr.Zero)
-            {
-                _image = _imageProvider?.Invoke();
+                _captionFitW = maxW;
+                _captionFit = Blossom.Utils.Text.Ellipsize(_caption, CaptionInk.Font, maxW);
             }
-            if (_image == null || _image.Handle == IntPtr.Zero) return;
-            float w = Transform.Computed.Width;
-            float h = Transform.Computed.Height;
-            var dest = Contain(w, h, _image.Width, _image.Height);
-            cmds.Add(new DrawSkImageCommand(_image, dest, SmoothPaint));
+            CaptionInk.Color = IsActive ? Theme.Accent : IsSelected ? Theme.Text : Theme.TextSecondary;
+            CaptionInk.TextAlign = SKTextAlign.Center;
+            float baseline = Blossom.Utils.Text.Baseline(CaptionInk.Font, photo.Bottom + CaptionH * 0.5f);
+            c.DrawText(_captionFit, W * 0.5f, baseline, CaptionInk);
         }
 
-        private static SKRect Contain(float boxW, float boxH, int imgW, int imgH)
+        /// <summary>Index pill in the photo's top-right corner; carries the selection state on busy photos.</summary>
+        private void PaintPill(SKCanvas c, SKRect photo)
         {
-            if (imgW <= 0 || imgH <= 0) return new SKRect(0, 0, boxW, boxH);
-            float scale = Math.Min(boxW / imgW, boxH / imgH);
-            float dw = imgW * scale;
-            float dh = imgH * scale;
-            float x = (boxW - dw) * 0.5f;
-            float y = (boxH - dh) * 0.5f;
-            return new SKRect(x, y, x + dw, y + dh);
+            PillInk.Typeface = Semibold;
+            float pillW = PillInk.MeasureText(_pill) + 12f;
+            var pill = SKRect.Create(photo.Right - 6f - pillW, photo.Top + 6f, pillW, PillH);
+            float r = PillH * 0.5f;
+
+            if (IsActive)
+            {
+                ThumbInk.FillRound(c, pill, r, Theme.Accent);
+                PillInk.Color = Theme.ButtonTextOnAccent;
+            }
+            else
+            {
+                ThumbInk.FillRound(c, pill, r, Theme.Scrim);
+                if (IsSelected)
+                    ThumbInk.StrokeRound(c, pill, r, Theme.Accent.WithAlpha(170), 1f);
+                PillInk.Color = IsSelected ? Theme.Accent : Theme.TextSecondary;
+            }
+
+            PillInk.TextAlign = SKTextAlign.Center;
+            c.DrawText(_pill, pill.MidX, Blossom.Utils.Text.Baseline(PillInk.Font, pill.MidY), PillInk);
         }
     }
 }

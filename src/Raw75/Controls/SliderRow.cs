@@ -1,10 +1,11 @@
 using System;
-using System.Collections.Generic;
 using Blossom.Core;
 using Blossom.Core.Input;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
-using Silk.NET.Input;
+using Blossom.Hosting;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using SkiaSharp;
 
 namespace Raw75.Controls;
@@ -17,10 +18,11 @@ public enum SliderGradientMode
 }
 
 /// <summary>
-/// Compact slider:
-/// Inline Single-Row (24px) or Micro-Stacked (30px) with proud pill thumb and recessed track.
+/// Compact slider on <see cref="Control"/>: inline single row or micro-stacked, with the proud
+/// pill thumb and recessed groove. Shift-drag / shift-wheel for fine control, double-click to reset.
+/// The readout turns accent when the value differs from <see cref="DefaultValue"/>.
 /// </summary>
-public class SliderRow : VisualElement
+public class SliderRow : Control
 {
     private const float LabelW = Theme.SliderLabelW; // 72f
     private const float ValueW = Theme.SliderValueW; // 42f
@@ -31,13 +33,18 @@ public class SliderRow : VisualElement
     private readonly VisualElement _valueEl;
 
     private float _value;
-    private readonly float _min;
-    private readonly float _max;
+    private float _min;
+    private float _max;
     private string _label;
     private readonly string _valueFormat;
     private readonly bool _inline;
     private bool _dragging;
-    private bool _hovered;
+
+    // A burst of shift-wheel notches is one gesture: live updates per notch, one settle at the end.
+    private static readonly TimeSpan ScrollSettleDelay = TimeSpan.FromMilliseconds(250);
+    private bool _scrolling;
+    private IDisposable? _scrollSettle;
+    private float _hover;
     private float _lastGlobalX;
     private DateTime _lastDownUtc = DateTime.MinValue;
     private SliderGradientMode _gradientMode = SliderGradientMode.None;
@@ -54,12 +61,41 @@ public class SliderRow : VisualElement
         return w;
     }
 
-    public float DefaultValue { get; set; }
+    private float _defaultValue;
+    public float DefaultValue
+    {
+        get => _defaultValue;
+        set
+        {
+            _defaultValue = value;
+            UpdateValueColor();
+        }
+    }
 
+    private bool IsModified => Math.Abs(_value - _defaultValue) > (_max - _min) * 0.0005f;
+
+    /// <summary>
+    /// Set from code (e.g. a photo's stored edit) the value is kept as is, even outside the range, so the
+    /// readout stays true; the bar and thumb are drawn clamped to the track. Dragging and scrolling clamp.
+    /// </summary>
     public float Value
     {
         get => _value;
-        set => SetValue(value, fire: true);
+        set => SetValue(value, fire: true, clamp: false);
+    }
+
+    public float Min => _min;
+    public float Max => _max;
+
+    /// <summary>Changes how far the slider reaches; the current value is kept (see <see cref="Value"/>).</summary>
+    public void SetRange(float min, float max)
+    {
+        max = max <= min ? min + 1f : max;
+        if (min == _min && max == _max) return;
+        _min = min;
+        _max = max;
+        UpdateValueColor();
+        InvalidatePaint();
     }
 
     public string Label
@@ -98,11 +134,8 @@ public class SliderRow : VisualElement
         _inline = inline;
 
         Transform.Height = _inline ? Theme.RowH : Theme.RowHStacked;
-        Cursor = StandardCursor.HResize;
-        Style = new ElementStyle
-        {
-            BackColor = SKColors.Transparent
-        };
+        Cursor = UiCursor.HResize;
+        Style.BackColor = SKColors.Transparent;
 
         _labelEl = new VisualElement
         {
@@ -130,8 +163,15 @@ public class SliderRow : VisualElement
         Events.OnMouseUp += OnTrackUp;
         Events.OnMouseDoubleClick += OnResetClick;
         Events.OnScroll += OnTrackScroll;
-        Events.OnMouseEnter += _ => { _hovered = true; UpdateValueColor(); InvalidatePaint(); };
-        Events.OnMouseLeave += _ => { _hovered = false; UpdateValueColor(); InvalidatePaint(); };
+
+        this.Bind(_ => ApplyTheme());
+    }
+
+    protected override void OnHoverChanged()
+    {
+        _hover = IsHovered ? 1f : 0f;
+        InvalidatePaint();
+        UpdateValueColor();
     }
 
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
@@ -158,17 +198,13 @@ public class SliderRow : VisualElement
         else
         {
             float labelH = 15f;
-            _labelEl.Transform.SetAbsoluteFrame(originX, originY, Math.Max(1f, w - ValueW), labelH);
-            _valueEl.Transform.SetAbsoluteFrame(originX + w - ValueW, originY, ValueW, labelH);
+            float labelY = originY + Theme.StackedTopGap;
+            _labelEl.Transform.SetAbsoluteFrame(originX, labelY, Math.Max(1f, w - ValueW), labelH);
+            _valueEl.Transform.SetAbsoluteFrame(originX + w - ValueW, labelY, ValueW, labelH);
         }
     }
 
-    protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
-    {
-        cmds.Add(new DrawCallbackCommand(DrawTrack));
-    }
-
-    private void DrawTrack(SKCanvas canvas)
+    protected override void Paint(SKCanvas canvas)
     {
         float w = Transform.Computed.Width;
         if (w < 10f)
@@ -190,8 +226,8 @@ public class SliderRow : VisualElement
         {
             trackX = 0;
             trackW = w;
-            trackY = 17f;
-            trackAreaH = Theme.RowHStacked - 17f;
+            trackY = Theme.StackedTopGap + 17f;
+            trackAreaH = Theme.RowHStacked - trackY;
         }
 
         canvas.Save();
@@ -222,7 +258,7 @@ public class SliderRow : VisualElement
                 SKShaderTileMode.Clamp);
         }
 
-        SliderChrome.Draw(canvas, trackW, trackAreaH, t, zeroT, bipolar, _hovered, _dragging, shader);
+        SliderChrome.Draw(canvas, trackW, trackAreaH, t, zeroT, bipolar, _hover, _dragging, shader);
         shader?.Dispose();
 
         canvas.Restore();
@@ -231,6 +267,7 @@ public class SliderRow : VisualElement
     private void OnTrackDown(object sender, MouseEventArgs args)
     {
         if (args.Button != 0) return;
+        EndScroll();
 
         DateTime now = DateTime.UtcNow;
         if (now - _lastDownUtc < DoubleClickWindow)
@@ -342,14 +379,28 @@ public class SliderRow : VisualElement
 
     private void ApplyScrollDelta(float targetValue)
     {
-        bool wasDragging = _dragging;
-        if (!wasDragging)
+        if (!_dragging && !_scrolling)
+        {
+            _scrolling = true;
             DragStarted?.Invoke();
+        }
 
         SetValue(targetValue, fire: true);
 
-        if (!wasDragging)
-            DragEnded?.Invoke();
+        if (_scrolling)
+        {
+            _scrollSettle?.Dispose();
+            _scrollSettle = UiHost.Current.PostDelayed(ScrollSettleDelay, EndScroll);
+        }
+    }
+
+    private void EndScroll()
+    {
+        _scrollSettle?.Dispose();
+        _scrollSettle = null;
+        if (!_scrolling) return;
+        _scrolling = false;
+        DragEnded?.Invoke();
     }
 
     private void OnTrackUp(object sender, MouseEventArgs args)
@@ -404,14 +455,15 @@ public class SliderRow : VisualElement
         SetValue(_min + t * (_max - _min), fire: true);
     }
 
-    private void SetValue(float value, bool fire)
+    private void SetValue(float value, bool fire, bool clamp = true)
     {
-        float clamped = Math.Clamp(value, _min, _max);
-        if (Math.Abs(_value - clamped) < 0.0001f)
+        float next = clamp ? Math.Clamp(value, _min, _max) : value;
+        if (Math.Abs(_value - next) < 0.0001f)
             return;
 
-        _value = clamped;
+        _value = next;
         UpdateValueText();
+        UpdateValueColor();
         InvalidatePaint();
         if (fire)
             Changed?.Invoke(_value);
@@ -429,20 +481,23 @@ public class SliderRow : VisualElement
         }
     }
 
-    public void RefreshTheme()
+    private void ApplyTheme()
     {
-        if (_labelEl.Style?.Text != null)
-            _labelEl.Style.Text.Color = Theme.TextSecondary;
+        _labelEl.Style.Text.Color = Theme.TextSecondary;
         UpdateValueColor();
         InvalidatePaint();
     }
 
     private void UpdateValueColor()
     {
-        if (_valueEl.Style?.Text != null)
-        {
-            _valueEl.Style.Text.Color = (_dragging || _hovered) ? Theme.Text : Theme.TextDim;
-        }
+        var text = _valueEl.Style?.Text;
+        if (text == null) return;
+        bool live = _dragging || _scrolling || IsHovered;
+        text.Color = IsModified
+            ? (live ? Theme.AccentHover : Theme.Modified)
+            : (live ? Theme.Text : Theme.TextDim);
+        text.Weight = IsModified ? 600 : 500;
+        _labelEl.Style.Text.Color = live ? Theme.Text : Theme.TextSecondary;
     }
 
     private static ElementStyle LabelStyle(TextAlign align, bool isValue) => new()
@@ -451,7 +506,7 @@ public class SliderRow : VisualElement
         Text = new TextStyle
         {
             Color = isValue ? Theme.TextDim : Theme.TextSecondary,
-            Size = 12,
+            Size = isValue ? 11.5f : 12f,
             Weight = 500,
             Alignment = align,
             Padding = 0,
@@ -459,4 +514,11 @@ public class SliderRow : VisualElement
             MaxLines = 1
         }
     };
+
+    public override void Dispose()
+    {
+        _scrollSettle?.Dispose();
+        _scrollSettle = null;
+        base.Dispose();
+    }
 }

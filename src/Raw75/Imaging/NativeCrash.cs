@@ -5,14 +5,16 @@ using Blossom;
 namespace Raw75.Imaging;
 
 /// <summary>
-/// SIGSEGV never becomes a C# exception. <c>signal()</c> logs the last breadcrumb
+/// Logs the last breadcrumb when the process aborts on a native fault (e.g. inside LibRaw),
 /// then the default terminate still runs (handler is one-shot via SIG_DFL restore).
+/// Only SIGABRT is hooked: the .NET runtime owns SIGSEGV/SIGBUS to raise NullReferenceException
+/// from managed code, and a managed handler there kills the process ("attempted to call an
+/// UnmanagedCallersOnly method from managed code"). A native fault outside managed code still
+/// ends in the runtime calling abort(), which lands here.
 /// </summary>
 internal static class NativeCrash
 {
     private const int SIGABRT = 6;
-    private const int SIGBUS = 7;
-    private const int SIGSEGV = 11;
     private static readonly nint SigDfl = 0;
 
     private static readonly SignalCallback Handler = OnSignal;
@@ -34,11 +36,9 @@ internal static class NativeCrash
         {
             _keepAlive = GCHandle.Alloc(Handler);
             nint fn = Marshal.GetFunctionPointerForDelegate(Handler);
-            LibcSignal(SIGSEGV, fn);
             LibcSignal(SIGABRT, fn);
-            LibcSignal(SIGBUS, fn);
             _installed = true;
-            Log.Info("Native crash handlers installed (SIGSEGV/SIGABRT/SIGBUS).");
+            Log.Info("Native crash handler installed (SIGABRT).");
         }
         catch (Exception ex)
         {
@@ -56,13 +56,6 @@ internal static class NativeCrash
         {
         }
 
-        string name = signal switch
-        {
-            SIGSEGV => "SIGSEGV",
-            SIGABRT => "SIGABRT",
-            SIGBUS => "SIGBUS",
-            _ => "signal " + signal
-        };
-        Log.WriteNativeCrash(name);
+        Log.WriteNativeCrash(signal == SIGABRT ? "SIGABRT" : "signal " + signal);
     }
 }

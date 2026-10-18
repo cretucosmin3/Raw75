@@ -4,7 +4,7 @@
 
 A fast, modern desktop application for editing RAW photos. Free and open-source software under the AGPL-3.0 license.
 
-UI is built with [Blossom](https://github.com/cretucosmin3/Blossom), with real-time hardware-accelerated photo development rendered via Skia and SkSL shaders on the GPU.
+UI is built with [Blossom](https://github.com/cretucosmin3/Blossom) (NuGet package `Blossom`: core, primitives and reactive signals), with real-time hardware-accelerated photo development rendered via Skia and SkSL shaders on the GPU.
 
 ---
 
@@ -21,7 +21,8 @@ UI is built with [Blossom](https://github.com/cretucosmin3/Blossom), with real-t
 ### Color & Grading
 - **White Balance & Tint**: High-precision Kelvin temperature and green-magenta tint balancing.
 - **Vibrance & Saturation**: Perceptual saturation enhancement with skin tone protection.
-- **HSL Tool**: 6-color band editor for custom Hue, Saturation, and Lightness adjustments.
+- **Color Editor**: 6-color HSL mixer, Vibrance, and match mid-gray.
+- **Color Grading**: 3-way wheels for Shadows, Midtones, and Highlights with blending and balance.
 - **3D LUT Support**: Load `.cube` LUT profiles directly into the GPU shader pipeline.
 
 ### Detail & Reconstruction
@@ -34,7 +35,8 @@ UI is built with [Blossom](https://github.com/cretucosmin3/Blossom), with real-t
 - **Photo Canvas**: Smooth zoom & pan, 1:1 pixel inspection, and center-fit.
 - **Before / After**: Instant side-by-side and split-view preview modes.
 - **Crop & Geometry**: Interactive on-canvas crop handles, straighten angle adjustment, 90° rotation, and flips.
-- **Presets**: Built-in and custom presets stored as lightweight non-destructive JSON recipes.
+- **Spot Removal**: Heal a region from another with two linked circles, size, and edge diffusion.
+- **Presets**: Built-in recipes apply exactly. Saved looks also store scene metrics so exposure, the exposure curve, and tone sliders retarget to the photo you apply them to.
 - **Export**: Full-resolution rendering to JPEG (with original EXIF metadata preserved), PNG, WebP, and TIFF.
 
 ---
@@ -57,7 +59,7 @@ Download the latest release archive for your platform from the [Releases](https:
 
 ### Clone & Run
 ```bash
-git clone --recurse-submodules https://github.com/cretucosmin3/Raw75.git
+git clone https://github.com/cretucosmin3/Raw75.git
 cd Raw75
 dotnet run --project src/Raw75/Raw75.csproj
 ```

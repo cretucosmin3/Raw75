@@ -109,7 +109,7 @@ public static class DevelopRenderer
                 children.Add("u_mask", maskShader);
                 children.Add("u_curve", curveShader);
 
-                shader = effect.ToShader(true, uniforms, children);
+                shader = effect.ToShader(uniforms, children);
             }
 
             if (shader == null)
@@ -195,7 +195,7 @@ public static class DevelopRenderer
             if (_compileAttempted && _effect == null)
                 return null;
             _compileAttempted = true;
-            _effect = SKRuntimeEffect.Create(DevelopSksl, out string errors);
+            _effect = SKRuntimeEffect.CreateShader(DevelopSksl, out string errors);
             if (_effect == null)
                 Log.Error("DevelopRenderer SKSL compile failed: " + errors);
             return _effect;
@@ -213,7 +213,7 @@ public static class DevelopRenderer
             if (_stage1CompileAttempted && _stage1Effect == null)
                 return null;
             _stage1CompileAttempted = true;
-            _stage1Effect = SKRuntimeEffect.Create(Stage1Sksl, out string errors);
+            _stage1Effect = SKRuntimeEffect.CreateShader(Stage1Sksl, out string errors);
             if (_stage1Effect == null)
                 Log.Error("DevelopRenderer Stage1 SKSL compile failed: " + errors);
             return _stage1Effect;
@@ -231,7 +231,7 @@ public static class DevelopRenderer
             if (_stage2CompileAttempted && _stage2Effect == null)
                 return null;
             _stage2CompileAttempted = true;
-            _stage2Effect = SKRuntimeEffect.Create(Stage2Sksl, out string errors);
+            _stage2Effect = SKRuntimeEffect.CreateShader(Stage2Sksl, out string errors);
             if (_stage2Effect == null)
                 Log.Error("DevelopRenderer Stage2 SKSL compile failed: " + errors);
             return _stage2Effect;
@@ -249,7 +249,7 @@ public static class DevelopRenderer
             if (_stage3CompileAttempted && _stage3Effect == null)
                 return null;
             _stage3CompileAttempted = true;
-            _stage3Effect = SKRuntimeEffect.Create(Stage3Sksl, out string errors);
+            _stage3Effect = SKRuntimeEffect.CreateShader(Stage3Sksl, out string errors);
             if (_stage3Effect == null)
                 Log.Error("DevelopRenderer Stage3 SKSL compile failed: " + errors);
             return _stage3Effect;
@@ -385,9 +385,7 @@ public static class DevelopRenderer
         Set(u, "u_texture", s.EnableLocalContrast ? s.Texture / 100f : 0f);
         Set(u, "u_vignette", s.EnableGeometry ? s.VignetteAmount / 100f : 0f);
         Set(u, "u_vignetteMidpoint", s.EnableGeometry ? s.VignetteMidpoint / 100f : 0.5f);
-        Set(u, "u_gradeShadow", s.EnableHsl ? new[] { s.GradingShadowHue / 360f, s.GradingShadowSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeHighlight", s.EnableHsl ? new[] { s.GradingHighlightHue / 360f, s.GradingHighlightSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeBalance", s.EnableHsl ? s.GradingBalance / 100f : 0f);
+        ColorGradeMath.BindUniforms((name, value) => Set(u, name, value), s);
         Set(u, "u_localFast", fast ? 1f : 0f);
         Set(u, "u_showClipping", showClipping ? 1f : 0f);
         GetCurveTexture(s, out float hasCurve, out float curveMode);
@@ -542,9 +540,7 @@ public static class DevelopRenderer
         Set(u, "u_sigFilmFog", sig.FilmFog);
         Set(u, "u_sigFilmPower", sig.FilmPower);
         Set(u, "u_sigPaperPower", sig.PaperPower);
-        Set(u, "u_gradeShadow", s.EnableHsl ? new[] { s.GradingShadowHue / 360f, s.GradingShadowSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeHighlight", s.EnableHsl ? new[] { s.GradingHighlightHue / 360f, s.GradingHighlightSat / 100f } : new[] { 0f, 0f });
-        Set(u, "u_gradeBalance", s.EnableHsl ? s.GradingBalance / 100f : 0f);
+        ColorGradeMath.BindUniforms((name, value) => Set(u, name, value), s);
         Set(u, "u_showClipping", showClipping ? 1f : 0f);
         GetCurveTexture(s, out float hasCurve, out float curveMode);
         Set(u, "u_hasCurve", hasCurve);
@@ -580,7 +576,7 @@ public static class DevelopRenderer
         var children = new SKRuntimeEffectChildren(effect);
         children.Add("u_image", inputShader);
 
-        using SKShader? shader = effect.ToShader(true, uniforms, children);
+        using SKShader? shader = effect.ToShader(uniforms, children);
         if (shader == null)
             return null;
 
@@ -810,7 +806,7 @@ public static class DevelopRenderer
             var canvas = surface.Canvas;
             canvas.Clear(SKColors.Black);
             SKRect dest = Contain(outW, outH, source.Width, source.Height);
-            canvas.DrawImage(source, dest);
+            canvas.DrawImage(source, dest, Raw75.Controls.Sampling.Linear);
             canvas.Flush();
             return surface.Snapshot();
         }
@@ -882,7 +878,7 @@ public static class DevelopRenderer
             half4 main(float2 fragCoord) {
                 float2 srcCoord = fragCoord;
                 float2 srcUv = fragCoord / u_srcSize;
-                half4 orig = sample(u_image, srcCoord);
+                half4 orig = u_image.eval(srcCoord);
 
                 float3 lin = u_srcLinear > 0.5 ? max(orig.rgb, 0.0) : to_lin(orig.rgb);
 
@@ -898,10 +894,10 @@ public static class DevelopRenderer
                         float2 c1 = clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5));
                         float2 c2 = clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5));
                         float2 c3 = clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5));
-                        float3 n0 = u_srcLinear > 0.5 ? max(sample(u_image, c0).rgb, 0.0) : to_lin(sample(u_image, c0).rgb);
-                        float3 n1 = u_srcLinear > 0.5 ? max(sample(u_image, c1).rgb, 0.0) : to_lin(sample(u_image, c1).rgb);
-                        float3 n2 = u_srcLinear > 0.5 ? max(sample(u_image, c2).rgb, 0.0) : to_lin(sample(u_image, c2).rgb);
-                        float3 n3 = u_srcLinear > 0.5 ? max(sample(u_image, c3).rgb, 0.0) : to_lin(sample(u_image, c3).rgb);
+                        float3 n0 = u_srcLinear > 0.5 ? max(u_image.eval(c0).rgb, 0.0) : to_lin(u_image.eval(c0).rgb);
+                        float3 n1 = u_srcLinear > 0.5 ? max(u_image.eval(c1).rgb, 0.0) : to_lin(u_image.eval(c1).rgb);
+                        float3 n2 = u_srcLinear > 0.5 ? max(u_image.eval(c2).rgb, 0.0) : to_lin(u_image.eval(c2).rgb);
+                        float3 n3 = u_srcLinear > 0.5 ? max(u_image.eval(c3).rgb, 0.0) : to_lin(u_image.eval(c3).rgb);
 
                         if (u_reconMode > 1.5) {
                             // LCh mode
@@ -1008,10 +1004,10 @@ public static class DevelopRenderer
                         float2 off3 = float2(0.0, rad);
                         float2 off4 = float2(0.0, -rad);
 
-                        float3 sn1 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb);
-                        float3 sn2 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb);
-                        float3 sn3 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb);
-                        float3 sn4 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn1 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn2 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn3 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn4 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb);
 
                         float w1 = (sn1.r < clipThresh && sn1.g < clipThresh && sn1.b < clipThresh) ? (max(max(sn1.r, sn1.g), sn1.b) - min(min(sn1.r, sn1.g), sn1.b) + 0.01) : 0.0;
                         float w2 = (sn2.r < clipThresh && sn2.g < clipThresh && sn2.b < clipThresh) ? (max(max(sn2.r, sn2.g), sn2.b) - min(min(sn2.r, sn2.g), sn2.b) + 0.01) : 0.0;
@@ -1052,7 +1048,7 @@ public static class DevelopRenderer
 
             half4 main(float2 fragCoord) {
                 float2 srcCoord = fragCoord;
-                half4 orig = sample(u_image, srcCoord);
+                half4 orig = u_image.eval(srcCoord);
                 float3 processed = max(orig.rgb, 0.0);
 
                 // Local contrast & Clarity: halo-free perceptual bilateral midtone enhancement
@@ -1071,10 +1067,10 @@ public static class DevelopRenderer
                     float sumL = xL * 2.0;
                     float sumW = 2.0;
 
-                    float3 p1 = sample(u_image, clamp(srcCoord + float2(r1, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
-                    float3 p2 = sample(u_image, clamp(srcCoord - float2(r1, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
-                    float3 p3 = sample(u_image, clamp(srcCoord + float2(0.0, r1), float2(0.5), u_srcSize - float2(0.5))).rgb;
-                    float3 p4 = sample(u_image, clamp(srcCoord - float2(0.0, r1), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 p1 = u_image.eval(clamp(srcCoord + float2(r1, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 p2 = u_image.eval(clamp(srcCoord - float2(r1, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 p3 = u_image.eval(clamp(srcCoord + float2(0.0, r1), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                    float3 p4 = u_image.eval(clamp(srcCoord - float2(0.0, r1), float2(0.5), u_srcSize - float2(0.5))).rgb;
 
                     float l1 = pow(max(luma2020(p1), 0.00001), 0.33333333);
                     float l2 = pow(max(luma2020(p2), 0.00001), 0.33333333);
@@ -1091,28 +1087,28 @@ public static class DevelopRenderer
                     float2 diag1 = float2(r2 * 0.7071, r2 * 0.7071);
                     float2 diag2 = float2(-r2 * 0.7071, r2 * 0.7071);
                     {
-                        float3 p = sample(u_image, clamp(srcCoord + diag1, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord + diag1, float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                         float diff = lp - xL;
                         float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
                         sumL += lp * w; sumW += w;
                     }
                     {
-                        float3 p = sample(u_image, clamp(srcCoord - diag1, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord - diag1, float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                         float diff = lp - xL;
                         float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
                         sumL += lp * w; sumW += w;
                     }
                     {
-                        float3 p = sample(u_image, clamp(srcCoord + diag2, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord + diag2, float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                         float diff = lp - xL;
                         float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
                         sumL += lp * w; sumW += w;
                     }
                     {
-                        float3 p = sample(u_image, clamp(srcCoord - diag2, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord - diag2, float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                         float diff = lp - xL;
                         float w = 0.8 * exp(-diff * diff * invTwoSigmaSq);
@@ -1121,28 +1117,28 @@ public static class DevelopRenderer
 
                     if (u_localFast < 0.5) {
                         {
-                            float3 p = sample(u_image, clamp(srcCoord + float2(r3, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                            float3 p = u_image.eval(clamp(srcCoord + float2(r3, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
                             float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                             float diff = lp - xL;
                             float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
                             sumL += lp * w; sumW += w;
                         }
                         {
-                            float3 p = sample(u_image, clamp(srcCoord - float2(r3, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                            float3 p = u_image.eval(clamp(srcCoord - float2(r3, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
                             float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                             float diff = lp - xL;
                             float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
                             sumL += lp * w; sumW += w;
                         }
                         {
-                            float3 p = sample(u_image, clamp(srcCoord + float2(0.0, r3), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                            float3 p = u_image.eval(clamp(srcCoord + float2(0.0, r3), float2(0.5), u_srcSize - float2(0.5))).rgb;
                             float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                             float diff = lp - xL;
                             float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
                             sumL += lp * w; sumW += w;
                         }
                         {
-                            float3 p = sample(u_image, clamp(srcCoord - float2(0.0, r3), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                            float3 p = u_image.eval(clamp(srcCoord - float2(0.0, r3), float2(0.5), u_srcSize - float2(0.5))).rgb;
                             float lp = pow(max(luma2020(p), 0.00001), 0.33333333);
                             float diff = lp - xL;
                             float w = 0.5 * exp(-diff * diff * invTwoSigmaSq);
@@ -1179,28 +1175,28 @@ public static class DevelopRenderer
 
                     // Inner 4 taps (radius 2)
                     {
-                        float3 p = sample(u_image, clamp(srcCoord + float2(-2.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord + float2(-2.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float l = luma2020(p);
                         float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
                         sumL += l * wl; sumW_L += wl;
                         sumC += (p - l) * 0.8; sumW_C += 0.8;
                     }
                     {
-                        float3 p = sample(u_image, clamp(srcCoord + float2(2.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord + float2(2.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float l = luma2020(p);
                         float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
                         sumL += l * wl; sumW_L += wl;
                         sumC += (p - l) * 0.8; sumW_C += 0.8;
                     }
                     {
-                        float3 p = sample(u_image, clamp(srcCoord + float2(0.0, -2.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord + float2(0.0, -2.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float l = luma2020(p);
                         float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
                         sumL += l * wl; sumW_L += wl;
                         sumC += (p - l) * 0.8; sumW_C += 0.8;
                     }
                     {
-                        float3 p = sample(u_image, clamp(srcCoord + float2(0.0, 2.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
+                        float3 p = u_image.eval(clamp(srcCoord + float2(0.0, 2.0), float2(0.5), u_srcSize - float2(0.5))).rgb;
                         float l = luma2020(p);
                         float wl = 0.8 * exp(-abs(l - lc) / rangeSigma);
                         sumL += l * wl; sumW_L += wl;
@@ -1209,37 +1205,37 @@ public static class DevelopRenderer
 
                     if (u_denoiseFast < 0.5) {
                         // Ring 1 (radius 1 & 1.41)
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 1.0 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 1.0; sumW_C += 1.0; }
 
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-1.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(1.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-1.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(1.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-1.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(1.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-1.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(1.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.8 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.8; sumW_C += 0.8; }
 
                         // Ring 2 (radius 2.83 & 3)
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-2.0, -2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(2.0, -2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-2.0, 2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(2.0, 2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-2.0, -2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(2.0, -2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-2.0, 2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(2.0, 2.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.5 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.5; sumW_C += 0.5; }
 
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-3.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(3.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(0.0, -3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(0.0, 3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-3.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(3.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(0.0, -3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(0.0, 3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.4 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.4; sumW_C += 0.4; }
 
                         // Ring 3 (radius 4 & 4.24)
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-4.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(4.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(0.0, -4.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(0.0, 4.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-4.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(4.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(0.0, -4.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(0.0, 4.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.25 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.25; sumW_C += 0.25; }
 
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-3.0, -3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(3.0, -3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(-3.0, 3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
-                        { float3 p = sample(u_image, clamp(srcCoord + float2(3.0, 3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-3.0, -3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(3.0, -3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(-3.0, 3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
+                        { float3 p = u_image.eval(clamp(srcCoord + float2(3.0, 3.0), float2(0.5), u_srcSize - float2(0.5))).rgb; float l = luma2020(p); float wl = 0.2 * exp(-abs(l - lc) / rangeSigma); sumL += l * wl; sumW_L += wl; sumC += (p - l) * 0.2; sumW_C += 0.2; }
                     }
 
                     float blurL = sumL / sumW_L;
@@ -1298,9 +1294,10 @@ public static class DevelopRenderer
             uniform float4 u_hsl3;
             uniform float4 u_hsl4;
             uniform float4 u_hsl5;
-            uniform float2 u_gradeShadow;
-            uniform float2 u_gradeHighlight;
-            uniform float u_gradeBalance;
+            uniform float4 u_gradeShadow;
+            uniform float4 u_gradeMid;
+            uniform float4 u_gradeHighlight;
+            uniform float2 u_gradeMix;
             uniform float u_toneMode;
             uniform float u_sigMagnitude;
             uniform float u_sigPaperExp;
@@ -1395,6 +1392,32 @@ public static class DevelopRenderer
                 );
             }
 
+            float3 apply_color_grading(float3 color) {
+                float active = abs(u_gradeShadow.x) + abs(u_gradeShadow.y) + abs(u_gradeShadow.z) + abs(u_gradeShadow.w)
+                    + abs(u_gradeMid.x) + abs(u_gradeMid.y) + abs(u_gradeMid.z) + abs(u_gradeMid.w)
+                    + abs(u_gradeHighlight.x) + abs(u_gradeHighlight.y) + abs(u_gradeHighlight.z) + abs(u_gradeHighlight.w);
+                if (active < 0.00001) {
+                    return color;
+                }
+                float luma = luma2020(max(color, 0.0));
+                float balance = u_gradeMix.y;
+                float blending = u_gradeMix.x;
+                float shadow_crossover = 0.1 + max(0.0, -balance) * 0.5;
+                float highlight_crossover = 0.5 - max(0.0, balance) * 0.5;
+                float feather = max(0.001, 0.2 * blending);
+                float final_shadow_crossover = min(shadow_crossover, highlight_crossover - 0.01);
+                float tSh = clamp((luma - (final_shadow_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float shadow_mask = 1.0 - tSh * tSh * (3.0 - 2.0 * tSh);
+                float tHl = clamp((luma - (highlight_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float highlight_mask = tHl * tHl * (3.0 - 2.0 * tHl);
+                float midtone_mask = max(0.0, 1.0 - shadow_mask - highlight_mask);
+                float3 graded = color;
+                graded = graded + float3(u_gradeShadow.x, u_gradeShadow.y, u_gradeShadow.z) * shadow_mask + float3(u_gradeShadow.w * shadow_mask);
+                graded = graded + float3(u_gradeMid.x, u_gradeMid.y, u_gradeMid.z) * midtone_mask + float3(u_gradeMid.w * midtone_mask);
+                graded = graded + float3(u_gradeHighlight.x, u_gradeHighlight.y, u_gradeHighlight.z) * highlight_mask + float3(u_gradeHighlight.w * highlight_mask);
+                return graded;
+            }
+
             float2 apply_geom(float2 uv) {
                 float2 p = uv;
                 if (abs(u_straighten) > 0.001) {
@@ -1434,26 +1457,26 @@ public static class DevelopRenderer
                 float g = c.g * (size - 1.0);
                 float2 p0 = float2(r + b0 * size + 0.5, g + 0.5);
                 float2 p1 = float2(r + b1 * size + 0.5, g + 0.5);
-                float3 s0 = sample(u_lut, p0).rgb;
-                float3 s1 = sample(u_lut, p1).rgb;
+                float3 s0 = u_lut.eval(p0).rgb;
+                float3 s1 = u_lut.eval(p1).rgb;
                 return mix(s0, s1, bf);
             }
 
             float3 sample_curve(float3 rgb) {
                 float3 safe = clamp(rgb, 0.0, 1.0);
                 if (u_curveMode < 1.5) {
-                    float cr = sample(u_curve, float2(safe.r * 255.0 + 0.5, 1.5)).r;
-                    float cg = sample(u_curve, float2(safe.g * 255.0 + 0.5, 1.5)).r;
-                    float cb = sample(u_curve, float2(safe.b * 255.0 + 0.5, 1.5)).r;
+                    float cr = u_curve.eval(float2(safe.r * 255.0 + 0.5, 1.5)).r;
+                    float cg = u_curve.eval(float2(safe.g * 255.0 + 0.5, 1.5)).r;
+                    float cb = u_curve.eval(float2(safe.b * 255.0 + 0.5, 1.5)).r;
                     return float3(cr, cg, cb);
                 } else {
                     float3 color_graded = float3(
-                        sample(u_curve, float2(safe.r * 255.0 + 0.5, 0.5)).r,
-                        sample(u_curve, float2(safe.g * 255.0 + 0.5, 0.5)).g,
-                        sample(u_curve, float2(safe.b * 255.0 + 0.5, 0.5)).b
+                        u_curve.eval(float2(safe.r * 255.0 + 0.5, 0.5)).r,
+                        u_curve.eval(float2(safe.g * 255.0 + 0.5, 0.5)).g,
+                        u_curve.eval(float2(safe.b * 255.0 + 0.5, 0.5)).b
                     );
                     float luma_initial = luma2020(safe);
-                    float luma_target = sample(u_curve, float2(clamp(luma_initial, 0.0, 1.0) * 255.0 + 0.5, 1.5)).r;
+                    float luma_target = u_curve.eval(float2(clamp(luma_initial, 0.0, 1.0) * 255.0 + 0.5, 1.5)).r;
                     float luma_graded = luma2020(color_graded);
                     float d = luma_target - luma_graded;
                     float3 final_col = color_graded + float3(d);
@@ -1527,7 +1550,7 @@ public static class DevelopRenderer
                 if (u_expCurveActive > 0.5) {
                     float in_luma = max(luma2020(col), 0.00001);
                     float t = clamp(pow(in_luma, 0.4545), 0.0, 1.0);
-                    float delta_ev = (sample(u_curve, float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
+                    float delta_ev = (u_curve.eval(float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
                     col *= exp2(delta_ev);
                 } else {
                     col *= pow(2.0, u_ev);
@@ -1674,25 +1697,7 @@ public static class DevelopRenderer
                 hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
                 hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
                 col = hsl_to_rgb(hsl);
-
-                // Color Grading
-                if (u_gradeShadow.y > 0.001 || u_gradeHighlight.y > 0.001) {
-                    float lumG = max(luma2020(col), 0.00001);
-                    float evG = log2(lumG / 0.18) + u_gradeBalance * 1.5;
-                    float shdW = 1.0 - smoother(evG, -2.5, 0.5);
-                    float hlW = smoother(evG, -0.5, 2.5);
-
-                    if (u_gradeShadow.y > 0.001 && shdW > 0.001) {
-                        float3 sTint = hsl_to_rgb(float3(u_gradeShadow.x * 360.0, 1.0, 0.5));
-                        float3 sVec = sTint - float3(luma2020(sTint));
-                        col = max(col + sVec * lumG * (u_gradeShadow.y * 0.50 * shdW), 0.0);
-                    }
-                    if (u_gradeHighlight.y > 0.001 && hlW > 0.001) {
-                        float3 hTint = hsl_to_rgb(float3(u_gradeHighlight.x * 360.0, 1.0, 0.5));
-                        float3 hVec = hTint - float3(luma2020(hTint));
-                        col = max(col + hVec * lumG * (u_gradeHighlight.y * 0.50 * hlW), 0.0);
-                    }
-                }
+                col = apply_color_grading(col);
                 return max(col, 0.0);
             }
 
@@ -1725,13 +1730,13 @@ public static class DevelopRenderer
                 }
                 srcUv = clamp(srcUv, 0.0, 1.0);
                 float2 srcCoord = srcUv * u_srcSize;
-                half4 orig = sample(u_image, srcCoord);
+                half4 orig = u_image.eval(srcCoord);
 
                 float lookAmt = 1.0 - u_before;
                 if (u_split > 0.001 && uv.x < u_split) {
                     lookAmt = 0.0;
                 }
-                lookAmt *= sample(u_mask, fragCoord).r;
+                lookAmt *= u_mask.eval(fragCoord).r;
 
                 float3 lin = max(orig.rgb, 0.0);
                 if (abs(u_vignette) > 0.001) {
@@ -1767,10 +1772,10 @@ public static class DevelopRenderer
                     float evGain = exp2(u_ev);
                     float3 d0 = to_srgb(tone_curve(lin * evGain));
                     float3 acc = float3(0.0);
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(-1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
-                    acc += to_srgb(tone_curve(sample(u_image, clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
+                    acc += to_srgb(tone_curve(u_image.eval(clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
+                    acc += to_srgb(tone_curve(u_image.eval(clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
+                    acc += to_srgb(tone_curve(u_image.eval(clamp(srcCoord + float2(-1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
+                    acc += to_srgb(tone_curve(u_image.eval(clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5))).rgb * evGain));
                     acc *= 0.25;
                     disp += (d0 - acc) * u_sharpen * 2.4;
                 }
@@ -1863,9 +1868,10 @@ public static class DevelopRenderer
             uniform float u_texture;
             uniform float u_vignette;
             uniform float u_vignetteMidpoint;
-            uniform float2 u_gradeShadow;
-            uniform float2 u_gradeHighlight;
-            uniform float u_gradeBalance;
+            uniform float4 u_gradeShadow;
+            uniform float4 u_gradeMid;
+            uniform float4 u_gradeHighlight;
+            uniform float2 u_gradeMix;
             uniform float u_localFast;
             uniform float u_showClipping;
             uniform float u_hasCurve;
@@ -1960,6 +1966,32 @@ public static class DevelopRenderer
                 );
             }
 
+            float3 apply_color_grading(float3 color) {
+                float active = abs(u_gradeShadow.x) + abs(u_gradeShadow.y) + abs(u_gradeShadow.z) + abs(u_gradeShadow.w)
+                    + abs(u_gradeMid.x) + abs(u_gradeMid.y) + abs(u_gradeMid.z) + abs(u_gradeMid.w)
+                    + abs(u_gradeHighlight.x) + abs(u_gradeHighlight.y) + abs(u_gradeHighlight.z) + abs(u_gradeHighlight.w);
+                if (active < 0.00001) {
+                    return color;
+                }
+                float luma = luma2020(max(color, 0.0));
+                float balance = u_gradeMix.y;
+                float blending = u_gradeMix.x;
+                float shadow_crossover = 0.1 + max(0.0, -balance) * 0.5;
+                float highlight_crossover = 0.5 - max(0.0, balance) * 0.5;
+                float feather = max(0.001, 0.2 * blending);
+                float final_shadow_crossover = min(shadow_crossover, highlight_crossover - 0.01);
+                float tSh = clamp((luma - (final_shadow_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float shadow_mask = 1.0 - tSh * tSh * (3.0 - 2.0 * tSh);
+                float tHl = clamp((luma - (highlight_crossover - feather)) / (2.0 * feather), 0.0, 1.0);
+                float highlight_mask = tHl * tHl * (3.0 - 2.0 * tHl);
+                float midtone_mask = max(0.0, 1.0 - shadow_mask - highlight_mask);
+                float3 graded = color;
+                graded = graded + float3(u_gradeShadow.x, u_gradeShadow.y, u_gradeShadow.z) * shadow_mask + float3(u_gradeShadow.w * shadow_mask);
+                graded = graded + float3(u_gradeMid.x, u_gradeMid.y, u_gradeMid.z) * midtone_mask + float3(u_gradeMid.w * midtone_mask);
+                graded = graded + float3(u_gradeHighlight.x, u_gradeHighlight.y, u_gradeHighlight.z) * highlight_mask + float3(u_gradeHighlight.w * highlight_mask);
+                return graded;
+            }
+
             float2 apply_geom(float2 uv) {
                 float2 p = uv;
                 if (abs(u_straighten) > 0.001) {
@@ -1999,26 +2031,26 @@ public static class DevelopRenderer
                 float g = c.g * (size - 1.0);
                 float2 p0 = float2(r + b0 * size + 0.5, g + 0.5);
                 float2 p1 = float2(r + b1 * size + 0.5, g + 0.5);
-                float3 s0 = sample(u_lut, p0).rgb;
-                float3 s1 = sample(u_lut, p1).rgb;
+                float3 s0 = u_lut.eval(p0).rgb;
+                float3 s1 = u_lut.eval(p1).rgb;
                 return mix(s0, s1, bf);
             }
 
             float3 sample_curve(float3 rgb) {
                 float3 safe = clamp(rgb, 0.0, 1.0);
                 if (u_curveMode < 1.5) {
-                    float cr = sample(u_curve, float2(safe.r * 255.0 + 0.5, 1.5)).r;
-                    float cg = sample(u_curve, float2(safe.g * 255.0 + 0.5, 1.5)).r;
-                    float cb = sample(u_curve, float2(safe.b * 255.0 + 0.5, 1.5)).r;
+                    float cr = u_curve.eval(float2(safe.r * 255.0 + 0.5, 1.5)).r;
+                    float cg = u_curve.eval(float2(safe.g * 255.0 + 0.5, 1.5)).r;
+                    float cb = u_curve.eval(float2(safe.b * 255.0 + 0.5, 1.5)).r;
                     return float3(cr, cg, cb);
                 } else {
                     float3 color_graded = float3(
-                        sample(u_curve, float2(safe.r * 255.0 + 0.5, 0.5)).r,
-                        sample(u_curve, float2(safe.g * 255.0 + 0.5, 0.5)).g,
-                        sample(u_curve, float2(safe.b * 255.0 + 0.5, 0.5)).b
+                        u_curve.eval(float2(safe.r * 255.0 + 0.5, 0.5)).r,
+                        u_curve.eval(float2(safe.g * 255.0 + 0.5, 0.5)).g,
+                        u_curve.eval(float2(safe.b * 255.0 + 0.5, 0.5)).b
                     );
                     float luma_initial = luma2020(safe);
-                    float luma_target = sample(u_curve, float2(clamp(luma_initial, 0.0, 1.0) * 255.0 + 0.5, 1.5)).r;
+                    float luma_target = u_curve.eval(float2(clamp(luma_initial, 0.0, 1.0) * 255.0 + 0.5, 1.5)).r;
                     float luma_graded = luma2020(color_graded);
                     float d = luma_target - luma_graded;
                     float3 final_col = color_graded + float3(d);
@@ -2108,7 +2140,7 @@ public static class DevelopRenderer
                 if (u_expCurveActive > 0.5) {
                     float in_luma = max(luma2020(col), 0.00001);
                     float t = clamp(pow(in_luma, 0.4545), 0.0, 1.0);
-                    float delta_ev = (sample(u_curve, float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
+                    float delta_ev = (u_curve.eval(float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
                     col *= exp2(delta_ev);
                 } else {
                     col *= pow(2.0, u_ev);
@@ -2255,30 +2287,12 @@ public static class DevelopRenderer
                 hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
                 hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
                 col = hsl_to_rgb(hsl);
-
-                // Color Grading (Split Toning)
-                if (u_gradeShadow.y > 0.001 || u_gradeHighlight.y > 0.001) {
-                    float lumG = max(luma2020(col), 0.00001);
-                    float evG = log2(lumG / 0.18) + u_gradeBalance * 1.5;
-                    float shdW = 1.0 - smoother(evG, -2.5, 0.5);
-                    float hlW = smoother(evG, -0.5, 2.5);
-
-                    if (u_gradeShadow.y > 0.001 && shdW > 0.001) {
-                        float3 sTint = hsl_to_rgb(float3(u_gradeShadow.x * 360.0, 1.0, 0.5));
-                        float3 sVec = sTint - float3(luma2020(sTint));
-                        col = max(col + sVec * lumG * (u_gradeShadow.y * 0.50 * shdW), 0.0);
-                    }
-                    if (u_gradeHighlight.y > 0.001 && hlW > 0.001) {
-                        float3 hTint = hsl_to_rgb(float3(u_gradeHighlight.x * 360.0, 1.0, 0.5));
-                        float3 hVec = hTint - float3(luma2020(hTint));
-                        col = max(col + hVec * lumG * (u_gradeHighlight.y * 0.50 * hlW), 0.0);
-                    }
-                }
+                col = apply_color_grading(col);
                 return max(col, 0.0);
             }
 
             float3 fetch_look(float2 coord, float lookAmt) {
-                float3 s = sample(u_image, clamp(coord, float2(0.5), u_srcSize - float2(0.5))).rgb;
+                float3 s = u_image.eval(clamp(coord, float2(0.5), u_srcSize - float2(0.5))).rgb;
                 return lookAmt > 0.001 ? apply_look(u_srcLinear > 0.5 ? max(s, 0.0) : to_lin(s)) : (u_srcLinear > 0.5 ? max(s, 0.0) : to_lin(s));
             }
 
@@ -2312,13 +2326,13 @@ public static class DevelopRenderer
                 srcUv = clamp(srcUv, 0.0, 1.0);
                 // Image child shaders are sampled in pixel space of the source.
                 float2 srcCoord = srcUv * u_srcSize;
-                half4 orig = sample(u_image, srcCoord);
+                half4 orig = u_image.eval(srcCoord);
 
                 float lookAmt = 1.0 - u_before;
                 if (u_split > 0.001 && uv.x < u_split) {
                     lookAmt = 0.0;
                 }
-                lookAmt *= sample(u_mask, fragCoord).r;
+                lookAmt *= u_mask.eval(fragCoord).r;
 
                 float3 lin = u_srcLinear > 0.5 ? max(orig.rgb, 0.0) : to_lin(orig.rgb);
 
@@ -2346,10 +2360,10 @@ public static class DevelopRenderer
                         float2 c1 = clamp(srcCoord + float2(1.0, 0.0), float2(0.5), u_srcSize - float2(0.5));
                         float2 c2 = clamp(srcCoord + float2(0.0, -1.0), float2(0.5), u_srcSize - float2(0.5));
                         float2 c3 = clamp(srcCoord + float2(0.0, 1.0), float2(0.5), u_srcSize - float2(0.5));
-                        float3 n0 = u_srcLinear > 0.5 ? max(sample(u_image, c0).rgb, 0.0) : to_lin(sample(u_image, c0).rgb);
-                        float3 n1 = u_srcLinear > 0.5 ? max(sample(u_image, c1).rgb, 0.0) : to_lin(sample(u_image, c1).rgb);
-                        float3 n2 = u_srcLinear > 0.5 ? max(sample(u_image, c2).rgb, 0.0) : to_lin(sample(u_image, c2).rgb);
-                        float3 n3 = u_srcLinear > 0.5 ? max(sample(u_image, c3).rgb, 0.0) : to_lin(sample(u_image, c3).rgb);
+                        float3 n0 = u_srcLinear > 0.5 ? max(u_image.eval(c0).rgb, 0.0) : to_lin(u_image.eval(c0).rgb);
+                        float3 n1 = u_srcLinear > 0.5 ? max(u_image.eval(c1).rgb, 0.0) : to_lin(u_image.eval(c1).rgb);
+                        float3 n2 = u_srcLinear > 0.5 ? max(u_image.eval(c2).rgb, 0.0) : to_lin(u_image.eval(c2).rgb);
+                        float3 n3 = u_srcLinear > 0.5 ? max(u_image.eval(c3).rgb, 0.0) : to_lin(u_image.eval(c3).rgb);
 
                         if (u_reconMode > 1.5) {
                             // LCh mode: ref: highlight reconstruction (LCh)
@@ -2456,10 +2470,10 @@ public static class DevelopRenderer
                         float2 off3 = float2(0.0, rad);
                         float2 off4 = float2(0.0, -rad);
 
-                        float3 sn1 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb);
-                        float3 sn2 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb);
-                        float3 sn3 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb);
-                        float3 sn4 = u_srcLinear > 0.5 ? max(sample(u_image, clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(sample(u_image, clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn1 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off1, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn2 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off2, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn3 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off3, float2(0.5), u_srcSize - float2(0.5))).rgb);
+                        float3 sn4 = u_srcLinear > 0.5 ? max(u_image.eval(clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb, 0.0) : to_lin(u_image.eval(clamp(srcCoord + off4, float2(0.5), u_srcSize - float2(0.5))).rgb);
 
                         float w1 = (sn1.r < clipThresh && sn1.g < clipThresh && sn1.b < clipThresh) ? (max(max(sn1.r, sn1.g), sn1.b) - min(min(sn1.r, sn1.g), sn1.b) + 0.01) : 0.0;
                         float w2 = (sn2.r < clipThresh && sn2.g < clipThresh && sn2.b < clipThresh) ? (max(max(sn2.r, sn2.g), sn2.b) - min(min(sn2.r, sn2.g), sn2.b) + 0.01) : 0.0;
@@ -2715,10 +2729,10 @@ public static class DevelopRenderer
                     float3 o0 = (u_srcLinear > 0.5 ? orig.rgb : to_lin(orig.rgb)) * evGain;
                     float3 d0 = to_srgb(tone_curve(o0));
                     float3 acc = float3(0.0);
-                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, -1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, -1.0)).rgb)) * evGain));
-                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(0.0, 1.0)).rgb : to_lin(sample(u_image, srcCoord + float2(0.0, 1.0)).rgb)) * evGain));
-                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(-1.0, 0.0)).rgb)) * evGain));
-                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? sample(u_image, srcCoord + float2(1.0, 0.0)).rgb : to_lin(sample(u_image, srcCoord + float2(1.0, 0.0)).rgb)) * evGain));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? u_image.eval(srcCoord + float2(0.0, -1.0)).rgb : to_lin(u_image.eval(srcCoord + float2(0.0, -1.0)).rgb)) * evGain));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? u_image.eval(srcCoord + float2(0.0, 1.0)).rgb : to_lin(u_image.eval(srcCoord + float2(0.0, 1.0)).rgb)) * evGain));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? u_image.eval(srcCoord + float2(-1.0, 0.0)).rgb : to_lin(u_image.eval(srcCoord + float2(-1.0, 0.0)).rgb)) * evGain));
+                    acc += to_srgb(tone_curve((u_srcLinear > 0.5 ? u_image.eval(srcCoord + float2(1.0, 0.0)).rgb : to_lin(u_image.eval(srcCoord + float2(1.0, 0.0)).rgb)) * evGain));
                     acc *= 0.25;
                     disp += (d0 - acc) * u_sharpen * 2.4;
                 }

@@ -1,29 +1,33 @@
 using System;
-using System.Collections.Generic;
+using Blossom.Animations;
 using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
-using Silk.NET.Input;
+using Blossom.Hosting;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using SkiaSharp;
 
 namespace Raw75.Controls;
 
 /// <summary>
-/// Collapsible section card:
-/// Crisp 28px header with rotating disclosure caret, title, 1px bottom separator line,
-/// drop shadow, and right-aligned micro-actions (Auto, Reset, Presets).
+/// Collapsible section card. A vertical <see cref="Stack"/> of header row, hairline divider and body.
+/// The header carries the module bypass checkbox, a disclosure caret, the uppercase title and
+/// ghost micro-actions (Auto, Reset, Presets). A bypassed module dims its body.
 /// </summary>
-public class PanelGroup : VisualElement
+public class PanelGroup : Stack
 {
-    private readonly VisualElement _header;
+    private const float BodyDimmed = 0.45f;
+
+    private readonly Stack _header;
+    private readonly VisualElement _divider;
+    private readonly Stack _body;
     private readonly CheckToggle _toggle;
     private readonly VisualElement _chevronEl;
     private readonly VisualElement _titleEl;
-    private readonly List<VisualElement> _actions = new();
-    private readonly List<VisualElement> _body = new();
+    private float _headerHover;
     private bool _expanded = true;
     private bool _sectionEnabled = true;
-    private string _title;
 
     public event Action<bool>? ExpandedChanged;
     public event Action<bool>? EnabledChanged;
@@ -52,41 +56,37 @@ public class PanelGroup : VisualElement
         }
     }
 
+    /// <summary>The body host; rows added with <see cref="AddBody"/> stack here.</summary>
+    public Stack Body => _body;
+
     public PanelGroup(string title)
     {
         Name = $"PanelGroup_{title}";
-        _title = title ?? "";
-        Padding = new Thickness(10, 8, 10, 10);
+        Orientation = Orientation.Vertical;
+        Gap = 0f;
+        Padding = new Thickness(1f);
         Overflow = OverflowMode.Clip;
         Style = new ElementStyle
         {
-            BackColor = Theme.Section,
-            Border = new BorderStyle
-            {
-                Width = 1,
-                Color = Theme.Hairline,
-                Roundness = Theme.Radius
-            },
-            Shadow = new ShadowStyle(0, 2.5f, 3, 3, new SKColor(0, 0, 0, 75))
+            Border = new BorderStyle { Width = 1 },
+            Shadow = new ShadowStyle(0, 2f, 3, 3, SKColors.Transparent)
         };
 
-        _header = new VisualElement
+        _header = new Stack
         {
             Name = $"{Name}_Header",
-            Cursor = StandardCursor.Hand,
-            Style = new ElementStyle
-            {
-                BackColor = Theme.SectionHeader,
-                Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.HairlineSubtle,
-                    Roundness = 0
-                }
-            }
+            Orientation = Orientation.Horizontal,
+            Align = LayoutAlign.Center,
+            Gap = 6f,
+            Padding = new Thickness(9, 0, 6, 0),
+            Cursor = UiCursor.Hand,
+            Style = new ElementStyle { Border = new BorderStyle { Width = 0 } }
         };
+        _header.MinHeight = Theme.GroupHeadH - 2f;
 
         _toggle = new CheckToggle(initialChecked: true);
+        _toggle.Transform.Width = 16f;
+        _toggle.Transform.Height = 16f;
         _toggle.CheckedChanged += isChecked =>
         {
             _sectionEnabled = isChecked;
@@ -101,298 +101,144 @@ public class PanelGroup : VisualElement
             IsClickthrough = true,
             BackgroundImageScale = ImageScaleMode.Contain,
             BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
-            BackgroundImageTintColor = Theme.TextSecondary,
         };
+        _chevronEl.Transform.Width = 11f;
+        _chevronEl.Transform.Height = 11f;
         _header.AddChild(_chevronEl);
 
         _titleEl = new RichBox
         {
             Name = $"{Name}_Title",
             IsClickthrough = true,
+            Text = (title ?? "").ToUpperInvariant(),
             Overflow = OverflowMode.Visible,
-            TextOverflow = TextOverflow.Visible,
+            TextOverflow = TextOverflow.Ellipsis,
             Style = new ElementStyle
             {
                 BackColor = SKColors.Transparent,
                 Text = new TextStyle
                 {
-                    Color = Theme.Text,
-                    Size = 12,
+                    Size = 11f,
                     Weight = 600,
+                    Spacing = 1,
                     Alignment = TextAlign.Left,
                     Padding = 0,
-                    Overflow = TextOverflow.Visible,
+                    Overflow = TextOverflow.Ellipsis,
                     MaxLines = 1
                 }
             }
         };
-
+        _titleEl.Transform.Height = 18f;
         _header.AddChild(_titleEl);
+        SetGrow(_titleEl, 1f);
+        _header.Events.OnMouseEnter += _ => { _headerHover = 1f; ApplyHeaderChrome(); };
+        _header.Events.OnMouseLeave += _ => { _headerHover = 0f; ApplyHeaderChrome(); };
         _header.Events.OnClick += (_, args) =>
         {
-            if (args.Button != (int)MouseButton.Left) return;
+            if (args.Button != PointerButton.Left) return;
             Expanded = !Expanded;
             args.Handled = true;
         };
-
-        _header.Events.OnMouseEnter += _ =>
-        {
-            if (_header.Style != null)
-                _header.Style.BackColor = Theme.SectionHeaderHover;
-        };
-
-        _header.Events.OnMouseLeave += _ =>
-        {
-            if (_header.Style != null)
-                _header.Style.BackColor = Theme.SectionHeader;
-        };
-
         AddChild(_header);
+
+        _divider = new VisualElement { Name = $"{Name}_Divider", IsClickthrough = true };
+        _divider.Transform.Height = 1f;
+        AddChild(_divider);
+
+        _body = new Stack
+        {
+            Name = $"{Name}_Body",
+            Orientation = Orientation.Vertical,
+            Gap = Theme.SliderGap,
+            Padding = new Thickness(10, 8, 10, 10),
+            Style = new ElementStyle { BackColor = SKColors.Transparent }
+        };
+        AddChild(_body);
+
         ApplyExpanded();
+        this.Bind(_ => ApplyTheme());
     }
 
-    public void EnableAuto(Action onAuto, string tooltip = "Auto Adjust")
-    {
+    public void EnableAuto(Action onAuto, string tooltip = "Auto Adjust") =>
         AddHeaderAction("A", tooltip, onAuto, isAccentHover: true);
-    }
 
-    public void EnableReset(Action onReset, string tooltip = "Reset Section")
-    {
+    public void EnableReset(Action onReset, string tooltip = "Reset Section") =>
         AddHeaderAction("Reset", tooltip, onReset, iconName: "rotate_left");
-    }
 
-    public void EnablePresets(Action onPresets, string tooltip = "Presets")
-    {
+    public void EnablePresets(Action onPresets, string tooltip = "Presets") =>
         AddHeaderAction("Presets", tooltip, onPresets, iconName: "dots");
-    }
 
     public void AddHeaderAction(string label, string tooltip, Action onClick, bool isAccentHover = false, string? iconName = null)
     {
-        var btn = new VisualElement
+        var btn = new IconButton(string.IsNullOrEmpty(iconName) ? label : null, iconName)
         {
             Name = $"{Name}_Action_{label}",
-            Text = string.IsNullOrEmpty(iconName) ? label : "",
-            Cursor = StandardCursor.Hand,
-            Padding = string.IsNullOrEmpty(iconName) ? new Thickness(0, 4, 0, 0) : new Thickness(0),
-            BackgroundImageScale = ImageScaleMode.Contain,
-            BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
-            BackgroundImageTintColor = Theme.TextSecondary,
-            Overflow = OverflowMode.Visible,
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Well,
-                Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.Hairline,
-                    Roundness = Theme.RadiusSm
-                },
-                Shadow = new ShadowStyle(0, 1, 1, 1, new SKColor(0, 0, 0, 35)),
-                Text = new TextStyle
-                {
-                    Color = Theme.TextSecondary,
-                    Size = 12,
-                    Weight = 600,
-                    Alignment = TextAlign.Center,
-                    Padding = 0,
-                    Overflow = TextOverflow.Visible
-                }
-            }
+            Variant = ButtonVariant.Ghost,
+            IconSize = 13f,
+            FontSize = 11f,
         };
-
-        if (!string.IsNullOrEmpty(iconName))
-        {
-            btn.BackgroundSvg = IconStore.LoadSvg(iconName);
-        }
-
-        btn.Events.OnMouseEnter += _ =>
-        {
-            if (btn.Style != null)
-            {
-                btn.Style.BackColor = isAccentHover ? Theme.AccentSoft : Theme.ButtonHover;
-                btn.Style.Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = isAccentHover ? Theme.Accent : Theme.HairlineStrong,
-                    Roundness = Theme.RadiusSm
-                };
-                if (btn.Style.Text != null)
-                    btn.Style.Text.Color = isAccentHover ? Theme.Accent : Theme.Text;
-            }
-            btn.BackgroundImageTintColor = isAccentHover ? Theme.Accent : Theme.Text;
-            InvalidatePaint();
-        };
-
-        btn.Events.OnMouseLeave += _ =>
-        {
-            if (btn.Style != null)
-            {
-                btn.Style.BackColor = Theme.Well;
-                btn.Style.Border = new BorderStyle
-                {
-                    Width = 1,
-                    Color = Theme.Hairline,
-                    Roundness = Theme.RadiusSm
-                };
-                if (btn.Style.Text != null)
-                    btn.Style.Text.Color = Theme.TextSecondary;
-            }
-            btn.BackgroundImageTintColor = Theme.TextSecondary;
-            InvalidatePaint();
-        };
-
-        btn.Events.OnClick += (_, args) =>
-        {
-            if (args.Button != (int)MouseButton.Left) return;
-            onClick?.Invoke();
-            args.Handled = true; // Prevent header collapse/expand
-        };
-
-        _actions.Add(btn);
+        btn.MinWidth = btn.MaxWidth = 24f;
+        btn.MinHeight = btn.MaxHeight = 22f;
+        if (isAccentHover)
+            btn.LabelElement.Style.Text.Weight = 700;
+        btn.Clicked += () => onClick?.Invoke();
         _header.AddChild(btn);
         InvalidateLayout();
     }
 
-    public void RefreshTheme()
-    {
-        Style.BackColor = Theme.Section;
-        if (Style.Border != null)
-        {
-            Style.Border.Color = Theme.Hairline;
-            Style.Border.Roundness = Theme.Radius;
-        }
-        Theme.ApplyCardShadow(Style);
-        if (_header.Style != null)
-        {
-            _header.Style.BackColor = Theme.SectionHeader;
-            if (_header.Style.Border != null)
-                _header.Style.Border.Color = Theme.HairlineSubtle;
-        }
-        if (_titleEl.Style?.Text != null)
-            _titleEl.Style.Text.Color = _sectionEnabled ? Theme.Text : Theme.TextDisabled;
-        _chevronEl.BackgroundImageTintColor = _sectionEnabled ? Theme.TextSecondary : Theme.TextDisabled;
-        foreach (var btn in _actions)
-        {
-            if (btn.Style == null) continue;
-            btn.Style.BackColor = Theme.Well;
-            if (btn.Style.Border != null)
-            {
-                btn.Style.Border.Color = Theme.Hairline;
-                btn.Style.Border.Roundness = Theme.RadiusSm;
-            }
-            if (btn.Style.Text != null)
-                btn.Style.Text.Color = Theme.TextSecondary;
-            btn.BackgroundImageTintColor = Theme.TextSecondary;
-            Theme.ApplyButtonShadow(btn.Style);
-        }
-        InvalidatePaint();
-    }
-
     public void AddBody(VisualElement child)
     {
-        if (child == null) throw new ArgumentNullException(nameof(child));
-        _body.Add(child);
-        child.Visible = _expanded;
-        AddChild(child);
+        ArgumentNullException.ThrowIfNull(child);
+        _body.AddChild(child);
         InvalidateLayout();
     }
 
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
+        var size = base.GetPreferredSize(maxWidth, 0f);
         float w = maxWidth > 0 ? maxWidth : (Transform.Width > 0 ? Transform.Width : Theme.RightW);
-        float h = Theme.GroupHeadH;
-        if (_expanded)
-        {
-            float inner = Math.Max(0, w - Padding.Horizontal);
-            for (int i = 0; i < _body.Count; i++)
-            {
-                var child = _body[i];
-                if (child == null || !child.Visible) continue;
-                var size = child.GetPreferredSize(inner, 0);
-                h += size.Height + Theme.SliderGap;
-            }
-            h += Padding.Vertical;
-        }
-
-        if (maxHeight > 0) h = Math.Min(h, maxHeight);
-        return new SKSize(w, h);
+        return new SKSize(w, size.Height);
     }
 
-    protected override void LayoutChildren()
+    private void ApplyTheme()
     {
-        float originX = Transform.Computed.X;
-        float originY = Transform.Computed.Y;
-        float w = Math.Max(1f, Transform.Width);
+        Style.BackColor = Theme.Section;
+        Style.Border.Color = Theme.Hairline;
+        Style.Border.Roundness = Theme.Radius;
+        if (Style.Shadow != null)
+            Style.Shadow.Color = Theme.UseShadows ? new SKColor(0, 0, 0, Theme.ShadowAlpha) : SKColors.Transparent;
+        _divider.Style.BackColor = Theme.HairlineSubtle;
+        ApplyHeaderChrome();
+        ApplyEnabledVisuals();
+        InvalidatePaint();
+    }
 
-        _header.Transform.SetAbsoluteFrame(originX, originY, w, Theme.GroupHeadH);
-
-        // Layout checkbox toggle on the far left
-        float toggleSize = 18f;
-        float toggleX = originX + 8f;
-        float toggleY = originY + (Theme.GroupHeadH - toggleSize) * 0.5f;
-        _toggle.Transform.SetAbsoluteFrame(toggleX, toggleY, toggleSize, toggleSize);
-
-        // Layout chevron next to toggle
-        float chevSize = 12f;
-        float chevX = toggleX + toggleSize + 6f;
-        float chevY = originY + (Theme.GroupHeadH - chevSize) * 0.5f;
-        _chevronEl.Transform.SetAbsoluteFrame(chevX, chevY, chevSize, chevSize);
-
-        // Layout action buttons (from right to left)
-        float ax = originX + w - 8f;
-        for (int i = _actions.Count - 1; i >= 0; i--)
-        {
-            float btnW = 24f;
-            float btnH = 22f;
-            ax -= btnW;
-            _actions[i].Transform.SetAbsoluteFrame(ax, originY + (Theme.GroupHeadH - btnH) * 0.5f, btnW, btnH);
-            ax -= 4f;
-        }
-
-        // Layout title after the chevron
-        float titleLeft = chevX + chevSize + 6f;
-        float titleW = Math.Max(1f, ax - titleLeft);
-        _titleEl.Transform.SetAbsoluteFrame(titleLeft, originY + (Theme.GroupHeadH - 20f) * 0.5f, titleW, 20f);
-
-        if (!_expanded)
-            return;
-
-        float y = Theme.GroupHeadH + Padding.Top;
-        float innerW = Math.Max(0, w - Padding.Horizontal);
-        float childX = originX + Padding.Left;
-
-        for (int i = 0; i < _body.Count; i++)
-        {
-            var child = _body[i];
-            if (child == null || !child.Visible) continue;
-
-            var preferred = child.GetPreferredSize(innerW, 0);
-            float childH = preferred.Height > 0 ? preferred.Height : child.Transform.Height;
-            float childW = innerW;
-            child.Transform.SetAbsoluteFrame(childX, originY + y, childW, childH);
-            y += childH + Theme.SliderGap;
-        }
+    private void ApplyHeaderChrome()
+    {
+        float innerR = Math.Max(0, Theme.Radius - 1f);
+        _header.Style.BackColor = Anim.Lerp(Theme.SectionHeader, Theme.SectionHeaderHover, _headerHover);
+        var b = _header.Style.Border;
+        b.RoundnessTopLeft = innerR;
+        b.RoundnessTopRight = innerR;
+        b.RoundnessBottomLeft = _expanded ? 0f : innerR;
+        b.RoundnessBottomRight = _expanded ? 0f : innerR;
+        _header.InvalidatePaint();
     }
 
     private void ApplyEnabledVisuals()
     {
-        if (_titleEl.Style?.Text != null)
-        {
-            _titleEl.Style.Text.Color = _sectionEnabled ? Theme.Text : Theme.TextDisabled;
-        }
-        _chevronEl.BackgroundImageTintColor = _sectionEnabled ? Theme.TextSecondary : Theme.TextDisabled;
+        _titleEl.Style.Text.Color = _sectionEnabled ? Theme.Text : Theme.TextDisabled;
+        _chevronEl.BackgroundImageTintColor = _sectionEnabled ? Theme.TextDim : Theme.TextDisabled;
+        _body.Opacity = _sectionEnabled ? 1f : BodyDimmed;
         InvalidatePaint();
     }
 
     private void ApplyExpanded()
     {
         _chevronEl.BackgroundSvg = IconStore.LoadSvg(_expanded ? "chevron_down" : "chevron_right");
-        _titleEl.Text = _title.ToUpperInvariant();
-        for (int i = 0; i < _body.Count; i++)
-        {
-            if (_body[i] != null)
-                _body[i].Visible = _expanded;
-        }
+        _body.Visible = _expanded;
+        _divider.Visible = _expanded;
+        ApplyHeaderChrome();
         InvalidateLayout();
         Parent?.InvalidateLayout();
         InvalidatePaint();

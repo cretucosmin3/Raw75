@@ -189,4 +189,44 @@ internal static class DevelopGeom
             return SKRect.Empty;
         return new SKRect(minX, minY, maxX, maxY);
     }
+
+    public static void SourceUvToDest(
+        float sx, float sy, SKRect dest, DevelopSettings? s, int fw, int fh,
+        out float dx, out float dy)
+    {
+        InverseMap(sx, sy, s, fw, fh, out float u, out float v);
+        float cx = 0f, cy = 0f, cw = 1f, ch = 1f;
+        if (s != null && s.HasCrop)
+        {
+            cx = s.CropX;
+            cy = s.CropY;
+            cw = Math.Max(1e-6f, s.CropW);
+            ch = Math.Max(1e-6f, s.CropH);
+        }
+        dx = dest.Left + (u - cx) / cw * dest.Width;
+        dy = dest.Top + (v - cy) / ch * dest.Height;
+    }
+
+    public static bool DestToSourceUv(
+        float dx, float dy, SKRect dest, DevelopSettings? s, int fw, int fh,
+        out float sx, out float sy)
+    {
+        sx = sy = 0.5f;
+        if (dest.Width < 1f || dest.Height < 1f)
+            return false;
+        float nx = (dx - dest.Left) / dest.Width;
+        float ny = (dy - dest.Top) / dest.Height;
+        if (nx < -0.05f || ny < -0.05f || nx > 1.05f || ny > 1.05f)
+            return false;
+        float cx = 0f, cy = 0f, cw = 1f, ch = 1f;
+        if (s != null && s.HasCrop)
+        {
+            cx = s.CropX;
+            cy = s.CropY;
+            cw = Math.Max(1e-6f, s.CropW);
+            ch = Math.Max(1e-6f, s.CropH);
+        }
+        MapSource(cx + nx * cw, cy + ny * ch, s, fw, fh, out sx, out sy);
+        return true;
+    }
 }

@@ -20,13 +20,15 @@ internal sealed class DevelopLook : IDisposable
     private SKShader? _img;
     private SKShader? _lut;
     private SKShader? _mask;
-    private readonly SKPaint _paint = new() { IsAntialias = false, FilterQuality = SKFilterQuality.Medium };
+    private readonly SKPaint _paint = new() { IsAntialias = false };
     private bool _loggedOk;
     private bool _dirty = true;
 
     // Cached intermediate images
     private SKImage? _stage1Image;
     private SKImage? _stage2Image;
+    private SKImage? _spotImage;
+    private int _cachedSpotSig;
 
     // Stage 1 tracking
     private HighlightMode _cachedReconMode;
@@ -59,11 +61,24 @@ internal sealed class DevelopLook : IDisposable
         _stage2Dirty = true;
     }
 
+    public void InvalidateSpots() => RetireSpot();
+
     public void InvalidateAll()
     {
         _dirty = true;
         _stage1Dirty = true;
         _stage2Dirty = true;
+        RetireSpot();
+    }
+
+    private void RetireSpot()
+    {
+        if (_spotImage != null)
+        {
+            GpuRetain.Retire(_spotImage);
+            _spotImage = null;
+        }
+        _cachedSpotSig = 0;
     }
 
     public bool Draw(
@@ -133,6 +148,7 @@ internal sealed class DevelopLook : IDisposable
             {
                 if (_stage1Image != null) { GpuRetain.Retire(_stage1Image); _stage1Image = null; }
                 if (_stage2Image != null) { GpuRetain.Retire(_stage2Image); _stage2Image = null; }
+                RetireSpot();
                 _source = source;
                 _stage1Dirty = true;
                 _stage2Dirty = true;
@@ -172,6 +188,7 @@ internal sealed class DevelopLook : IDisposable
                 _cachedReconColorSpatial = curColorSpatial;
                 _stage1Dirty = false;
                 _stage2Dirty = true; // Stage 1 change forces Stage 2 update
+                RetireSpot();
             }
 
             // --- STAGE 2: Spatial & Frequency Domain ---
@@ -215,6 +232,7 @@ internal sealed class DevelopLook : IDisposable
                     _cachedDenoiseLuma = curDenoiseLuma;
                     _cachedDenoiseChroma = curDenoiseChroma;
                     _stage2Dirty = false;
+                    RetireSpot();
                 }
             }
             else
@@ -228,6 +246,26 @@ internal sealed class DevelopLook : IDisposable
 
             // --- STAGE 3: Creative Look & Display Transform ---
             SKImage stage3Input = (stage2Active && _stage2Image != null) ? _stage2Image : (_stage1Image ?? source);
+            if (SpotHeal.HasSpots(settings))
+            {
+                int sig = SpotHeal.Signature(settings, tileX, tileY, tileW, tileH);
+                if (_spotImage == null || sig != _cachedSpotSig)
+                {
+                    RetireSpot();
+                    SKImage? healed = SpotHeal.ApplyGpu(stage3Input, settings, tileX, tileY, tileW, tileH);
+                    if (healed != null)
+                    {
+                        _spotImage = healed;
+                        _cachedSpotSig = sig;
+                    }
+                }
+                if (_spotImage != null)
+                    stage3Input = _spotImage;
+            }
+            else if (_spotImage != null)
+            {
+                RetireSpot();
+            }
             using var stage3InputShader = stage3Input.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
             if (stage3InputShader == null) return false;
 
@@ -257,7 +295,7 @@ internal sealed class DevelopLook : IDisposable
             ch3.Add("u_curve", stage3CurveShader);
 
             bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
-            using SKShader? fx = eff3.ToShader(!tilePartial, u3, ch3);
+            using SKShader? fx = eff3.ToShader(u3, ch3);
             if (fx == null) return false;
 
             try
@@ -376,7 +414,7 @@ internal sealed class DevelopLook : IDisposable
                 children.Add("u_curve", curveShader);
 
                 bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
-                SKShader? fx = effect.ToShader(!tilePartial, uniforms, children);
+                SKShader? fx = effect.ToShader(uniforms, children);
                 if (fx == null)
                 {
                     Failed = true;
@@ -443,6 +481,7 @@ internal sealed class DevelopLook : IDisposable
         if (_stage2Image != null) GpuRetain.Retire(_stage2Image);
         _stage1Image = null;
         _stage2Image = null;
+        RetireSpot();
         if (_fxFast != null) GpuRetain.RetireShader(_fxFast);
         if (_fxQuality != null) GpuRetain.RetireShader(_fxQuality);
         _fxFast = null;

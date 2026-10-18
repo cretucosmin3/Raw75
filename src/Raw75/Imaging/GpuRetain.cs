@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Blossom;
 using SkiaSharp;
+using Blossom.Desktop;
 
 namespace Raw75.Imaging;
 
@@ -78,7 +79,7 @@ internal static class GpuRetain
         if (_pumping)
             return;
         _pumping = true;
-        Browser.Post(Step);
+        Shell.Post(Step);
     }
 
     private static void Step()
