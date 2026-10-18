@@ -34,6 +34,12 @@ public sealed class ExposureCurveControl : Control
     private int _draggedPointIdx = -1;
     private bool _dragging;
     private bool _draggingCurvature;
+
+    // Shift-drag moves points (and the curvature thumb) at a quarter of the pointer's speed, like sliders.
+    private const float FineSpeed = 0.25f;
+    private float _lastLx, _lastLy;
+
+    private bool IsShiftHeld => Events.IsShiftDown || (ParentView?.Events.IsShiftDown ?? false);
     private bool _hoveredReset;
     private bool _hoveredSlider;
     private bool _hoveringGraph;
@@ -488,8 +494,10 @@ public sealed class ExposureCurveControl : Control
         InvalidatePaint();
     }
 
-    private void BeginPointDrag(int index)
+    private void BeginPointDrag(int index, float lx, float ly)
     {
+        _lastLx = lx;
+        _lastLy = ly;
         _selectedPointIdx = index;
         _draggedPointIdx = index;
         _dragging = true;
@@ -525,8 +533,10 @@ public sealed class ExposureCurveControl : Control
             if (args.Button == PointerButton.Left && _selectedPointIdx >= 0 && _selectedPointIdx < _points.Count)
             {
                 _draggingCurvature = true;
+                _lastLx = lx;
                 CapturePointer();
-                SetSelectedCurvature(CurvatureAt(lx));
+                if (!IsShiftHeld)
+                    SetSelectedCurvature(CurvatureAt(lx));
                 args.Handled = true;
                 return;
             }
@@ -547,7 +557,7 @@ public sealed class ExposureCurveControl : Control
             }
             else if (args.Button == PointerButton.Left)
             {
-                BeginPointDrag(hit);
+                BeginPointDrag(hit, lx, ly);
                 InvalidatePaint();
                 args.Handled = true;
                 return;
@@ -556,7 +566,7 @@ public sealed class ExposureCurveControl : Control
         else if (_plotRect.Contains(lx, ly) && args.Button == PointerButton.Left)
         {
             ScreenToCurve(lx, ly, out float cx, out float cy);
-            BeginPointDrag(InsertPoint(cx, cy));
+            BeginPointDrag(InsertPoint(cx, cy), lx, ly);
             CurveChanged?.Invoke();
             InvalidatePaint();
             args.Handled = true;
@@ -575,16 +585,38 @@ public sealed class ExposureCurveControl : Control
 
         if (_draggingCurvature && HasPointerCapture && _selectedPointIdx >= 0 && _selectedPointIdx < _points.Count)
         {
-            SetSelectedCurvature(CurvatureAt(lx));
+            if (IsShiftHeld)
+            {
+                float step = (CurvatureAt(lx) - CurvatureAt(_lastLx)) * FineSpeed;
+                SetSelectedCurvature(Math.Clamp(_points[_selectedPointIdx].Curvature + step, 0f, 1f));
+            }
+            else
+            {
+                SetSelectedCurvature(CurvatureAt(lx));
+            }
+            _lastLx = lx;
             args.Handled = true;
             return;
         }
 
         if (_dragging && _draggedPointIdx >= 0 && HasPointerCapture)
         {
-            ScreenToCurve(lx, ly, out float cx, out float cy);
             int idx = _draggedPointIdx;
             var curPt = _points[idx];
+            float cx, cy;
+            if (IsShiftHeld)
+            {
+                // Fine: move by a fraction of the pointer's travel since the last move.
+                float w = Math.Max(1f, _plotRect.Width), h = Math.Max(1f, _plotRect.Height);
+                cx = Math.Clamp(curPt.X + (lx - _lastLx) * 255f / w * FineSpeed, 0f, 255f);
+                cy = Math.Clamp(curPt.Y - (ly - _lastLy) * 255f / h * FineSpeed, 0f, 255f);
+            }
+            else
+            {
+                ScreenToCurve(lx, ly, out cx, out cy);
+            }
+            _lastLx = lx;
+            _lastLy = ly;
 
             if (idx == 0)
             {
@@ -631,7 +663,6 @@ public sealed class ExposureCurveControl : Control
             ReleasePointer();
             if (_hoveredPointIdx < 0)
                 _lit = 0f;
-                InvalidatePaint();
             Cursor = UiCursor.Default;
             DragEnded?.Invoke();
             InvalidatePaint();

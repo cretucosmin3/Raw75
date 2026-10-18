@@ -108,7 +108,7 @@ internal static class AdaptiveLook
 
         float authorC = look.ContrastEv - source.ContrastEv;
         float destCNeed = look.ContrastEv - destSource.ContrastEv;
-        dest.Contrast = Math.Clamp(dest.Contrast * NeedScale(authorC, destCNeed), -100f, 100f);
+        dest.Contrast = Fit(dest.Contrast * NeedScale(authorC, destCNeed), RangedControl.Contrast);
     }
 
     /// <summary>
@@ -169,7 +169,14 @@ internal static class AdaptiveLook
         if (MathF.Abs(delta) < 0.04f)
             return 0f;
         float k = shadow ? 55f : 40f;
-        return Math.Clamp(delta * k, -100f, 100f);
+        return Fit(delta * k, shadow ? RangedControl.Shadows : RangedControl.Blacks);
+    }
+
+    /// <summary>Clamps an adapted value to the reach its slider has (Settings › Editor).</summary>
+    private static float Fit(float value, RangedControl control)
+    {
+        float reach = EditorRanges.Of(control).Peek();
+        return Math.Clamp(value, -reach, reach);
     }
 
     private static void RetargetLegacy(LookPreset preset, DevelopSettings dest, SceneMetrics destSource)
@@ -186,11 +193,11 @@ internal static class AdaptiveLook
         float authorC = look.ContrastEv - source.ContrastEv;
         float destCNeed = look.ContrastEv - destSource.ContrastEv;
         float cScale = NeedScale(authorC, destCNeed);
-        dest.Contrast = Math.Clamp(dest.Contrast * cScale, -100f, 100f);
-        dest.Highlights = Math.Clamp(dest.Highlights * cScale, -100f, 100f);
-        dest.Shadows = Math.Clamp(dest.Shadows * cScale, -100f, 100f);
-        dest.Whites = Math.Clamp(dest.Whites * cScale, -100f, 100f);
-        dest.Blacks = Math.Clamp(dest.Blacks * cScale, -100f, 100f);
+        dest.Contrast = Fit(dest.Contrast * cScale, RangedControl.Contrast);
+        dest.Highlights = Fit(dest.Highlights * cScale, RangedControl.Highlights);
+        dest.Shadows = Fit(dest.Shadows * cScale, RangedControl.Shadows);
+        dest.Whites = Fit(dest.Whites * cScale, RangedControl.Whites);
+        dest.Blacks = Fit(dest.Blacks * cScale, RangedControl.Blacks);
     }
 
     internal static float NeedScale(float authorDelta, float destNeed)

@@ -20,7 +20,7 @@ public enum GalleryThumbSize
 
 /// <summary>
 /// Full-canvas lightbox / gallery grid view:
-/// Displays a multi-column contact sheet with ready/star marks, filter tabs,
+/// Displays a multi-column contact sheet with ready / favourite marks, filter tabs,
 /// and double-click to open in develop view. Virtualized for fast rendering.
 /// </summary>
 public sealed class GalleryView : VisualElement
@@ -29,13 +29,13 @@ public sealed class GalleryView : VisualElement
     private const float Gap = 12f;
     private const float Pad = 16f;
 
-    private readonly record struct MarkCounts(int Total, int Ready, int Starred);
+    private readonly record struct MarkCounts(int Total, int Ready, int Favorites);
 
     private readonly Stack _headerBar;
     private readonly VisualElement _headerDivider;
     private readonly VisualElement _groupSep;
     private readonly IconButton _btnFilterReady;
-    private readonly IconButton _btnFilterStar;
+    private readonly IconButton _btnFilterFavorite;
     private readonly VisualElement _countLabel;
     private readonly GalleryScroller _scroller;
 
@@ -113,12 +113,12 @@ public sealed class GalleryView : VisualElement
             b.Caption = $"Ready ({_counts.Value.Ready})";
         });
 
-        _btnFilterStar = new IconButton("Starred", "star_filled");
-        _btnFilterStar.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
-        _btnFilterStar.Bind(b =>
+        _btnFilterFavorite = new IconButton("Favorites", "heart_filled");
+        _btnFilterFavorite.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
+        _btnFilterFavorite.Bind(b =>
         {
             b.Toggled = (_filter.Value & PhotoFilter.Favorite) != 0;
-            b.Caption = $"Starred ({_counts.Value.Starred})";
+            b.Caption = $"Favorites ({_counts.Value.Favorites})";
         });
 
         _groupSep = new VisualElement { Name = "Gallery_HeaderSep", IsClickthrough = true };
@@ -149,7 +149,7 @@ public sealed class GalleryView : VisualElement
         _countLabel.BindText(() =>
         {
             var n = _counts.Value;
-            return $"{n.Total} photos · {n.Ready} ready · {n.Starred} starred";
+            return $"{n.Total} photos · {n.Ready} ready · {n.Favorites} favorites";
         });
 
         _headerBar = new Stack
@@ -161,7 +161,7 @@ public sealed class GalleryView : VisualElement
             Padding = new Thickness(Pad, 0, Pad, 0),
             Style = new ElementStyle { Border = new BorderStyle { Width = 0 } }
         };
-        _headerBar.AddChild(Cluster("Gallery_Filters", btnAll, _btnFilterReady, _btnFilterStar));
+        _headerBar.AddChild(Cluster("Gallery_Filters", btnAll, _btnFilterReady, _btnFilterFavorite));
         _headerBar.AddChild(_groupSep);
         _headerBar.AddChild(Cluster("Gallery_Marks", markAll, clearAll));
         _headerBar.AddChild(_countLabel);
@@ -225,7 +225,7 @@ public sealed class GalleryView : VisualElement
         _groupSep.Style.BackColor = Theme.Hairline;
         _countLabel.Style.Text.Color = Theme.TextDim;
         _btnFilterReady.IconColor = Theme.Success;
-        _btnFilterStar.IconColor = Theme.Favorite;
+        _btnFilterFavorite.IconColor = Theme.Favorite;
         _scroller.Style.BackColor = Theme.Canvas;
         ThumbTile.StyleScrollbars(_scroller);
         InvalidatePaint();
@@ -364,13 +364,13 @@ public sealed class GalleryView : VisualElement
     {
         int total = _docs.Count;
         int ready = 0;
-        int starred = 0;
+        int favorites = 0;
         for (int i = 0; i < total; i++)
         {
             if (_docs[i].IsReady) ready++;
-            if (_docs[i].IsFavorite) starred++;
+            if (_docs[i].IsFavorite) favorites++;
         }
-        _counts.Value = new MarkCounts(total, ready, starred);
+        _counts.Value = new MarkCounts(total, ready, favorites);
     }
 
     private void UpdateFilteredIndices()
@@ -618,7 +618,7 @@ public sealed class GalleryView : VisualElement
         }
     }
 
-    /// <summary>Contact-sheet card: photo well, file name caption, index pill, ready / star badges.</summary>
+    /// <summary>Contact-sheet card: photo well, file name caption, index pill, ready / favourite badges.</summary>
     private sealed class GalleryCard : ThumbTile
     {
         private static readonly TimeSpan DoubleClickThreshold = TimeSpan.FromMilliseconds(300);
@@ -695,7 +695,7 @@ public sealed class GalleryView : VisualElement
             float h = Math.Max(1f, Transform.Height);
             float photoBottom = h - CardPad - CaptionH;
             ReadyBadge.Transform.SetAbsoluteFrame(ox + CardPad + 6f, oy + CardPad + 6f, Badge, Badge);
-            StarBadge.Transform.SetAbsoluteFrame(ox + CardPad + 6f, oy + photoBottom - 6f - Badge, Badge, Badge);
+            FavoriteBadge.Transform.SetAbsoluteFrame(ox + CardPad + 6f, oy + photoBottom - 6f - Badge, Badge, Badge);
         }
 
         protected override void PaintOverlay(SKCanvas c)

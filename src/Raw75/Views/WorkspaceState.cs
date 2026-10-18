@@ -40,7 +40,7 @@ internal sealed class WorkspaceState
     public readonly Signal<bool> MatchGray = new(false);
     public readonly Signal<int> HslBand = new(0);
 
-    /// <summary>Marks of the active photo, for the photo-view Ready / Star buttons.</summary>
+    /// <summary>Marks of the active photo, for the photo-view Ready / Favorite buttons.</summary>
     public readonly Signal<bool> HasActive = new(false);
     public readonly Signal<bool> ActiveReady = new(false);
     public readonly Signal<bool> ActiveFavorite = new(false);

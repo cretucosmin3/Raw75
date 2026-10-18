@@ -64,7 +64,7 @@ public sealed class PhotoMarkMenu : VisualElement
         favorite.Bind(i =>
         {
             bool on = _favorite.Value;
-            i.Set(on ? "Unstar" : "Star", on ? "star_filled" : "star", on ? Theme.Favorite : null, null);
+            i.Set(on ? "Remove from Favorites" : "Add to Favorites", on ? "heart_filled" : "heart", on ? Theme.Favorite : null, null);
         });
         favorite.Clicked += () => Pick(() => FavoriteToggled?.Invoke(_index, !_favorite.Peek()));
 

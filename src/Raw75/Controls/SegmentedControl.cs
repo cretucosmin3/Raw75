@@ -92,6 +92,8 @@ public class SegmentedControl : Stack
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = maxWidth > 0 ? maxWidth : Theme.RightW;
+        if (MinWidth.HasValue) w = Math.Max(w, MinWidth.Value);
+        if (MaxWidth.HasValue) w = Math.Min(w, MaxWidth.Value);
         return new SKSize(w, DefaultHeight);
     }
 

@@ -27,7 +27,7 @@ public class Filmstrip : VisualElement
     private readonly Stack _filterStack;
     private readonly IconButton _btnFilterAll;
     private readonly IconButton _btnFilterReady;
-    private readonly IconButton _btnFilterStar;
+    private readonly IconButton _btnFilterHeart;
     private readonly FilmstripScroller _scroller;
 
     private readonly Dictionary<int, Cell> _activeCells = new();
@@ -123,8 +123,8 @@ public class Filmstrip : VisualElement
         _btnFilterReady = FilterButton(IconButton.Icon("check"), PhotoFilter.Ready);
         _btnFilterReady.Clicked += () => ToggleFilterFlag(PhotoFilter.Ready);
 
-        _btnFilterStar = FilterButton(IconButton.Icon("star_filled"), PhotoFilter.Favorite);
-        _btnFilterStar.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
+        _btnFilterHeart = FilterButton(IconButton.Icon("heart_filled"), PhotoFilter.Favorite);
+        _btnFilterHeart.Clicked += () => ToggleFilterFlag(PhotoFilter.Favorite);
 
         _filterRail.AddChild(_filterStack);
         AddChild(_filterRail);
@@ -202,9 +202,9 @@ public class Filmstrip : VisualElement
         _btnFilterReady.IconColor = Theme.Success;
         _btnFilterReady.ToggledBackColor = Theme.Success.WithAlpha(36);
         _btnFilterReady.ToggledBorderColor = Theme.SuccessSoft;
-        _btnFilterStar.IconColor = Theme.Favorite;
-        _btnFilterStar.ToggledBackColor = Theme.Favorite.WithAlpha(32);
-        _btnFilterStar.ToggledBorderColor = Theme.FavoriteSoft;
+        _btnFilterHeart.IconColor = Theme.Favorite;
+        _btnFilterHeart.ToggledBackColor = Theme.Favorite.WithAlpha(32);
+        _btnFilterHeart.ToggledBorderColor = Theme.FavoriteSoft;
 
         _scroller.Style.BackColor = Theme.Filmstrip;
         ThumbTile.StyleScrollbars(_scroller);
@@ -530,7 +530,7 @@ public class Filmstrip : VisualElement
     }
 
     /// <summary>
-    /// Filmstrip thumb: photo inset in a hairline frame, read-only ready / star marks, selection pip.
+    /// Filmstrip thumb: photo inset in a hairline frame, read-only ready / favourite (heart) marks, selection pip.
     /// Marks are toggled from the photo view (the tile is too small for click targets).
     /// </summary>
     private sealed class Cell : ThumbTile
@@ -570,9 +570,9 @@ public class Filmstrip : VisualElement
             }
             if (Doc?.IsFavorite == true)
             {
-                float starY = H - 6f - r;
-                ThumbInk.Disc(c, 6f + r, starY, r, Theme.Scrim);
-                ThumbInk.Star(c, 6f + r, starY, Mark * 0.95f, Theme.Favorite, filled: true);
+                float heartY = H - 6f - r;
+                ThumbInk.Disc(c, 6f + r, heartY, r, Theme.Scrim);
+                ThumbInk.Heart(c, 6f + r, heartY, Mark * 0.9f, Theme.Favorite, filled: true);
             }
 
             // Multi-select pip; the active thumb already carries the full accent ring.
@@ -594,7 +594,7 @@ internal enum ThumbMark
 /// <summary>
 /// Shared thumbnail tile for the filmstrip and the gallery: a <see cref="Control"/> that paints the
 /// photo inside a crisp hairline frame (active = 2px accent ring, multi-selected = accent wash and a
-/// softer ring, hover = stronger hairline and a lifted shadow) and hosts the ready / star badges.
+/// softer ring, hover = stronger hairline and a lifted shadow) and hosts the ready / favourite badges.
 /// Tiles are pooled by their owners, so <see cref="Rebind"/> carries all per-photo state.
 /// </summary>
 internal abstract class ThumbTile : Control
@@ -603,7 +603,7 @@ internal abstract class ThumbTile : Control
     private float _hover;
 
     protected ThumbBadge ReadyBadge { get; }
-    protected ThumbBadge StarBadge { get; }
+    protected ThumbBadge FavoriteBadge { get; }
 
     public int Index { get; private set; } = -1;
     public PhotoDocument? Doc { get; private set; }
@@ -629,10 +629,10 @@ internal abstract class ThumbTile : Control
 
         ReadyBadge = new ThumbBadge(ThumbMark.Ready) { Name = "Thumb_Ready" };
         ReadyBadge.Clicked += () => ToggleMark(ReadyBadge);
-        StarBadge = new ThumbBadge(ThumbMark.Favorite) { Name = "Thumb_Star" };
-        StarBadge.Clicked += () => ToggleMark(StarBadge);
+        FavoriteBadge = new ThumbBadge(ThumbMark.Favorite) { Name = "Thumb_Favorite" };
+        FavoriteBadge.Clicked += () => ToggleMark(FavoriteBadge);
         AddChild(ReadyBadge);
-        AddChild(StarBadge);
+        AddChild(FavoriteBadge);
 
         Events.OnMouseUp += (_, args) =>
         {
@@ -691,7 +691,7 @@ internal abstract class ThumbTile : Control
         IsSelected = selected;
         Name = $"{NamePrefix}_{index}";
         ReadyBadge.On = doc.IsReady;
-        StarBadge.On = doc.IsFavorite;
+        FavoriteBadge.On = doc.IsFavorite;
         OnRebind(doc);
         SyncBadges();
         ApplyChrome();
@@ -714,7 +714,7 @@ internal abstract class ThumbTile : Control
 
     public void SetFavorite(bool favorite)
     {
-        StarBadge.On = favorite;
+        FavoriteBadge.On = favorite;
         SyncBadges();
         InvalidatePaint();
     }
@@ -763,7 +763,7 @@ internal abstract class ThumbTile : Control
     private void SyncBadges()
     {
         ReadyBadge.Visible = InteractiveMarks && (ReadyBadge.On || IsHovered);
-        StarBadge.Visible = InteractiveMarks && (StarBadge.On || IsHovered);
+        FavoriteBadge.Visible = InteractiveMarks && (FavoriteBadge.On || IsHovered);
     }
 
     private void ApplyChrome()
@@ -826,7 +826,7 @@ internal abstract class ThumbTile : Control
 
 /// <summary>
 /// Round ready / favourite badge on a thumbnail. Set marks are solid (Success disc with a check,
-/// Favorite star on a scrim); unset ones are a faint outline the tile reveals on hover.
+/// Favorite heart on a scrim); unset ones are a faint outline the tile reveals on hover.
 /// </summary>
 internal sealed class ThumbBadge : ButtonBase
 {
@@ -874,9 +874,9 @@ internal sealed class ThumbBadge : ButtonBase
 
         ThumbInk.Disc(c, cx, cy, r, Theme.Scrim);
         if (_on)
-            ThumbInk.Star(c, cx, cy, r * 1.35f, IsHovered ? Theme.Lighten(Theme.Favorite, 20) : Theme.Favorite, filled: true);
+            ThumbInk.Heart(c, cx, cy, r * 1.3f, IsHovered ? Theme.Lighten(Theme.Favorite, 20) : Theme.Favorite, filled: true);
         else
-            ThumbInk.Star(c, cx, cy, r * 1.25f, ink, filled: false);
+            ThumbInk.Heart(c, cx, cy, r * 1.2f, ink, filled: false);
     }
 }
 
@@ -892,9 +892,7 @@ internal static class ThumbInk
 
     // Glyphs in a 24-unit box, centred on (12, 12).
     private static readonly SKPath CheckPath = BuildPolyline(false, 20, 6, 9, 17, 4, 12);
-    private static readonly SKPath StarPath = BuildPolyline(true,
-        12, 2, 15.09f, 8.26f, 22, 9.27f, 17, 14.14f, 18.18f, 21.02f,
-        12, 17.77f, 5.82f, 21.02f, 7, 14.14f, 2, 9.27f, 8.91f, 8.26f);
+    private static readonly SKPath HeartPath = SKPath.ParseSvgPathData("M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z");
 
     public static void FillRound(SKCanvas c, SKRect rect, float radius, SKColor color)
     {
@@ -926,8 +924,8 @@ internal static class ThumbInk
     public static void Check(SKCanvas c, float cx, float cy, float size, SKColor color, float strokeWidth)
         => Glyph(c, CheckPath, cx, cy, size, color, filled: false, strokeWidth);
 
-    public static void Star(SKCanvas c, float cx, float cy, float size, SKColor color, bool filled)
-        => Glyph(c, StarPath, cx, cy, size, color, filled, 1.3f);
+    public static void Heart(SKCanvas c, float cx, float cy, float size, SKColor color, bool filled)
+        => Glyph(c, HeartPath, cx, cy, size, color, filled, 1.3f);
 
     /// <summary>Photo contain-fit in a recessed well, clipped to the well's rounded corners.</summary>
     public static void Photo(SKCanvas c, SKImage? image, SKRect well, float radius)

@@ -33,8 +33,8 @@ public class SliderRow : Control
     private readonly VisualElement _valueEl;
 
     private float _value;
-    private readonly float _min;
-    private readonly float _max;
+    private float _min;
+    private float _max;
     private string _label;
     private readonly string _valueFormat;
     private readonly bool _inline;
@@ -74,10 +74,28 @@ public class SliderRow : Control
 
     private bool IsModified => Math.Abs(_value - _defaultValue) > (_max - _min) * 0.0005f;
 
+    /// <summary>
+    /// Set from code (e.g. a photo's stored edit) the value is kept as is, even outside the range, so the
+    /// readout stays true; the bar and thumb are drawn clamped to the track. Dragging and scrolling clamp.
+    /// </summary>
     public float Value
     {
         get => _value;
-        set => SetValue(value, fire: true);
+        set => SetValue(value, fire: true, clamp: false);
+    }
+
+    public float Min => _min;
+    public float Max => _max;
+
+    /// <summary>Changes how far the slider reaches; the current value is kept (see <see cref="Value"/>).</summary>
+    public void SetRange(float min, float max)
+    {
+        max = max <= min ? min + 1f : max;
+        if (min == _min && max == _max) return;
+        _min = min;
+        _max = max;
+        UpdateValueColor();
+        InvalidatePaint();
     }
 
     public string Label
@@ -437,13 +455,13 @@ public class SliderRow : Control
         SetValue(_min + t * (_max - _min), fire: true);
     }
 
-    private void SetValue(float value, bool fire)
+    private void SetValue(float value, bool fire, bool clamp = true)
     {
-        float clamped = Math.Clamp(value, _min, _max);
-        if (Math.Abs(_value - clamped) < 0.0001f)
+        float next = clamp ? Math.Clamp(value, _min, _max) : value;
+        if (Math.Abs(_value - next) < 0.0001f)
             return;
 
-        _value = clamped;
+        _value = next;
         UpdateValueText();
         UpdateValueColor();
         InvalidatePaint();

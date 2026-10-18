@@ -14,10 +14,13 @@ using SkiaSharp;
 
 namespace Raw75.Views;
 
-/// <summary>Modal settings with Themes / General / Dev tabs. Dev dumps a memory inventory to disk.</summary>
+/// <summary>
+/// Modal settings with Themes / Editor / General / Dev tabs. Editor sets how far the tone sliders reach;
+/// Dev dumps a memory inventory to disk.
+/// </summary>
 public sealed class SettingsDialog : ModalDialog
 {
-    private enum Tab { Themes, General, Dev }
+    private enum Tab { Themes, Editor, General, Dev }
 
     private const float CardW = 1040f;
     private const float CardH = 720f;
@@ -63,6 +66,21 @@ public sealed class SettingsDialog : ModalDialog
         themesPanel.AddChild(gallery);
         Stack.SetGrow(gallery, 1f);
 
+        // Editor
+        var editorPanel = Panel("Editor");
+        editorPanel.AddChild(Label(
+            "How far each slider goes either side of zero. A photo already edited past a smaller reach keeps its value; the slider shows it at the end of the track.",
+            TextRole.Body));
+        editorPanel.AddChild(Field("Exposure",
+            RangeRow("Contrast", RangedControl.Contrast),
+            RangeRow("Saturation", RangedControl.Saturation)));
+        editorPanel.AddChild(Separator());
+        editorPanel.AddChild(Field("High Dynamic Range",
+            RangeRow("Highlight", RangedControl.Highlights),
+            RangeRow("Shadow", RangedControl.Shadows),
+            RangeRow("Whites", RangedControl.Whites),
+            RangeRow("Blacks", RangedControl.Blacks)));
+
         // General
         var generalPanel = Panel("General");
         var info = new Stack { Name = "GeneralInfo", Orientation = Orientation.Vertical, Gap = 6f };
@@ -106,6 +124,7 @@ public sealed class SettingsDialog : ModalDialog
         var panels = new (Tab Id, IconButton Button, Stack Panel)[]
         {
             (Tab.Themes, TabButton("Themes"), themesPanel),
+            (Tab.Editor, TabButton("Editor"), editorPanel),
             (Tab.General, TabButton("General"), generalPanel),
             (Tab.Dev, TabButton("Dev"), devPanel)
         };
@@ -209,6 +228,24 @@ public sealed class SettingsDialog : ModalDialog
         button.MinWidth = 76f;
         button.MinHeight = button.MaxHeight = 34f;
         return button;
+    }
+
+    /// <summary>Control name and its ±100 / ±150 / ±200 reach, saved as soon as it's picked.</summary>
+    private static Stack RangeRow(string name, RangedControl control)
+    {
+        var row = new Stack { Name = $"Range_{control}", Orientation = Orientation.Horizontal, Align = LayoutAlign.Center, Gap = 12f };
+        var key = Label(name, TextRole.Body);
+        key.MinWidth = key.MaxWidth = KeyW;
+        key.Bind(k => k.Style.Text.Color = Theme.Text);
+
+        var labels = Array.ConvertAll(EditorRanges.Choices, c => $"±{c}");
+        var choice = new SegmentedControl(labels) { MinWidth = 240f, MaxWidth = 240f };
+        choice.Bind(c => c.SelectedIndex = Array.IndexOf(EditorRanges.Choices, EditorRanges.Of(control).Value));
+        choice.SelectionChanged += i => EditorRanges.Set(control, EditorRanges.Choices[i]);
+
+        row.AddChild(key);
+        row.AddChild(choice);
+        return row;
     }
 
     /// <summary>Fixed-width key with its value filling the rest of the row.</summary>

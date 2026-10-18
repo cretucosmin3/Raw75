@@ -435,7 +435,7 @@ public sealed class WorkspaceView : View
         _zoomLabel.Events.OnMouseDown += (_, _) => _photo.ToggleZoom();
         AddElement(_zoomLabel);
 
-        // Ready / Star for the active photo, bottom-left over the photo (big enough to hit, unlike thumbs).
+        // Ready / Favorite for the active photo, bottom-left over the photo (big enough to hit, unlike thumbs).
         _markBar = new Stack
         {
             Name = "MarkBar",
@@ -456,19 +456,19 @@ public sealed class WorkspaceView : View
             b.ToggledIconColor = Theme.Success;
         });
         ready.Clicked += () => ToggleReady();
-        var star = new IconButton("Star", "star") { IconColor = Theme.Favorite, MinWidth = 86f };
-        star.Bind(b =>
+        var heart = new IconButton("Favorite", "heart") { IconColor = Theme.Favorite, MinWidth = 104f };
+        heart.Bind(b =>
         {
             bool on = _state.ActiveFavorite.Value;
             b.Toggled = on;
-            b.SetIcon(on ? "star_filled" : "star");
+            b.SetIcon(on ? "heart_filled" : "heart");
             b.ToggledBackColor = Theme.Favorite.WithAlpha(34);
             b.ToggledBorderColor = Theme.FavoriteSoft;
             b.ToggledIconColor = Theme.Favorite;
         });
-        star.Clicked += ToggleFavorite;
+        heart.Clicked += ToggleFavorite;
         _markBar.AddChild(ready);
-        _markBar.AddChild(star);
+        _markBar.AddChild(heart);
         _markBar.BindVisible(() => _state.HasActive.Value && !_state.GalleryMode.Value);
         AddElement(_markBar);
 
@@ -736,6 +736,8 @@ public sealed class WorkspaceView : View
 
         _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
+        BindRange(_con, RangedControl.Contrast);
+        BindRange(_sat, RangedControl.Saturation);
         _exposureGroup.EnableAuto(AutoExposure, "Auto Exposure");
         _exposureGroup.EnableReset(ResetExposure, "Reset Exposure");
         _exposureGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableExposure = en);
@@ -746,6 +748,10 @@ public sealed class WorkspaceView : View
         _sh = BindSlider(_hdrGroup, "Shadow", -100, 100, "0", (s, v) => s.Shadows = v, s => s.Shadows);
         _wh = BindSlider(_hdrGroup, "Whites", -100, 100, "0", (s, v) => s.Whites = v, s => s.Whites);
         _bk = BindSlider(_hdrGroup, "Blacks", -100, 100, "0", (s, v) => s.Blacks = v, s => s.Blacks);
+        BindRange(_hi, RangedControl.Highlights);
+        BindRange(_sh, RangedControl.Shadows);
+        BindRange(_wh, RangedControl.Whites);
+        BindRange(_bk, RangedControl.Blacks);
         _hdrGroup.EnableAuto(AutoHdr, "Auto HDR");
         _hdrGroup.EnableReset(ResetHdr, "Reset High Dynamic Range");
         _hdrGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableHdr = en);
@@ -1057,6 +1063,14 @@ public sealed class WorkspaceView : View
             grid.AddChild(b);
         return grid;
     }
+
+    /// <summary>Keeps <paramref name="row"/> at ±the reach chosen in Settings › Editor.</summary>
+    private static void BindRange(SliderRow row, RangedControl control) =>
+        row.Bind(r =>
+        {
+            int reach = EditorRanges.Of(control).Value;
+            r.SetRange(-reach, reach);
+        });
 
     private SliderRow BindSlider(PanelGroup group, string label, float min, float max, string fmt,
         Action<DevelopSettings, float> set, Func<DevelopSettings, float> get, float def = 0f)
@@ -1390,7 +1404,7 @@ public sealed class WorkspaceView : View
         _gallery.SetFavorite(idx, favorite);
         WorkspaceStore.SaveReadyState(doc);
         SyncActiveMarks();
-        SetStatus(favorite ? $"Starred: {doc.Name}" : $"Unstarred: {doc.Name}");
+        SetStatus(favorite ? $"Added to favorites: {doc.Name}" : $"Removed from favorites: {doc.Name}");
     }
 
     private void OpenMarkMenu(int idx, float x, float y)

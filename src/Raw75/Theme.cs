@@ -130,8 +130,9 @@ public static class Theme
     public static SKColor ButtonTextOnAccent => P.ButtonTextOnAccent;
     public static SKColor Success { get; } = new(46, 180, 80);
     public static SKColor SuccessSoft { get; } = new(46, 180, 80, 140);
-    public static SKColor Favorite { get; } = new(255, 214, 50);
-    public static SKColor FavoriteSoft { get; } = new(255, 214, 50, 140);
+    /// <summary>Favourite mark (heart).</summary>
+    public static SKColor Favorite { get; } = new(244, 63, 94);
+    public static SKColor FavoriteSoft { get; } = new(244, 63, 94, 140);
 
     /// <summary>Translucent scrim behind modal dialogs.</summary>
     public static SKColor Scrim => P.IsLight ? new SKColor(20, 20, 24, 110) : new SKColor(0, 0, 0, 150);

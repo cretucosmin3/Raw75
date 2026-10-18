@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using Blossom;
+using Blossom.Animations;
 using Blossom.Core;
 using Blossom.Core.Input;
 using Blossom.Core.Visual;
@@ -163,6 +164,10 @@ public sealed class PhotoPane : VisualElement
         return b;
     }
     private bool _showBefore;
+
+    // Before/after crossfade: 0 = edited look, 1 = baseline. A full swap takes BeforeFadeSeconds.
+    private const float BeforeFadeSeconds = 0.5f;
+    private readonly AnimatedValue _beforeFade;
     private SKRect _drawDest;
     private SKRect _drawClip;
     private bool _ownsDisplay = true;
@@ -238,6 +243,7 @@ public sealed class PhotoPane : VisualElement
                 _splitBefore = false;
                 SplitBeforeChanged?.Invoke(false);
             }
+            _beforeFade.Target = _showBefore ? 1f : 0f;
             _beforeLook.InvalidateAll();
             _tileBeforeLook.InvalidateAll();
             InvalidatePaint();
@@ -309,6 +315,7 @@ public sealed class PhotoPane : VisualElement
             if (_splitBefore && _showBefore)
             {
                 _showBefore = false;
+                _beforeFade.Snap(0f);
                 ShowBeforeChanged?.Invoke(false);
             }
             _beforeLook.InvalidateAll();
@@ -451,6 +458,9 @@ public sealed class PhotoPane : VisualElement
         Events.OnMouseHover += OnHover;
         Events.OnMouseLeave += OnLeave;
         Events.OnScroll += OnWheel;
+
+        _beforeFade = new AnimatedValue(this, 0f, BeforeFadeSeconds, Ease.InOutSine);
+        _beforeFade.Changed += _ => InvalidatePaint();
 
         this.Bind(_ =>
         {
@@ -810,23 +820,42 @@ public sealed class PhotoPane : VisualElement
         var vis = _drawClip;
         GetFrameSize(out int fwSingle, out int fhSingle);
 
-        if (_showBefore)
+        float before = _beforeFade.Value;
+        if (before >= 0.999f)
         {
-            var baseSettings = GetBaselineSettings();
-            if (!_beforeLook.Draw(canvas, dest, vis, _source, baseSettings, isFast, applyCrop,
-                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle))
-                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis, Sampling.Linear, null);
-
-            DrawTileLook(_tileBeforeLook, canvas, dest, vis, _tile, baseSettings, isFast, applyCrop, fwSingle, fhSingle, showClipping: false);
+            DrawBeforeLook(canvas, dest, vis, isFast, applyCrop, fwSingle, fhSingle);
         }
         else
         {
-            if (!_look.Draw(canvas, dest, vis, _source, _settings, isFast, applyCrop,
-                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping))
-                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis, Sampling.Linear, null);
-
-            DrawTileLook(_tileLook, canvas, dest, vis, _tile, _settings, isFast, applyCrop, fwSingle, fhSingle, _showClipping);
+            DrawAfterLook(canvas, dest, vis, isFast, applyCrop, fwSingle, fhSingle);
+            if (before > 0.001f)
+            {
+                // Mid-fade: the baseline on top at the fade's opacity.
+                using var alphaPaint = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Clamp((int)(before * 255f), 0, 255)) };
+                canvas.SaveLayer(vis, alphaPaint);
+                DrawBeforeLook(canvas, dest, vis, isFast, applyCrop, fwSingle, fhSingle);
+                canvas.Restore();
+            }
         }
+    }
+
+    private void DrawBeforeLook(SKCanvas canvas, SKRect dest, SKRect vis, bool isFast, bool applyCrop, int fw, int fh)
+    {
+        var baseSettings = GetBaselineSettings();
+        if (!_beforeLook.Draw(canvas, dest, vis, _source!, baseSettings, isFast, applyCrop,
+                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh))
+            canvas.DrawImage(_source!, SourceOf(_source!, dest, vis), vis, Sampling.Linear, null);
+
+        DrawTileLook(_tileBeforeLook, canvas, dest, vis, _tile, baseSettings, isFast, applyCrop, fw, fh, showClipping: false);
+    }
+
+    private void DrawAfterLook(SKCanvas canvas, SKRect dest, SKRect vis, bool isFast, bool applyCrop, int fw, int fh)
+    {
+        if (!_look.Draw(canvas, dest, vis, _source!, _settings!, isFast, applyCrop,
+                0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fw, fh, showClipping: _showClipping))
+            canvas.DrawImage(_source!, SourceOf(_source!, dest, vis), vis, Sampling.Linear, null);
+
+        DrawTileLook(_tileLook, canvas, dest, vis, _tile, _settings!, isFast, applyCrop, fw, fh, _showClipping);
     }
 
     private void DrawTileLook(
@@ -908,9 +937,9 @@ public sealed class PhotoPane : VisualElement
 
             DrawSplitBadges(canvas, x, w);
         }
-        else if (_showBefore)
+        else if (_beforeFade.Value > 0.01f)
         {
-            DrawBeforeBadge(canvas, w);
+            DrawBeforeBadge(canvas, w, _beforeFade.Value);
         }
 
         if (_showInfoOverlay && HasPhoto && _metadata != null)
