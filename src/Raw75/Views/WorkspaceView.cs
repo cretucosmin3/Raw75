@@ -35,6 +35,10 @@ public sealed class WorkspaceView : View
     private PresetList _presets = null!;
     private ExportDialog _export = null!;
     private NameDialog _nameDialog = null!;
+    private HdrMergeDialog _hdrMergeDialog = null!;
+    private IconButton _btnHdrTop = null!;
+    private IconButton _btnHdrBottom = null!;
+    private int _selectionPivotIndex = -1;
     private SettingsDialog _settings = null!;
     private WorkspaceGate _gate = null!;
     private PhotoViewOverlay _viewOverlay = null!;
@@ -144,6 +148,7 @@ public sealed class WorkspaceView : View
             _film.RefreshThumbs();
         };
         _session.Changed += RefreshSession;
+        _session.SelectionChanged += OnSessionSelectionChanged;
         Theme.Changed += () => ThemeApplier.Refresh(this);
 
         BuildChrome();
@@ -204,6 +209,9 @@ public sealed class WorkspaceView : View
         var folder = Chip("Folder", 214, (top - 32) * 0.5f, 92, 32, iconName: "folder");
         folder.Transform.Anchor = Anchor.Left | Anchor.Top;
         folder.Clicked += OpenWorkspace;
+        _btnHdrTop = Chip("Merge HDR…", 314, (top - 32) * 0.5f, 118, 32, iconName: "stack");
+        _btnHdrTop.Transform.Anchor = Anchor.Left | Anchor.Top;
+        _btnHdrTop.Clicked += RequestHdrMerge;
 
         float devW = 120f;
         float galW = 112f;
@@ -316,6 +324,7 @@ public sealed class WorkspaceView : View
             Visible = false
         };
         _gallery.PhotoSelected += idx => _session.Select(idx);
+        _gallery.SelectionRequested += OnItemSelectionRequested;
         _gallery.PhotoDoubleClicked += idx =>
         {
             _session.Select(idx);
@@ -447,6 +456,12 @@ public sealed class WorkspaceView : View
         _zoomLabel.Events.OnMouseDown += (_, _) => _photo.ToggleZoom();
         AddElement(_zoomLabel);
 
+        _btnHdrBottom = Chip("Merge HDR…", W - R - 14f - 56f - 12f - 148f, H - film - 14f - 34f, 148f, 34f, primary: true, iconName: "stack");
+        _btnHdrBottom.Transform.Anchor = Anchor.Right | Anchor.Bottom;
+        _btnHdrBottom.ZIndex = 120;
+        _btnHdrBottom.Visible = false;
+        _btnHdrBottom.Clicked += RequestHdrMerge;
+
         _film = new Filmstrip
         {
             Transform = new Transform(0, H - film, W, film)
@@ -455,6 +470,7 @@ public sealed class WorkspaceView : View
             }
         };
         _film.Selected += i => _session.Select(i);
+        _film.SelectionRequested += OnItemSelectionRequested;
         _film.ReadyToggled += OnReadyToggled;
         _film.FavoriteToggled += OnFavoriteToggled;
         _film.FilterChanged += f => _gallery.SetFilter(f);
@@ -506,6 +522,10 @@ public sealed class WorkspaceView : View
         _nameDialog.Confirmed += OnPresetNamed;
         AddElement(_nameDialog);
 
+        _hdrMergeDialog = new HdrMergeDialog();
+        _hdrMergeDialog.MergeSucceeded += OnHdrMergeSucceeded;
+        AddElement(_hdrMergeDialog);
+
         _settings = new SettingsDialog();
         _settings.CacheCleared += OnCacheCleared;
         AddElement(_settings);
@@ -523,6 +543,7 @@ public sealed class WorkspaceView : View
         };
         _markMenu.ReadyToggled += OnReadyToggled;
         _markMenu.FavoriteToggled += OnFavoriteToggled;
+        _markMenu.HdrMergeRequested += RequestHdrMerge;
         AddElement(_markMenu);
 
         var root = new WorkspaceRoot(this)
@@ -960,11 +981,12 @@ public sealed class WorkspaceView : View
 
     private void RefreshSession()
     {
-        _film.Bind(_session.Documents, _session.ActiveIndex);
-        if (_isGalleryMode) _gallery.Bind(_session.Documents, _session.ActiveIndex);
+        _film.Bind(_session.Documents, _session.ActiveIndex, _session.SelectedIndices);
+        if (_isGalleryMode) _gallery.Bind(_session.Documents, _session.ActiveIndex, _session.SelectedIndices);
         _filmThumb = _session.Active?.Thumb;
         var d = _session.Active;
         UpdateTitleBadge();
+        UpdateHdrButton();
         if (d == null)
         {
             _photo.SetDeveloped(null, owns: false);
@@ -1049,7 +1071,7 @@ public sealed class WorkspaceView : View
 
             ApplyLayout();
 
-            _gallery.Bind(_session.Documents, _session.ActiveIndex);
+            _gallery.Bind(_session.Documents, _session.ActiveIndex, _session.SelectedIndices);
             _gallery.RefreshThumbs();
             if (_session.Active != null)
             {
@@ -1202,6 +1224,23 @@ public sealed class WorkspaceView : View
             _zoomLabel.Transform.Anchor = Anchor.Right | Anchor.Bottom;
         }
 
+        if (_btnHdrBottom != null)
+        {
+            float btnW = 148f;
+            float btnH = 34f;
+            if (_isGalleryMode)
+            {
+                float galleryColW = GetGalleryColWidth(W);
+                _btnHdrBottom.Transform.SetAbsoluteFrame(W - galleryColW - 16f - btnW, H - 16f - btnH, btnW, btnH);
+                _btnHdrBottom.Transform.Anchor = Anchor.Right | Anchor.Bottom;
+            }
+            else
+            {
+                _btnHdrBottom.Transform.SetAbsoluteFrame(W - R - 14f - 56f - 12f - btnW, H - film - 14f - btnH, btnW, btnH);
+                _btnHdrBottom.Transform.Anchor = Anchor.Right | Anchor.Bottom;
+            }
+        }
+
         UpdateStatusPosition();
     }
 
@@ -1261,7 +1300,78 @@ public sealed class WorkspaceView : View
     {
         if (idx < 0 || idx >= _session.Documents.Count) return;
         var doc = _session.Documents[idx];
-        _markMenu.Open(idx, doc.IsReady, doc.IsFavorite, x, y, Width, Height);
+        bool canMerge = _session.SelectedIndices.Count >= 2 && _session.SelectedIndices.Count <= 7;
+        _markMenu.Open(idx, doc.IsReady, doc.IsFavorite, x, y, Width, Height, showHdrMerge: canMerge);
+    }
+
+    private void RequestHdrMerge()
+    {
+        var selected = _session.GetSelectedDocuments();
+        if (selected.Count < 2)
+        {
+            SetStatus("Select at least 2 photos (up to 7) to merge HDR.");
+            return;
+        }
+        if (selected.Count > 7)
+        {
+            SetStatus("Maximum 7 photos supported for HDR merge.");
+            return;
+        }
+        _hdrMergeDialog.Open(selected);
+    }
+
+    private void OnHdrMergeSucceeded(string path)
+    {
+        var doc = _session.Add(path, select: true);
+        WorkspaceStore.SaveSession(WorkspaceStore.Root, path, _session.Documents.Select(d => d.Path));
+        SetStatus($"HDR merge complete: {Path.GetFileName(path)}");
+    }
+
+    private void OnItemSelectionRequested(int index, bool ctrl, bool shift)
+    {
+        if (ctrl)
+        {
+            _session.ToggleSelection(index);
+            _selectionPivotIndex = index;
+        }
+        else if (shift)
+        {
+            int start = _selectionPivotIndex >= 0 ? _selectionPivotIndex : _session.ActiveIndex;
+            if (start < 0) start = index;
+            _session.SelectRange(start, index);
+        }
+        else
+        {
+            _session.Select(index);
+            _selectionPivotIndex = index;
+        }
+    }
+
+    private void OnSessionSelectionChanged()
+    {
+        _film.SetSelection(_session.SelectedIndices, _session.ActiveIndex);
+        if (_isGalleryMode) _gallery.SetSelection(_session.SelectedIndices, _session.ActiveIndex);
+        UpdateHdrButton();
+    }
+
+    private void UpdateHdrButton()
+    {
+        int count = _session.SelectedIndices.Count;
+        bool canMerge = count >= 2 && count <= 7;
+        if (_btnHdrBottom != null)
+        {
+            _btnHdrBottom.Visible = canMerge;
+            if (canMerge)
+            {
+                _btnHdrBottom.Caption = $"Merge HDR ({count})…";
+            }
+            _btnHdrBottom.InvalidatePaint();
+        }
+        if (_btnHdrTop != null)
+        {
+            _btnHdrTop.Caption = canMerge ? $"Merge HDR ({count})…" : "Merge HDR…";
+            _btnHdrTop.InvalidatePaint();
+        }
     }
 
     private void OnLivePreview(PhotoDocument doc)
@@ -2210,6 +2320,10 @@ public sealed class WorkspaceView : View
                 if (key == Key.Escape) { _export.Close(); return; }
                 if (key == Key.Enter) { _export.Confirm(); return; }
             }
+            else if (_hdrMergeDialog != null && _hdrMergeDialog.Visible)
+            {
+                if (key == Key.Escape) { _hdrMergeDialog.Close(); return; }
+            }
             else if (_settings != null && _settings.Visible)
             {
                 if (key == Key.Escape) { _settings.Close(); return; }
@@ -2232,6 +2346,7 @@ public sealed class WorkspaceView : View
         if (ctrl && key == Key.Z) { Undo(); return; }
         if (ctrl && key == Key.O) { OpenFiles(); return; }
         if (ctrl && key == Key.E) { StartExport(); return; }
+        if (ctrl && key == Key.M) { RequestHdrMerge(); return; }
 
         // 3. Mode-specific navigation:
         if (_isGalleryMode)

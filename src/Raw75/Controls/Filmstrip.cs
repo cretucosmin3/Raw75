@@ -42,10 +42,13 @@ public class Filmstrip : VisualElement
     private float _panStartScroll;
 
     public event Action<int>? Selected;
+    public event Action<int, bool, bool>? SelectionRequested;
     public event Action<int, bool>? ReadyToggled;
     public event Action<int, bool>? FavoriteToggled;
     public event Action<PhotoFilter>? FilterChanged;
     public event Action<int, float, float>? ContextMenuRequested;
+
+    private readonly HashSet<int> _selectedIndices = new();
 
     public PhotoFilter ActiveFilter => _filter;
 
@@ -226,10 +229,20 @@ public class Filmstrip : VisualElement
         InvalidatePaint();
     }
 
-    public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex)
+    public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex, IEnumerable<int>? selectedIndices = null)
     {
         _docs = docs ?? Array.Empty<PhotoDocument>();
         _activeIndex = activeIndex;
+        _selectedIndices.Clear();
+        if (selectedIndices != null)
+        {
+            foreach (var idx in selectedIndices)
+                _selectedIndices.Add(idx);
+        }
+        else if (activeIndex >= 0)
+        {
+            _selectedIndices.Add(activeIndex);
+        }
         _lastMinIdx = -1;
         _lastMaxIdx = -1;
 
@@ -237,6 +250,28 @@ public class Filmstrip : VisualElement
         ApplyFilterChrome();
         UpdateContentSize();
         UpdateVirtualCells(force: true);
+        EnsureVisible(activeIndex);
+        InvalidatePaint();
+    }
+
+    public void SetSelection(IEnumerable<int> selectedIndices, int activeIndex)
+    {
+        _selectedIndices.Clear();
+        if (selectedIndices != null)
+        {
+            foreach (var idx in selectedIndices)
+                _selectedIndices.Add(idx);
+        }
+        else if (activeIndex >= 0)
+        {
+            _selectedIndices.Add(activeIndex);
+        }
+        _activeIndex = activeIndex;
+        foreach (var pair in _activeCells)
+        {
+            int docIdx = pair.Value.Index;
+            pair.Value.SetSelection(docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
+        }
         EnsureVisible(activeIndex);
         InvalidatePaint();
     }
@@ -454,7 +489,7 @@ public class Filmstrip : VisualElement
             {
                 if (force)
                 {
-                    cell.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
+                    cell.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
                     cell.Transform.SetAbsoluteFrame(cellAbsX, cellAbsY, ThumbW, cellH);
                 }
                 else if (originChanged)
@@ -475,7 +510,7 @@ public class Filmstrip : VisualElement
                     _scroller.AddChild(cell);
                 }
 
-                cell.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
+                cell.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
                 cell.Transform.SetAbsoluteFrame(cellAbsX, cellAbsY, ThumbW, cellH);
                 cell.Visible = true;
                 _activeCells[vis] = cell;
@@ -483,11 +518,28 @@ public class Filmstrip : VisualElement
         }
     }
 
+    private void OnCellClicked(int index, bool ctrl, bool shift)
+    {
+        if (SelectionRequested != null)
+        {
+            SelectionRequested.Invoke(index, ctrl, shift);
+        }
+        else
+        {
+            OnCellSelected(index);
+        }
+    }
+
     private void OnCellSelected(int index)
     {
         _activeIndex = index;
+        _selectedIndices.Clear();
+        _selectedIndices.Add(index);
         foreach (var pair in _activeCells)
-            pair.Value.SetActive(pair.Value.Index == index);
+        {
+            int docIdx = pair.Value.Index;
+            pair.Value.SetSelection(docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
+        }
         EnsureVisible(index);
         Selected?.Invoke(index);
     }
@@ -533,8 +585,10 @@ public class Filmstrip : VisualElement
         private readonly ThumbWell _thumb;
         private readonly VisualElement _ready;
         private readonly VisualElement _star;
+        private readonly VisualElement _selectPip;
         private PhotoDocument? _doc;
         private bool _active;
+        private bool _selected;
         private bool _isReady;
         private bool _isFavorite;
 
@@ -602,27 +656,54 @@ public class Filmstrip : VisualElement
                 args.Handled = true;
             };
 
+            _selectPip = new VisualElement
+            {
+                Name = "Cell_SelectPip",
+                IsClickthrough = true,
+                Visible = false,
+                ZIndex = 6,
+                BackgroundSvg = IconStore.LoadSvg("check"),
+                BackgroundImageScale = ImageScaleMode.Contain,
+                BackgroundImageTintBlendMode = SKBlendMode.SrcIn,
+                BackgroundImageTintColor = SKColors.White,
+                Style = new ElementStyle
+                {
+                    BackColor = Theme.Accent,
+                    Border = new BorderStyle { Width = 1f, Color = SKColors.White, Roundness = 8f }
+                }
+            };
+
             AddChild(_thumb);
             AddChild(_ready);
             AddChild(_star);
+            AddChild(_selectPip);
 
             Events.OnMouseEnter += _ =>
             {
-                if (!_active)
+                if (_active) return;
+                if (_selected)
                 {
-                    Style.BackColor = Theme.Hover;
-                    Style.Border.Color = Theme.HairlineStrong;
+                    Style.BackColor = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 65);
+                    Style.Border.Color = Theme.Accent;
                     InvalidatePaint();
+                    return;
                 }
+                Style.BackColor = Theme.Hover;
+                Style.Border.Color = Theme.HairlineStrong;
+                InvalidatePaint();
             };
             Events.OnMouseLeave += _ =>
             {
-                if (!_active)
+                if (_active) return;
+                if (_selected)
                 {
-                    Style.BackColor = Theme.Section;
-                    Style.Border.Color = CellBorderColor();
+                    ApplyStyle();
                     InvalidatePaint();
+                    return;
                 }
+                Style.BackColor = Theme.Section;
+                Style.Border.Color = CellBorderColor();
+                InvalidatePaint();
             };
 
             Events.OnMouseUp += (_, args) =>
@@ -635,27 +716,26 @@ public class Filmstrip : VisualElement
             Events.OnClick += (_, args) =>
             {
                 if (args.Button != (int)MouseButton.Left) return;
-                _owner.OnCellSelected(_index);
+                bool ctrl = (ParentView?.Events.IsControlDown ?? false) || Events.IsControlDown ||
+                            Events.IsKeyDown(Key.SuperLeft) || Events.IsKeyDown(Key.SuperRight) ||
+                            (ParentView?.Events.IsKeyDown(Key.SuperLeft) ?? false) || (ParentView?.Events.IsKeyDown(Key.SuperRight) ?? false);
+                bool shift = (ParentView?.Events.IsShiftDown ?? false) || Events.IsShiftDown;
+                _owner.OnCellClicked(_index, ctrl, shift);
                 args.Handled = true;
             };
         }
 
-        public void Rebind(int index, PhotoDocument doc, bool active)
+        public void Rebind(int index, PhotoDocument doc, bool active, bool selected = false)
         {
             _index = index;
             _doc = doc;
             _active = active;
+            _selected = selected;
             _isReady = doc.IsReady;
             _isFavorite = doc.IsFavorite;
             Name = $"FilmstripCell_{index}";
 
-            Style.BackColor = active ? Theme.Selected : Theme.Section;
-            Style.Border.Width = active ? 1.5f : 1f;
-            Style.Border.Color = active ? Theme.Accent : CellBorderColor();
-            Style.Border.Roundness = Theme.RadiusSm;
-            Style.Shadow = active
-                ? new ShadowStyle(0, 2f, 4, 4, new SKColor(255, 153, 51, 80))
-                : new ShadowStyle(0, 1.5f, 2, 2, new SKColor(0, 0, 0, 60));
+            ApplyStyle();
 
             _thumb.Name = $"{Name}_Thumb";
             _thumb.SetImage(GetValidImage());
@@ -678,16 +758,53 @@ public class Filmstrip : VisualElement
             return null;
         }
 
-        public void SetActive(bool active)
+        public void SetSelection(bool active, bool selected)
         {
             _active = active;
-            Style.BackColor = active ? Theme.Selected : Theme.Section;
-            Style.Border.Width = active ? 1.5f : 1f;
-            Style.Border.Color = active ? Theme.Accent : CellBorderColor();
-            Theme.ApplyCardShadow(Style);
-            if (active && Theme.UseShadows && Style.Shadow != null)
-                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 70);
+            _selected = selected;
+            ApplyStyle();
             InvalidatePaint();
+        }
+
+        public void SetActive(bool active)
+        {
+            SetSelection(active, _selected);
+        }
+
+        private void ApplyStyle()
+        {
+            if (_active)
+            {
+                Style.BackColor = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 50);
+                Style.Border.Width = 2.5f;
+                Style.Border.Color = Theme.Accent;
+                Style.Border.Roundness = Theme.RadiusSm;
+                Theme.ApplyCardShadow(Style);
+                if (Theme.UseShadows && Style.Shadow != null)
+                    Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 110);
+            }
+            else if (_selected)
+            {
+                Style.BackColor = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 45);
+                Style.Border.Width = 2f;
+                Style.Border.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 225);
+                Style.Border.Roundness = Theme.RadiusSm;
+                Theme.ApplyCardShadow(Style);
+                if (Theme.UseShadows && Style.Shadow != null)
+                    Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 70);
+            }
+            else
+            {
+                Style.BackColor = Theme.Section;
+                Style.Border.Width = 1f;
+                Style.Border.Color = CellBorderColor();
+                Style.Border.Roundness = Theme.RadiusSm;
+                Theme.ApplyCardShadow(Style);
+            }
+
+            _selectPip.Visible = _selected || _active;
+            _selectPip.Style.BackColor = _active ? Theme.Accent : new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 220);
+            _selectPip.InvalidatePaint();
         }
 
         public void RefreshTheme()
@@ -729,7 +846,7 @@ public class Filmstrip : VisualElement
             _ready.Style.Border.Color = _isReady ? Theme.Success : Theme.HairlineSubtle;
             _ready.Style.Border.Roundness = 9f;
             _ready.InvalidatePaint();
-            if (!_active)
+            if (!_active && !_selected)
             {
                 Style.Border.Color = CellBorderColor();
                 InvalidatePaint();
@@ -745,7 +862,7 @@ public class Filmstrip : VisualElement
             _star.Style.Border.Width = 0;
             _star.Style.Border.Color = SKColors.Transparent;
             _star.InvalidatePaint();
-            if (!_active)
+            if (!_active && !_selected)
             {
                 Style.Border.Color = CellBorderColor();
                 InvalidatePaint();
@@ -762,6 +879,7 @@ public class Filmstrip : VisualElement
             _thumb.Transform.SetAbsoluteFrame(originX + 1, originY + 1, w - 2, h - 2);
             _ready.Transform.SetAbsoluteFrame(originX + 4, originY + 4, 18, 18);
             _star.Transform.SetAbsoluteFrame(originX + 4, originY + h - 20, 16, 16);
+            _selectPip.Transform.SetAbsoluteFrame(originX + w - 20, originY + 4, 16, 16);
         }
 
         private static VisualElement MakeMarkButton(string name)

@@ -19,11 +19,13 @@ public sealed class PhotoMarkMenu : VisualElement
     private readonly VisualElement _card;
     private readonly IconButton _btnReady;
     private readonly IconButton _btnFavorite;
+    private readonly IconButton _btnHdrMerge;
 
     private int _index = -1;
 
     public event Action<int, bool>? ReadyToggled;
     public event Action<int, bool>? FavoriteToggled;
+    public event Action? HdrMergeRequested;
 
     public PhotoMarkMenu()
     {
@@ -50,6 +52,7 @@ public sealed class PhotoMarkMenu : VisualElement
 
         _btnReady = new IconButton("Ready", "check");
         _btnFavorite = new IconButton("⭐ Favorite", "star");
+        _btnHdrMerge = new IconButton("Merge HDR…", "stack");
 
         _btnReady.Clicked += () =>
         {
@@ -63,9 +66,15 @@ public sealed class PhotoMarkMenu : VisualElement
             FavoriteToggled?.Invoke(_index, next);
             Close();
         };
+        _btnHdrMerge.Clicked += () =>
+        {
+            HdrMergeRequested?.Invoke();
+            Close();
+        };
 
         _card.AddChild(_btnReady);
         _card.AddChild(_btnFavorite);
+        _card.AddChild(_btnHdrMerge);
         AddChild(_card);
 
         Events.OnMouseDown += (_, args) =>
@@ -84,20 +93,25 @@ public sealed class PhotoMarkMenu : VisualElement
         };
     }
 
-    public void Open(int index, bool ready, bool favorite, float x, float y, float viewW, float viewH)
+    private bool _showHdrMerge = false;
+
+    public void Open(int index, bool ready, bool favorite, float x, float y, float viewW, float viewH, bool showHdrMerge = false)
     {
         _index = index;
+        _showHdrMerge = showHdrMerge;
         _btnReady.Toggled = ready;
         _btnReady.Caption = ready ? "Unmark Ready" : "Mark Ready";
         _btnFavorite.Toggled = favorite;
         _btnFavorite.Caption = favorite ? "Unstar" : "⭐ Favorite";
         _btnFavorite.SetIcon(favorite ? "star_filled" : "star");
+        _btnHdrMerge.Visible = showHdrMerge;
 
+        float h = showHdrMerge ? (CardH + BtnH + 4f) : CardH;
         float cardX = Math.Clamp(x, 8f, Math.Max(8f, viewW - CardW - 8f));
-        float cardY = Math.Clamp(y, 8f, Math.Max(8f, viewH - CardH - 8f));
+        float cardY = Math.Clamp(y, 8f, Math.Max(8f, viewH - h - 8f));
 
         Transform.SetAbsoluteFrame(0, 0, viewW, viewH);
-        _card.Transform.SetAbsoluteFrame(cardX, cardY, CardW, CardH);
+        _card.Transform.SetAbsoluteFrame(cardX, cardY, CardW, h);
         LayoutCard();
         Visible = true;
         InvalidateLayout();
@@ -139,5 +153,7 @@ public sealed class PhotoMarkMenu : VisualElement
         float innerW = CardW - Pad * 2f;
         _btnReady.Transform.SetAbsoluteFrame(ox + Pad, oy + Pad, innerW, BtnH);
         _btnFavorite.Transform.SetAbsoluteFrame(ox + Pad, oy + Pad + BtnH + 4f, innerW, BtnH);
+        if (_showHdrMerge)
+            _btnHdrMerge.Transform.SetAbsoluteFrame(ox + Pad, oy + Pad + (BtnH + 4f) * 2f, innerW, BtnH);
     }
 }

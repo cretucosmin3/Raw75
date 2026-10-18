@@ -73,12 +73,15 @@ public sealed class GalleryView : VisualElement
     private int _lastCols = -1;
 
     public event Action<int>? PhotoSelected;
+    public event Action<int, bool, bool>? SelectionRequested;
     public event Action<int>? PhotoDoubleClicked;
     public event Action<int, bool>? ReadyToggled;
     public event Action<int, bool>? FavoriteToggled;
     public event Action? BatchReadyChanged;
     public event Action<PhotoFilter>? FilterChanged;
     public event Action<int, float, float>? ContextMenuRequested;
+
+    private readonly HashSet<int> _selectedIndices = new();
 
     public PhotoFilter ActiveFilter => _filter;
 
@@ -207,10 +210,20 @@ public sealed class GalleryView : VisualElement
         InvalidatePaint();
     }
 
-    public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex)
+    public void Bind(IReadOnlyList<PhotoDocument> docs, int activeIndex, IEnumerable<int>? selectedIndices = null)
     {
         _docs = docs ?? Array.Empty<PhotoDocument>();
         _activeIndex = activeIndex;
+        _selectedIndices.Clear();
+        if (selectedIndices != null)
+        {
+            foreach (var idx in selectedIndices)
+                _selectedIndices.Add(idx);
+        }
+        else if (activeIndex >= 0)
+        {
+            _selectedIndices.Add(activeIndex);
+        }
         _lastFirstRow = -1;
         _lastLastRow = -1;
 
@@ -230,12 +243,27 @@ public sealed class GalleryView : VisualElement
         InvalidatePaint();
     }
 
+    public void SetSelection(IEnumerable<int> selectedIndices, int activeIndex)
+    {
+        _selectedIndices.Clear();
+        if (selectedIndices != null)
+        {
+            foreach (var idx in selectedIndices)
+                _selectedIndices.Add(idx);
+        }
+        else if (activeIndex >= 0)
+        {
+            _selectedIndices.Add(activeIndex);
+        }
+        _activeIndex = activeIndex;
+        foreach (var card in _activeCards.Values)
+            card.SetSelection(card.Index == activeIndex, _selectedIndices.Contains(card.Index));
+        InvalidatePaint();
+    }
+
     public void SetSelected(int index)
     {
-        _activeIndex = index;
-        foreach (var card in _activeCards.Values)
-            card.SetActive(card.Index == index);
-        InvalidatePaint();
+        SetSelection(new[] { index }, index);
     }
 
     public void SetReady(int index, bool ready)
@@ -543,7 +571,7 @@ public sealed class GalleryView : VisualElement
             {
                 if (force || card.Index != docIdx)
                 {
-                    card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
+                    card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
                     card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
                 }
                 else if (boundsChanged)
@@ -564,11 +592,23 @@ public sealed class GalleryView : VisualElement
                     _scroller.AddChild(card);
                 }
 
-                card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex);
+                card.Rebind(docIdx, _docs[docIdx], docIdx == _activeIndex, _selectedIndices.Contains(docIdx));
                 card.Transform.SetAbsoluteFrame(cx, cy, actualCellW, CardH);
                 card.Visible = true;
                 _activeCards[itemIdx] = card;
             }
+        }
+    }
+
+    internal void OnCardClickedWithModifiers(int index, bool ctrl, bool shift)
+    {
+        if (SelectionRequested != null)
+        {
+            SelectionRequested.Invoke(index, ctrl, shift);
+        }
+        else
+        {
+            OnCardClicked(index);
         }
     }
 
@@ -653,6 +693,7 @@ public sealed class GalleryView : VisualElement
         private int _index;
         private PhotoDocument? _doc;
         private bool _active;
+        private bool _selected;
         private bool _isReady;
         private bool _isFavorite;
         private DateTime _lastClickTime = DateTime.MinValue;
@@ -794,21 +835,30 @@ public sealed class GalleryView : VisualElement
 
             Events.OnMouseEnter += _ =>
             {
-                if (!_active)
+                if (_active) return;
+                if (_selected)
                 {
-                    Style.BackColor = Theme.Hover;
-                    Style.Border.Color = Theme.HairlineStrong;
+                    Style.BackColor = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 65);
+                    Style.Border.Color = Theme.Accent;
                     InvalidatePaint();
+                    return;
                 }
+                Style.BackColor = Theme.Hover;
+                Style.Border.Color = Theme.HairlineStrong;
+                InvalidatePaint();
             };
             Events.OnMouseLeave += _ =>
             {
-                if (!_active)
+                if (_active) return;
+                if (_selected)
                 {
-                    Style.BackColor = Theme.Section;
-                    Style.Border.Color = CardBorderColor();
+                    ApplyStyle();
                     InvalidatePaint();
+                    return;
                 }
+                Style.BackColor = Theme.Section;
+                Style.Border.Color = CardBorderColor();
+                InvalidatePaint();
             };
 
             Events.OnMouseUp += (_, args) =>
@@ -830,18 +880,23 @@ public sealed class GalleryView : VisualElement
                 else
                 {
                     _lastClickTime = now;
-                    _owner.OnCardClicked(_index);
+                    bool ctrl = (ParentView?.Events.IsControlDown ?? false) || Events.IsControlDown ||
+                                Events.IsKeyDown(Key.SuperLeft) || Events.IsKeyDown(Key.SuperRight) ||
+                                (ParentView?.Events.IsKeyDown(Key.SuperLeft) ?? false) || (ParentView?.Events.IsKeyDown(Key.SuperRight) ?? false);
+                    bool shift = (ParentView?.Events.IsShiftDown ?? false) || Events.IsShiftDown;
+                    _owner.OnCardClickedWithModifiers(_index, ctrl, shift);
                 }
                 args.Handled = true;
             };
         }
 
-        public void Rebind(int index, PhotoDocument doc, bool active)
+        public void Rebind(int index, PhotoDocument doc, bool active, bool selected = false)
         {
             bool docChanged = _doc != doc || _index != index;
             _index = index;
             _doc = doc;
             _active = active;
+            _selected = selected;
             _isReady = doc.IsReady;
             _isFavorite = doc.IsFavorite;
             Name = $"GalleryCard_{index}";
@@ -849,12 +904,7 @@ public sealed class GalleryView : VisualElement
             if (_doc.Look == null)
                 WorkspaceStore.HydrateLook(_doc);
 
-            Style.BackColor = active ? Theme.Selected : Theme.Section;
-            Style.Border.Width = active ? 2f : 1f;
-            Style.Border.Color = active ? Theme.Accent : CardBorderColor();
-            Theme.ApplyCardShadow(Style);
-            if (active && Theme.UseShadows && Style.Shadow != null)
-                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 80);
+            ApplyStyle();
 
             _caption.Name = $"{Name}_Caption";
             _caption.Text = doc.Name;
@@ -887,17 +937,80 @@ public sealed class GalleryView : VisualElement
             return null;
         }
 
-        public void SetActive(bool active)
+        public void SetSelection(bool active, bool selected)
         {
             _active = active;
-            Style.BackColor = active ? Theme.Selected : Theme.Section;
-            Style.Border.Width = active ? 2f : 1f;
-            Style.Border.Color = active ? Theme.Accent : CardBorderColor();
-            Theme.ApplyCardShadow(Style);
-            if (active && Theme.UseShadows && Style.Shadow != null)
-                Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 80);
-            _caption.Style.Text.Color = active ? Theme.Accent : Theme.Text;
+            _selected = selected;
+            ApplyStyle();
+            if (_caption.Style?.Text != null)
+                _caption.Style.Text.Color = active ? Theme.Accent : Theme.Text;
             InvalidatePaint();
+        }
+
+        public void SetActive(bool active)
+        {
+            SetSelection(active, _selected);
+        }
+
+        private void ApplyStyle()
+        {
+            if (_active)
+            {
+                Style.BackColor = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 50);
+                Style.Border.Width = 2.5f;
+                Style.Border.Color = Theme.Accent;
+                Theme.ApplyCardShadow(Style);
+                if (Theme.UseShadows && Style.Shadow != null)
+                    Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 110);
+            }
+            else if (_selected)
+            {
+                Style.BackColor = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 45);
+                Style.Border.Width = 2f;
+                Style.Border.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 225);
+                Theme.ApplyCardShadow(Style);
+                if (Theme.UseShadows && Style.Shadow != null)
+                    Style.Shadow.Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 70);
+            }
+            else
+            {
+                Style.BackColor = Theme.Section;
+                Style.Border.Width = 1f;
+                Style.Border.Color = CardBorderColor();
+                Theme.ApplyCardShadow(Style);
+            }
+
+            if (_indexBadge != null)
+            {
+                if (_active)
+                {
+                    _indexBadge.Text = $"#{_index + 1} ●";
+                    _indexBadge.Style.BackColor = Theme.Accent;
+                    if (_indexBadge.Style.Text != null) _indexBadge.Style.Text.Color = Theme.ButtonTextOnAccent;
+                    _indexBadge.Style.Border.Color = Theme.Accent;
+                }
+                else if (_selected)
+                {
+                    _indexBadge.Text = $"#{_index + 1} ✓";
+                    _indexBadge.Style.BackColor = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, 220);
+                    if (_indexBadge.Style.Text != null) _indexBadge.Style.Text.Color = Theme.ButtonTextOnAccent;
+                    _indexBadge.Style.Border.Color = Theme.Accent;
+                }
+                else
+                {
+                    _indexBadge.Text = $"#{_index + 1}";
+                    _indexBadge.Style.BackColor = new SKColor(0, 0, 0, 150);
+                    if (_indexBadge.Style.Text != null) _indexBadge.Style.Text.Color = Theme.TextDim;
+                    _indexBadge.Style.Border.Color = SKColors.Transparent;
+                }
+                _indexBadge.InvalidatePaint();
+            }
+
+            if (_caption?.Style?.Text != null)
+            {
+                _caption.Style.Text.Color = _active ? Theme.Accent : (_selected ? Theme.Text : Theme.TextDim);
+                _caption.InvalidatePaint();
+            }
         }
 
         public void RefreshTheme()
@@ -906,7 +1019,7 @@ public sealed class GalleryView : VisualElement
             UpdateReadyStyle();
             UpdateStarStyle();
             if (_caption.Style?.Text != null)
-                _caption.Style.Text.Color = _active ? Theme.Accent : Theme.Text;
+                _caption.Style.Text.Color = _active ? Theme.Accent : (_selected ? Theme.Text : Theme.TextDim);
             InvalidatePaint();
         }
 
@@ -941,7 +1054,7 @@ public sealed class GalleryView : VisualElement
             _readyBtn.Style.Border.Color = _isReady ? Theme.Success : Theme.HairlineSubtle;
             _readyBtn.Style.Border.Roundness = 11f;
             _readyBtn.InvalidatePaint();
-            if (!_active)
+            if (!_active && !_selected)
             {
                 Style.Border.Color = CardBorderColor();
                 InvalidatePaint();
@@ -957,7 +1070,7 @@ public sealed class GalleryView : VisualElement
             _starBtn.Style.Border.Width = 0;
             _starBtn.Style.Border.Color = SKColors.Transparent;
             _starBtn.InvalidatePaint();
-            if (!_active)
+            if (!_active && !_selected)
             {
                 Style.Border.Color = CardBorderColor();
                 InvalidatePaint();
