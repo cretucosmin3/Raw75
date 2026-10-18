@@ -33,6 +33,7 @@ internal static class Program
 
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Log.Info("Application exiting");
         NativeCrash.Install();
+        Raw75.Update.SelfUpdate.CleanUpInBackground();
 
         Theme.Apply(Theme.Find(Raw75.Io.UiPrefs.LoadThemeId()), persist: false, notify: false);
 

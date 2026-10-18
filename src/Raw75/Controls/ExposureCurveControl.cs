@@ -307,7 +307,7 @@ public sealed class ExposureCurveControl : Control
             if (pt.Curvature < 0.2f)
             {
                 using var pip = new SKPaint { Color = selected || active ? Theme.Accent : Theme.Well, IsAntialias = true };
-                float d = 2.2f;
+                float d = 3f;
                 using var diamond = new SKPath();
                 diamond.MoveTo(sx, sy - d);
                 diamond.LineTo(sx + d, sy);

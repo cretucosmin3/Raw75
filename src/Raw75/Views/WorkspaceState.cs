@@ -45,6 +45,9 @@ internal sealed class WorkspaceState
     public readonly Signal<bool> ActiveReady = new(false);
     public readonly Signal<bool> ActiveFavorite = new(false);
 
+    /// <summary>A newer release found on GitHub, or null; shows the Update button.</summary>
+    public readonly Signal<Raw75.Update.UpdateInfo?> AvailableUpdate = new(null);
+
     /// <summary>Number of photos in the current multi-selection.</summary>
     public readonly Signal<int> SelectionCount = new(0);
 

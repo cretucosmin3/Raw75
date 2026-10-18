@@ -11,7 +11,7 @@ namespace Raw75.Controls;
 internal static class PlotChrome
 {
     public const float CurveWidth = 1.75f;
-    public const float HandleR = 4.5f;
+    public const float HandleR = 6.5f;
     public const float HandleHitR = 14f;
 
     /// <summary>Recessed plot background; <paramref name="hover"/> (0–1) lifts the well slightly.</summary>

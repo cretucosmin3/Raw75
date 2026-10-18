@@ -19,8 +19,8 @@ public sealed class SettingsDialog : ModalDialog
 {
     private enum Tab { Themes, General, Dev }
 
-    private const float CardW = 880f;
-    private const float CardH = 620f;
+    private const float CardW = 1040f;
+    private const float CardH = 720f;
     private const float KeyW = 150f;
 
     private readonly Signal<Tab> _tab = new(Tab.Themes);
@@ -234,11 +234,12 @@ public sealed class SettingsDialog : ModalDialog
         return row;
     }
 
-    /// <summary>Scrolling two-column gallery of theme cards. Scroll content keeps explicit frames.</summary>
+    /// <summary>Scrolling three-column gallery of compact theme cards. Scroll content keeps explicit frames.</summary>
     private sealed class ThemeGallery : ScrollContainer
     {
-        private const float TileH = 96f;
-        private const float TileGap = 10f;
+        private const int Columns = 3;
+        private const float TileH = 60f;
+        private const float TileGap = 8f;
         private readonly ThemePickerCard[] _cards;
 
         public ThemeGallery()
@@ -277,10 +278,11 @@ public sealed class SettingsDialog : ModalDialog
             float x = Transform.Computed.X;
             float y = Transform.Computed.Y;
             float w = Math.Max(1f, Transform.Computed.Width - ScrollbarThickness - 6f);
-            float tileW = (w - TileGap) * 0.5f;
-            int rows = (_cards.Length + 1) / 2;
+            float tileW = (w - TileGap * (Columns - 1)) / Columns;
+            int rows = (_cards.Length + Columns - 1) / Columns;
             for (int i = 0; i < _cards.Length; i++)
-                _cards[i].Transform.SetAbsoluteFrame(x + (i % 2) * (tileW + TileGap), y + (i / 2) * (TileH + TileGap), tileW, TileH);
+                _cards[i].Transform.SetAbsoluteFrame(
+                    x + (i % Columns) * (tileW + TileGap), y + (i / Columns) * (TileH + TileGap), tileW, TileH);
             SetContentSize(w, rows * TileH + (rows - 1) * TileGap);
             base.LayoutChildren();
         }
@@ -341,44 +343,50 @@ internal sealed class ThemePickerCard : ButtonBase
             canvas.DrawRoundRect(rim, r, r, edge);
         }
 
-        // Swatches: window, panel, section, accent.
-        const float pad = 12f;
-        const float sy = 12f;
-        const float sh = 20f;
-        float sw = (w - pad * 2f - 12f) / 4f;
-        SKColor[] chips = { p.Window, p.Panel, p.Section, p.Accent };
-        using (var chip = new SKPaint { IsAntialias = true })
-        using (var chipEdge = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, Color = p.Hairline })
+        // Preview chip: the pack's window, a panel with a section card, and an accent bar.
+        const float pad = 10f;
+        float chipS = h - pad * 2f;
+        var chipRect = SKRect.Create(pad, pad, chipS, chipS);
+        float cr = Math.Min(p.RadiusSm + 1f, chipS * 0.25f);
+        using (var paint = new SKPaint { IsAntialias = true })
         {
-            for (int i = 0; i < chips.Length; i++)
-            {
-                chip.Color = chips[i];
-                var rect = SKRect.Create(pad + i * (sw + 4f), sy, sw, sh);
-                canvas.DrawRoundRect(rect, p.RadiusSm, p.RadiusSm, chip);
-                canvas.DrawRoundRect(rect, p.RadiusSm, p.RadiusSm, chipEdge);
-            }
+            paint.Color = p.Window;
+            canvas.DrawRoundRect(chipRect, cr, cr, paint);
+            canvas.Save();
+            canvas.ClipRoundRect(new SKRoundRect(chipRect, cr), antialias: true);
+            paint.Color = p.Panel;
+            canvas.DrawRect(SKRect.Create(chipRect.MidX, chipRect.Top, chipRect.Width * 0.5f, chipRect.Height), paint);
+            paint.Color = p.Section;
+            canvas.DrawRoundRect(SKRect.Create(chipRect.MidX + 3f, chipRect.Top + 4f, chipRect.Width * 0.5f - 6f, chipRect.Height * 0.42f), p.RadiusSm * 0.5f, p.RadiusSm * 0.5f, paint);
+            paint.Color = p.Accent;
+            canvas.DrawRoundRect(SKRect.Create(chipRect.Left + 4f, chipRect.Bottom - 9f, chipRect.Width - 8f, 4f), 2f, 2f, paint);
+            canvas.Restore();
         }
+        using (var chipEdge = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, Color = p.HairlineStrong })
+            canvas.DrawRoundRect(chipRect, cr, cr, chipEdge);
 
+        float textX = chipRect.Right + 10f;
+        float textW = Math.Max(10f, w - textX - pad - (_selected ? 20f : 0f));
         using var title = new TextPaint { Color = p.Text, TextSize = 13f, Typeface = Theme.GetTypeface(600) };
-        using var body = new TextPaint { Color = p.TextDim, TextSize = 11.5f, Typeface = Theme.GetTypeface(400) };
-        canvas.DrawText(p.Name, pad, sy + sh + 22f, title);
-        canvas.DrawText(p.Description, pad, sy + sh + 40f, body);
+        using var body = new TextPaint { Color = p.TextDim, TextSize = 11f, Typeface = Theme.GetTypeface(400) };
+        canvas.DrawText(Blossom.Utils.Text.Ellipsize(p.Name, title.Font, textW), textX, h * 0.5f - 3f, title);
+        canvas.DrawText(Blossom.Utils.Text.Ellipsize(p.Description, body.Font, textW), textX, h * 0.5f + 13f, body);
 
         if (!_selected) return;
 
-        // Active badge: accent disc with a check in the bottom-right corner.
-        float cx = w - pad - 8f, cy = h - pad - 8f;
+        // Active badge: accent disc with a check, top-right.
+        float cx = w - pad - 7f, cy = pad + 7f;
         using (var disc = new SKPaint { Color = p.Accent, IsAntialias = true })
-            canvas.DrawCircle(cx, cy, 8f, disc);
+            canvas.DrawCircle(cx, cy, 7f, disc);
         using var check = new SKPaint
         {
             Color = p.OutlineAccent ? p.Window : p.ButtonTextOnAccent,
             Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1.6f,
+            StrokeWidth = 1.5f,
             StrokeCap = SKStrokeCap.Round,
             IsAntialias = true
         };
-        canvas.DrawLine(cx - 3.5f, cy + 0.2f, cx - 1f, cy + 2.7f, check);
-        canvas.DrawLine(cx - 1f, cy + 2.7f, cx + 3.6f, cy - 2.4f, check);
+        canvas.DrawLine(cx - 3f, cy + 0.2f, cx - 0.9f, cy + 2.3f, check);
+        canvas.DrawLine(cx - 0.9f, cy + 2.3f, cx + 3.1f, cy - 2.1f, check);
     }
 }

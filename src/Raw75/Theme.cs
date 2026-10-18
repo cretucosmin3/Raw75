@@ -583,7 +583,49 @@ public static class Theme
         RadiusSm = 2f
     };
 
-    public static readonly UiThemePack[] All = { Midnight, Carbon, Copper, Noir, Moss, Ink, Graphite, Slate, Ash };
+    public static readonly UiThemePack Tide = new()
+    {
+        Id = "tide",
+        Name = "Tide",
+        Description = "Neutral dark chrome, teal accent, soft corners.",
+        UseShadows = true,
+        ShadowY = 2.4f,
+        ShadowAlpha = 85,
+        Canvas = new(11, 12, 13),
+        Window = new(19, 20, 22),
+        TopBar = new(25, 26, 28),
+        BottomBar = new(21, 22, 24),
+        Panel = new(21, 22, 24),
+        PanelAlt = new(27, 28, 31),
+        Filmstrip = new(17, 18, 20),
+        Section = new(31, 32, 35),
+        SectionHeader = new(25, 26, 28),
+        SectionHeaderHover = new(37, 39, 42),
+        Well = new(15, 16, 17),
+        WellHover = new(23, 24, 26),
+        Overlay = new(45, 47, 50),
+        PhotoWell = new(9, 10, 11),
+        Hairline = new(255, 255, 255, 26),
+        HairlineSubtle = new(255, 255, 255, 14),
+        HairlineStrong = new(255, 255, 255, 52),
+        Text = new(242, 246, 247),
+        TextSecondary = new(190, 198, 200),
+        TextDim = new(144, 154, 157),
+        TextDisabled = new(98, 106, 109),
+        Accent = new(45, 200, 180),
+        AccentHover = new(80, 220, 200),
+        AccentPressed = new(30, 168, 150),
+        Button = new(34, 36, 39),
+        ButtonHover = new(44, 47, 50),
+        ButtonTextOnAccent = new(8, 24, 22),
+        Handle = new(255, 255, 255),
+        HandleHover = new(200, 245, 238),
+        HandleActive = new(220, 250, 245),
+        Radius = 7f,
+        RadiusSm = 4f
+    };
+
+    public static readonly UiThemePack[] All = { Midnight, Carbon, Copper, Noir, Moss, Ink, Tide, Graphite, Slate, Ash };
 
     // Declared after the packs: static initializers run in textual order.
     private static readonly Signal<UiThemePack> _pack = new(Midnight);

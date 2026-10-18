@@ -15,6 +15,7 @@ using Raw75.Imaging;
 using Raw75.Io;
 using Raw75.Pipeline;
 using Raw75.Presets;
+using Raw75.Update;
 using SkiaSharp;
 using Blossom.Hosting;
 using Blossom.Core.Input;
@@ -45,6 +46,8 @@ public sealed class WorkspaceView : View
     private IconButton _btnHdrBottom = null!;
     private int _selectionPivotIndex = -1;
     private SettingsDialog _settings = null!;
+    private UpdateDialog _updateDialog = null!;
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(6);
     private WorkspaceGate _gate = null!;
     private PhotoViewOverlay _viewOverlay = null!;
     private IconButton _btnBefore => _viewOverlay.BtnBefore;
@@ -191,6 +194,8 @@ public sealed class WorkspaceView : View
             SetStatus("Choose a folder to start.");
             _gate.Show();
         }
+
+        StartUpdateChecks();
     }
 
     private void BuildChrome()
@@ -542,6 +547,10 @@ public sealed class WorkspaceView : View
         _hdrMergeDialog.MergeSucceeded += OnHdrMergeSucceeded;
         AddElement(_hdrMergeDialog);
 
+        _updateDialog = new UpdateDialog();
+        _updateDialog.RestartRequested += RestartForUpdate;
+        AddElement(_updateDialog);
+
         _settings = new SettingsDialog();
         _settings.CacheCleared += OnCacheCleared;
         AddElement(_settings);
@@ -632,6 +641,11 @@ public sealed class WorkspaceView : View
         var push = new VisualElement { Name = "TopSpacer", IsClickthrough = true };
         actions.AddChild(push);
         Stack.SetGrow(push, 1f);
+        // Shown only when GitHub has a newer release; lit so it reads as news, not as another tool.
+        var update = TopButton("Update", "download", OpenUpdate, 96f);
+        update.Toggled = true;
+        update.BindVisible(() => _state.AvailableUpdate.Value != null);
+        actions.AddChild(update);
         actions.AddChild(TopButton("Settings", "settings", OpenSettings, 100f));
         var export = TopButton("Export", "export", StartExport, 92f);
         export.Primary = true;
@@ -2217,6 +2231,54 @@ public sealed class WorkspaceView : View
         SaveCurrentSession();
     }
 
+    /// <summary>Asks GitHub for a newer release a few seconds after start, then every <see cref="UpdateCheckInterval"/>.</summary>
+    private void StartUpdateChecks()
+    {
+        Shell.PostDelayed(TimeSpan.FromSeconds(3), () => _ = CheckForUpdateAsync());
+        Shell.PostPeriodic(UpdateCheckInterval, () => _ = CheckForUpdateAsync());
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            using var checker = new UpdateChecker();
+            UpdateInfo? found = await Task.Run(() => checker.CheckAsync(AppVersion.Current, SelfUpdate.PackageName));
+            if (found != null)
+                Log.Info($"Update available: {found.Version} (running {AppVersion.Current}).");
+            _state.AvailableUpdate.Value = found;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning($"Update check failed: {ex.Message}");
+        }
+    }
+
+    private void OpenUpdate()
+    {
+        if (_state.AvailableUpdate.Peek() is { } update)
+            _updateDialog.Open(update);
+    }
+
+    /// <summary>The new version is installed: keep the user's work, start it, and leave.</summary>
+    private void RestartForUpdate()
+    {
+        var d = _session.Active;
+        if (d != null)
+        {
+            CopyCropInto(d);
+            WorkspaceStore.SaveSettings(d);
+        }
+        SaveCurrentSession();
+        if (!SelfUpdate.Relaunch())
+        {
+            _updateDialog.RestartFailed();
+            return;
+        }
+        Log.Info("Restarting into the updated version.");
+        Environment.Exit(0);
+    }
+
     private void OpenSettings()
     {
         _settings.Open(_session, _photo);
@@ -2398,6 +2460,7 @@ public sealed class WorkspaceView : View
             || (_nameDialog != null && _nameDialog.Visible)
             || (_export != null && _export.Visible)
             || (_hdrMergeDialog != null && _hdrMergeDialog.Visible)
+            || (_updateDialog != null && _updateDialog.Visible)
             || (_settings != null && _settings.Visible)
             || (_gate != null && _gate.Visible)
             || (_markMenu != null && _markMenu.Visible);

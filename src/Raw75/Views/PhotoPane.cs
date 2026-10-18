@@ -171,7 +171,6 @@ public sealed class PhotoPane : VisualElement
     private bool _busy;
     private bool _splitDrag;
     private string? _droppedPath;
-    private string _probeNote = "";
     private bool _showingPhoto;
 
     private bool _freeZoom;
@@ -220,7 +219,7 @@ public sealed class PhotoPane : VisualElement
         sb.AppendLine($"  _source     {MemSize.ImageLabel(_source)}");
         sb.AppendLine($"  _developed  {MemSize.ImageLabel(_developed)}  owns={_ownsDisplay}");
         sb.AppendLine($"  _before     {MemSize.ImageLabel(_before)}");
-        sb.AppendLine($"  view { _viewW}x{_viewH}  zoom={Zoom:0.###}  mode={ZoomMode}  probe={_probeNote}");
+        sb.AppendLine($"  view { _viewW}x{_viewH}  zoom={Zoom:0.###}  mode={ZoomMode}");
         sb.AppendLine($"  lookFailed={_look.Failed}  showBefore={_showBefore}  split={_splitBefore}");
     }
 
@@ -460,11 +459,6 @@ public sealed class PhotoPane : VisualElement
         });
     }
 
-    public override void AddedToView()
-    {
-        AllocateProbe();
-    }
-
     public void SetDroppedPath(string path)
     {
         _droppedPath = path;
@@ -684,55 +678,6 @@ public sealed class PhotoPane : VisualElement
         InvalidatePaint();
         ViewChanged?.Invoke();
         ViewSettled?.Invoke();
-    }
-
-    private void AllocateProbe()
-    {
-        if (!Gpu.IsReady)
-        {
-            Log.Warning("PhotoPane: Gpu is not ready; probe skipped.");
-            return;
-        }
-
-        SKSurface? surface = Gpu.CreateSurface(256, 256, SKColorType.RgbaF16);
-        if (surface != null)
-        {
-            _probeNote = "F16";
-        }
-        else
-        {
-            surface = Gpu.CreateSurface(256, 256, SKColorType.Rgba8888);
-            _probeNote = surface != null ? "8888 fallback" : "";
-        }
-
-        if (surface == null)
-        {
-            Log.Warning("PhotoPane: could not allocate a GPU surface.");
-            return;
-        }
-
-        try
-        {
-            var canvas = surface.Canvas;
-            canvas.Clear(new SKColor(32, 32, 36));
-            using var fill = new SKPaint { Color = new SKColor(48, 48, 54), IsAntialias = true };
-            canvas.DrawRect(new SKRect(32, 32, 224, 224), fill);
-            canvas.Flush();
-
-            var snap = Gpu.Snapshot(surface);
-            if (snap == null)
-            {
-                Log.Warning("PhotoPane: GPU snapshot failed.");
-                return;
-            }
-
-            SetDeveloped(snap);
-            Log.Info($"PhotoPane: GPU probe ok ({_probeNote}).");
-        }
-        finally
-        {
-            surface.Dispose();
-        }
     }
 
     protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
@@ -985,11 +930,7 @@ public sealed class PhotoPane : VisualElement
         if (_showingPhoto)
             return;
 
-        string line = _droppedPath != null
-            ? _droppedPath
-            : "Drop a RAW here";
-        if (_probeNote.Length > 0 && _droppedPath == null)
-            line += $"  ·  GPU {_probeNote}";
+        string line = _droppedPath ?? "Drop a RAW here";
 
         using var text = new TextPaint
         {
