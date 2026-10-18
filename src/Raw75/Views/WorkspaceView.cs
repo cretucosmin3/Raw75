@@ -737,7 +737,6 @@ public sealed class WorkspaceView : View
         _con = BindSlider(_exposureGroup, "Contrast", -100, 100, "0", (s, v) => s.Contrast = v, s => s.Contrast);
         _sat = BindSlider(_exposureGroup, "Saturation", -100, 100, "0", (s, v) => s.Saturation = v, s => s.Saturation);
         BindRange(_con, RangedControl.Contrast);
-        BindRange(_sat, RangedControl.Saturation);
         _exposureGroup.EnableAuto(AutoExposure, "Auto Exposure");
         _exposureGroup.EnableReset(ResetExposure, "Reset Exposure");
         _exposureGroup.EnabledChanged += en => OnSectionToggled(s => s.EnableExposure = en);

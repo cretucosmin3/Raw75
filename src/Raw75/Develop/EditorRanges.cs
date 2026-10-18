@@ -9,7 +9,6 @@ namespace Raw75.Develop;
 public enum RangedControl
 {
     Contrast,
-    Saturation,
     Highlights,
     Shadows,
     Whites,

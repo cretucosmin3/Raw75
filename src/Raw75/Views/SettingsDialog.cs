@@ -72,8 +72,7 @@ public sealed class SettingsDialog : ModalDialog
             "How far each slider goes either side of zero. A photo already edited past a smaller reach keeps its value; the slider shows it at the end of the track.",
             TextRole.Body));
         editorPanel.AddChild(Field("Exposure",
-            RangeRow("Contrast", RangedControl.Contrast),
-            RangeRow("Saturation", RangedControl.Saturation)));
+            RangeRow("Contrast", RangedControl.Contrast)));
         editorPanel.AddChild(Separator());
         editorPanel.AddChild(Field("High Dynamic Range",
             RangeRow("Highlight", RangedControl.Highlights),
