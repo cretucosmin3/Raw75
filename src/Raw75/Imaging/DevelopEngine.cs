@@ -8,6 +8,7 @@ using Raw75.Develop;
 using Raw75.Io;
 using Raw75.Pipeline;
 using SkiaSharp;
+using Blossom.Desktop;
 
 namespace Raw75.Imaging;
 
@@ -49,7 +50,7 @@ public sealed class DevelopEngine
         int gen = Interlocked.Increment(ref _generation);
         Volatile.Write(ref _current, doc);
 
-        Browser.Post(() =>
+        Shell.Post(() =>
         {
             if (Stale(gen))
                 return;
@@ -84,9 +85,15 @@ public sealed class DevelopEngine
         RequestHistogram(doc);
     }
 
+    /// <summary>
+    /// When false, the CPU develop no longer writes histograms: the photo pane samples them from
+    /// the GPU look, which is what is actually on screen. Set back to true if the GPU look fails.
+    /// </summary>
+    public bool CpuHistogram { get; set; } = true;
+
     public void RequestHistogram(PhotoDocument doc)
     {
-        if (doc == null || (!doc.LiveRgba.HasPixels && !doc.SourceRgba.HasPixels))
+        if (!CpuHistogram || doc == null || (!doc.LiveRgba.HasPixels && !doc.SourceRgba.HasPixels))
             return;
         Volatile.Write(ref _current, doc);
         Interlocked.Exchange(ref _histPending, 1);
@@ -113,9 +120,9 @@ public sealed class DevelopEngine
                 RasterBuffer developed = DevelopCpu.Apply(src, settings, fast: true);
                 if (Stale(gen))
                     continue;
-                Browser.Post(() =>
+                Shell.Post(() =>
                 {
-                    if (Stale(gen) || !ReferenceEquals(doc, Volatile.Read(ref _current)))
+                    if (!CpuHistogram || Stale(gen) || !ReferenceEquals(doc, Volatile.Read(ref _current)))
                         return;
                     DevelopCpu.FillHistogram(developed, doc);
                     HistogramUpdated?.Invoke(doc);
@@ -168,7 +175,7 @@ public sealed class DevelopEngine
                 if (Stale(gen) || seq != Volatile.Read(ref _invalidateSeq))
                     continue;
 
-                Browser.Post(() =>
+                Shell.Post(() =>
                 {
                     if (Stale(gen) || seq != Volatile.Read(ref _invalidateSeq))
                         return;
@@ -222,7 +229,7 @@ public sealed class DevelopEngine
 
             if (missing == 0)
             {
-                Browser.Post(() => ThumbProgress?.Invoke(copy.Length, copy.Length));
+                Shell.Post(() => ThumbProgress?.Invoke(copy.Length, copy.Length));
                 return;
             }
 
@@ -248,7 +255,7 @@ public sealed class DevelopEngine
                             int nCached = Interlocked.Increment(ref processed);
                             PhotoDocument targetCached = doc;
                             SKImage shotCached = cached;
-                            Browser.Post(() =>
+                            Shell.Post(() =>
                             {
                                 if (targetCached.IsDisposed || targetCached.Preview != null || targetCached.Thumb != null)
                                     return;
@@ -270,7 +277,7 @@ public sealed class DevelopEngine
                         if (raster == null)
                         {
                             int cur = Interlocked.Increment(ref processed);
-                            Browser.Post(() => ThumbProgress?.Invoke(cur, missing));
+                            Shell.Post(() => ThumbProgress?.Invoke(cur, missing));
                             continue;
                         }
                         buf = raster.Value;
@@ -282,7 +289,7 @@ public sealed class DevelopEngine
                     PhotoDocument target = doc;
                     RasterBuffer shot = buf;
                     Develop.PhotoMetadata? shotMeta = meta;
-                    Browser.Post(() =>
+                    Shell.Post(() =>
                     {
                         if (target.IsDisposed || target.Preview != null || target.Thumb != null)
                             return;
@@ -309,11 +316,11 @@ public sealed class DevelopEngine
                 {
                     Log.Warning("Thumb " + doc.Name + ": " + ex.Message);
                     int cur = Interlocked.Increment(ref processed);
-                    Browser.Post(() => ThumbProgress?.Invoke(cur, missing));
+                    Shell.Post(() => ThumbProgress?.Invoke(cur, missing));
                 }
             }
 
-            Browser.Post(() =>
+            Shell.Post(() =>
             {
                 ThumbProgress?.Invoke(missing, missing);
             });
@@ -375,7 +382,7 @@ public sealed class DevelopEngine
             {
                 RasterBuffer buf = RawDecoder.DecodeRasterFull(doc.Path)
                     ?? RawDecoder.DecodeFull(doc.Path);
-                Browser.Post(() =>
+                Shell.Post(() =>
                 {
                     if (Stale(gen) || doc.IsDisposed || !ReferenceEquals(doc, Volatile.Read(ref _current)))
                         return;
@@ -391,7 +398,7 @@ public sealed class DevelopEngine
             catch (Exception ex)
             {
                 Log.Warning("Full-res decode failed: " + ex.Message);
-                Browser.Post(() => _status("Full-res decode failed"));
+                Shell.Post(() => _status("Full-res decode failed"));
             }
             finally
             {
@@ -438,7 +445,7 @@ public sealed class DevelopEngine
             float nw = pw / (float)src.Width;
             float nh = ph / (float)src.Height;
 
-            Browser.Post(() =>
+            Shell.Post(() =>
             {
                 if (Stale(gen) || seq != Volatile.Read(ref _viewSeq) || doc.IsDisposed)
                     return;
@@ -523,7 +530,7 @@ public sealed class DevelopEngine
             Log.Error($"Could not open {doc.Path}: {flat}\n{ex}");
             if (Stale(gen))
                 return;
-            Browser.Post(() =>
+            Shell.Post(() =>
             {
                 if (!Stale(gen))
                     _status("Could not open: " + flat);
@@ -537,7 +544,7 @@ public sealed class DevelopEngine
         if (Stale(gen))
             return;
 
-        Browser.Post(() =>
+        Shell.Post(() =>
         {
             try
             {
@@ -640,7 +647,7 @@ public sealed class DevelopEngine
             if (Stale(gen) || seq != Volatile.Read(ref _invalidateSeq))
                 return;
 
-            Browser.Post(() =>
+            Shell.Post(() =>
             {
                 if (Stale(gen) || seq != Volatile.Read(ref _invalidateSeq))
                     return;
@@ -649,7 +656,8 @@ public sealed class DevelopEngine
                     SKImage image = RawDecoder.Upload(developed, out _);
                     Log.Info($"Develop CPU ok {image.Width}x{image.Height}");
                     Assign(doc, display: image);
-                    DevelopCpu.FillHistogram(developed, doc);
+                    if (CpuHistogram)
+                        DevelopCpu.FillHistogram(developed, doc);
                     Updated?.Invoke(doc);
                     ScheduleLooks(doc, settings);
                     Log.Info("Develop shown");
@@ -668,7 +676,7 @@ public sealed class DevelopEngine
         catch (Exception ex)
         {
             Log.Error($"Develop CPU failed: {ex}");
-            Browser.Post(() =>
+            Shell.Post(() =>
             {
                 if (seq == Volatile.Read(ref _invalidateSeq))
                     SetBusy(false);
@@ -682,7 +690,7 @@ public sealed class DevelopEngine
         int prev = Interlocked.Exchange(ref _busy, next);
         if (prev == next)
             return;
-        Browser.Post(() => BusyChanged?.Invoke(busy));
+        Shell.Post(() => BusyChanged?.Invoke(busy));
     }
 
     private void ScheduleLooks(PhotoDocument doc, DevelopSettings settings)
@@ -706,7 +714,7 @@ public sealed class DevelopEngine
             byte[]? prevJpeg = WorkspaceStore.EncodeJpeg(prevBuf, 82);
             WorkspaceStore.SaveLooks(doc, settings, prevJpeg, lookJpeg);
 
-            Browser.Post(() =>
+            Shell.Post(() =>
             {
                 try
                 {

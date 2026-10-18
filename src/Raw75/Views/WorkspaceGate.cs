@@ -1,121 +1,72 @@
 using System;
-using Blossom.Core;
-using Blossom.Core.Visual;
-using Blossom.Core.Visual.Enums;
+using Blossom.Core.Input;
+using Blossom.Reactive;
 using Raw75.Controls;
 using Raw75.Io;
-using Silk.NET.Input;
 using SkiaSharp;
 
 namespace Raw75.Views;
 
 /// <summary>Blocks the develop chrome until a workspace folder is chosen.</summary>
-public sealed class WorkspaceGate : VisualElement
+public sealed class WorkspaceGate : ModalDialog
 {
-    private readonly VisualElement _card;
-    private readonly VisualElement _title;
-    private readonly VisualElement _body;
-    private readonly IconButton _choose;
-    private readonly IconButton _last;
-    private readonly VisualElement _lastPath;
-    private string? _lastRoot;
+    private readonly Signal<string?> _lastRoot = new(null);
 
     public event Action<string>? FolderPicked;
 
-    public WorkspaceGate()
+    public WorkspaceGate() : base("WorkspaceGate", zIndex: 900, cardWidth: 460f)
     {
-        Name = "WorkspaceGate";
-        Visible = false;
-        ZIndex = 900;
-        ReceivesKeyboard = true;
-        Transform = new Transform(0, 0, 800, 600)
-        {
-            Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
-        };
-        Style = new ElementStyle { BackColor = new SKColor(10, 10, 12, 230) };
+        var lastPath = Label("", TextRole.Body);
+        lastPath.BindText(() => _lastRoot.Value ?? "");
 
-        _card = new VisualElement
+        var last = new IconButton("Open last folder");
+        last.Clicked += () =>
         {
-            Name = "GateCard",
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Panel,
-                Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = Theme.Radius }
-            }
+            string? root = _lastRoot.Peek();
+            if (!string.IsNullOrEmpty(root))
+                FolderPicked?.Invoke(root);
         };
-        _title = Label("GateTitle", "Open a folder", Theme.Text, 20, 700);
-        _body = Label("GateBody",
-            "Pick the folder that holds your photos. Raw75 will list everything in it and keep previews in .raw75 next to the files.",
-            Theme.TextSecondary, 13.5f, 400);
-        _choose = new IconButton("Choose folder", primary: true);
-        _choose.Clicked += Pick;
-        _last = new IconButton("Open last folder");
-        _last.Clicked += () =>
-        {
-            if (!string.IsNullOrEmpty(_lastRoot))
-                FolderPicked?.Invoke(_lastRoot);
-        };
-        _lastPath = Label("GateLast", "", Theme.TextDim, 12, 400);
+        var choose = new IconButton("Choose folder…", "folder", primary: true);
+        choose.Clicked += Pick;
 
-        AddChild(_card);
-        _card.AddChild(_title);
-        _card.AddChild(_body);
-        _card.AddChild(_choose);
-        _card.AddChild(_last);
-        _card.AddChild(_lastPath);
+        var body = Body();
+        body.AddChild(Field("Last folder", lastPath));
+        var bodyRule = Separator();
 
-        Events.OnKeyDown += k =>
+        Card.AddChild(Header("Open a folder",
+            "Pick the folder that holds your photos. Raw75 lists everything in it and keeps previews in .raw75 next to the files.",
+            out _, subtitleLines: 2));
+        Card.AddChild(Separator());
+        Card.AddChild(body);
+        Card.AddChild(bodyRule);
+        Card.AddChild(Footer(null, last, choose));
+
+        // The last-folder section and its shortcut only exist when a previous workspace is on record.
+        this.Bind(_ =>
         {
-            if (!Visible)
-                return;
-            if ((Key)k == Key.Enter || (Key)k == Key.O)
-                Pick();
-        };
+            bool hasLast = !string.IsNullOrEmpty(_lastRoot.Value);
+            body.Visible = hasLast;
+            bodyRule.Visible = hasLast;
+            last.Visible = hasLast;
+            Card.InvalidateLayout();
+            InvalidateLayout();
+        });
     }
 
-    public void RefreshTheme()
-    {
-        if (_card.Style != null)
-        {
-            _card.Style.BackColor = Theme.Panel;
-            if (_card.Style.Border != null)
-            {
-                _card.Style.Border.Color = Theme.Hairline;
-                _card.Style.Border.Roundness = Theme.Radius;
-            }
-        }
-        if (_title.Style?.Text != null) _title.Style.Text.Color = Theme.Text;
-        if (_body.Style?.Text != null) _body.Style.Text.Color = Theme.TextSecondary;
-        if (_lastPath.Style?.Text != null) _lastPath.Style.Text.Color = Theme.TextDim;
-        InvalidatePaint();
-    }
+    /// <summary>The workspace behind is empty, so the gate covers it almost fully.</summary>
+    protected override SKColor ScrimColor => Theme.Canvas.WithAlpha(236);
+
+    protected override bool DismissOnScrim => false;
 
     public void Show()
     {
-        _lastRoot = WorkspaceStore.LoadLastRoot();
-        bool hasLast = !string.IsNullOrEmpty(_lastRoot);
-        _last.Visible = hasLast;
-        _lastPath.Visible = hasLast;
-        _lastPath.Text = hasLast ? _lastRoot! : "";
-        CoverView();
-        Visible = true;
-        ParentView?.SetActiveKeyboardElement(this);
-        InvalidateLayout();
-        ForceLayoutSubtree();
-        InvalidatePaint();
+        _lastRoot.Value = WorkspaceStore.LoadLastRoot();
+        ShowModal();
     }
 
-    public void Hide()
-    {
-        if (!Visible)
-            return;
-        if (ParentView?.ActiveKeyboardElement == this)
-            ParentView.SetActiveKeyboardElement(null);
-        Visible = false;
-        InvalidatePaint();
-    }
+    public void Hide() => HideModal();
 
-    internal void Pick()
+    private void Pick()
     {
         string? folder = null;
         try { folder = FileDialogs.OpenFolder(); }
@@ -125,57 +76,14 @@ public sealed class WorkspaceGate : VisualElement
         FolderPicked?.Invoke(folder);
     }
 
-    private void CoverView()
+    protected override bool HandleKey(UiKey key)
     {
-        float w = ParentView?.Width ?? Transform.Width;
-        float h = ParentView?.Height ?? Transform.Height;
-        if (w < 1f) w = 1f;
-        if (h < 1f) h = 1f;
-        Transform.SetAbsoluteFrame(0, 0, w, h);
-        Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
-    }
-
-    protected override void LayoutChildren()
-    {
-        float ox = Transform.Computed.X;
-        float oy = Transform.Computed.Y;
-        float w = Math.Max(1f, Transform.Computed.Width);
-        float h = Math.Max(1f, Transform.Computed.Height);
-        const float cw = 500f;
-        const float ch = 264f;
-        float x = ox + Math.Max(0, (w - cw) / 2f);
-        float y = oy + Math.Max(0, (h - ch) / 2f);
-        _card.Transform.SetAbsoluteFrame(x, y, cw, ch);
-        _title.Transform.SetAbsoluteFrame(x + 24, y + 22, cw - 48, 28);
-        _body.Transform.SetAbsoluteFrame(x + 24, y + 58, cw - 48, 56);
-        _choose.Transform.SetAbsoluteFrame(x + 24, y + 130, 184, 36);
-        _last.Transform.SetAbsoluteFrame(x + 24 + 184 + 12, y + 130, 184, 36);
-        _lastPath.Transform.SetAbsoluteFrame(x + 24, y + 184, cw - 48, 40);
-    }
-
-    private static VisualElement Label(string name, string text, SKColor color, float size, int weight)
-    {
-        return new RichBox
+        if (key is UiKey.Enter or UiKey.KeypadEnter or UiKey.O)
         {
-            Name = name,
-            Text = text,
-            IsClickthrough = true,
-            Overflow = OverflowMode.Clip,
-            Style = new ElementStyle
-            {
-                BackColor = SKColors.Transparent,
-                Text = new TextStyle
-                {
-                    Color = color,
-                    Size = size,
-                    Weight = weight,
-                    Alignment = TextAlign.Left,
-                    Padding = 0,
-                    Overflow = TextOverflow.Ellipsis,
-                    MaxLines = name == "GateBody" ? 3 : 1
-                }
-            }
-        };
+            Pick();
+            return true;
+        }
+        // No Escape: there is nothing to go back to until a folder is open.
+        return false;
     }
-
 }

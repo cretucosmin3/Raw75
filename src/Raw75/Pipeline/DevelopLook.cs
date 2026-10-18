@@ -20,7 +20,7 @@ internal sealed class DevelopLook : IDisposable
     private SKShader? _img;
     private SKShader? _lut;
     private SKShader? _mask;
-    private readonly SKPaint _paint = new() { IsAntialias = false, FilterQuality = SKFilterQuality.Medium };
+    private readonly SKPaint _paint = new() { IsAntialias = false };
     private bool _loggedOk;
     private bool _dirty = true;
 
@@ -295,7 +295,7 @@ internal sealed class DevelopLook : IDisposable
             ch3.Add("u_curve", stage3CurveShader);
 
             bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
-            using SKShader? fx = eff3.ToShader(!tilePartial, u3, ch3);
+            using SKShader? fx = eff3.ToShader(u3, ch3);
             if (fx == null) return false;
 
             try
@@ -414,7 +414,7 @@ internal sealed class DevelopLook : IDisposable
                 children.Add("u_curve", curveShader);
 
                 bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
-                SKShader? fx = effect.ToShader(!tilePartial, uniforms, children);
+                SKShader? fx = effect.ToShader(uniforms, children);
                 if (fx == null)
                 {
                     Failed = true;

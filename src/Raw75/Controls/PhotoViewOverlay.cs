@@ -2,67 +2,73 @@ using System;
 using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using SkiaSharp;
 
 namespace Raw75.Controls;
 
 /// <summary>
-/// Floating vertical toolbar overlay situated on the top-right corner of the active photo view.
-/// Houses tactile controls for Before/After toggle, Split view, and Clipping warnings.
+/// Floating tool stack in the top-right corner of the photo view: Info, Before, Split and Clip
+/// as ghost toggles on a near-opaque window surface.
 /// </summary>
-public class PhotoViewOverlay : VisualElement
+public class PhotoViewOverlay : Stack
 {
-    private const float Pad = 5f;
-    private const float Gap = 4f;
+    private const float Inset = 5f;
+    private const float ItemGap = 4f;
     private const float BtnH = 28f;
+    // No backdrop blur: a hovered button repaints only its own rect, so a blur would sample the
+    // stack's previous pixels there and smear; it also forces continuous repaints.
+    private const float SurfaceAlpha = 0.92f;
 
-    private readonly IconButton _btnInfo;
-    private readonly IconButton _btnBefore;
-    private readonly IconButton _btnSplit;
-    private readonly IconButton _btnClip;
-
-    public IconButton BtnInfo => _btnInfo;
-    public IconButton BtnBefore => _btnBefore;
-    public IconButton BtnSplit => _btnSplit;
-    public IconButton BtnClip => _btnClip;
+    public IconButton BtnInfo { get; }
+    public IconButton BtnBefore { get; }
+    public IconButton BtnSplit { get; }
+    public IconButton BtnClip { get; }
 
     public PhotoViewOverlay()
     {
         Name = "PhotoViewOverlay";
+        Orientation = Orientation.Vertical;
+        Gap = ItemGap;
+        Padding = new Thickness(Inset);
         Style = new ElementStyle
         {
-            BackColor = new SKColor(20, 20, 24, 191),
-            Border = new BorderStyle
-            {
-                Width = 1,
-                Color = Theme.Hairline,
-                Roundness = Theme.Radius
-            },
-            Shadow = new ShadowStyle(0, 2.5f, 4, 4, new SKColor(0, 0, 0, 95))
+            Border = new BorderStyle { Width = 1 },
+            Shadow = new ShadowStyle(0, 2.5f, 4, 4, SKColors.Transparent)
         };
 
-        _btnInfo = new IconButton("Info", "info");
-        _btnBefore = new IconButton("Before", "before");
-        _btnSplit = new IconButton("Split", "split");
-        _btnClip = new IconButton("Clip", "clipping");
+        BtnInfo = Tool("Info", "info");
+        BtnBefore = Tool("Before", "before");
+        BtnSplit = Tool("Split", "split");
+        BtnClip = Tool("Clip", "clipping");
 
-        AddChild(_btnInfo);
-        AddChild(_btnBefore);
-        AddChild(_btnSplit);
-        AddChild(_btnClip);
-
+        // Swallow presses on the stack's padding so they never reach the photo pane underneath.
         Events.OnMouseDown += (_, args) => args.Handled = true;
         Events.OnMouseUp += (_, args) => args.Handled = true;
+
+        this.Bind(_ => ApplyTheme());
     }
 
-    public void RefreshTheme()
+    private IconButton Tool(string caption, string icon)
     {
-        Style.BackColor = new SKColor(Theme.Window.Red, Theme.Window.Green, Theme.Window.Blue, 191);
-        if (Style.Border != null)
+        var btn = new IconButton(caption, icon)
         {
-            Style.Border.Color = Theme.Hairline;
-            Style.Border.Roundness = Theme.Radius;
-        }
+            Variant = ButtonVariant.Ghost,
+            IconSize = 14f,
+            FontSize = 11.5f
+        };
+        btn.MinHeight = BtnH;
+        AddChild(btn);
+        SetGrow(btn, 1f);
+        return btn;
+    }
+
+    private void ApplyTheme()
+    {
+        Style.BackColor = Theme.Window.WithAlpha((byte)(255 * SurfaceAlpha));
+        Style.Border.Color = Theme.Hairline;
+        Style.Border.Roundness = Theme.Radius;
         Theme.ApplyCardShadow(Style);
         InvalidatePaint();
     }
@@ -70,24 +76,7 @@ public class PhotoViewOverlay : VisualElement
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
         float w = 88f;
-        float h = Pad * 2f + BtnH * 4f + Gap * 3f;
+        float h = Inset * 2f + BtnH * 4f + ItemGap * 3f;
         return new SKSize(w, h);
-    }
-
-    protected override void LayoutChildren()
-    {
-        float ox = Transform.Computed.X;
-        float oy = Transform.Computed.Y;
-        float w = Transform.Computed.Width;
-        float btnW = Math.Max(0f, w - Pad * 2f);
-
-        float curY = oy + Pad;
-        _btnInfo.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
-        curY += BtnH + Gap;
-        _btnBefore.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
-        curY += BtnH + Gap;
-        _btnSplit.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
-        curY += BtnH + Gap;
-        _btnClip.Transform.SetAbsoluteFrame(ox + Pad, curY, btnW, BtnH);
     }
 }

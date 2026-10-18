@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
-using Blossom.Core;
 using Blossom.Core.Input;
-using Blossom.Core.Visual;
-using Blossom.Core.Visual.Enums;
+using Blossom.Hosting;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using Raw75.Develop;
 using Raw75.Pipeline;
-using Silk.NET.Input;
 using SkiaSharp;
 
 namespace Raw75.Controls;
@@ -20,24 +19,20 @@ public enum CurveChannel
 }
 
 /// <summary>
-/// Interactive 4-channel Tone & Color Curves editor.
-/// Features:
-/// - 4 tabs: [RGB] [Red] [Green] [Blue] with channel-colored dots and accents.
+/// Interactive 4-channel Tone & Color Curves editor on <see cref="Control"/>.
+/// - Channel switch: [RGB] [Red] [Green] [Blue] in a recessed well with a sliding raised segment.
 /// - Hermite monotone cubic spline curve interpolation with zero overshoot.
-/// - Responsive grid with 4x4 divisional guides, diagonal identity guide, and live histogram underlay.
-/// - Interactive control points: add on click, drag with monotonic clamping, remove on right/double click.
-/// - Tabular coordinate readout (In: X  Out: Y) and reset action.
+/// - Recessed plot with quarter grid, diagonal identity guide, and live histogram underlay.
+/// - Control points: add on click, drag with monotonic clamping, remove on right/double click.
+/// - Tabular coordinate readout (In / Out) and reset action.
 /// </summary>
-public sealed class CurveGraphControl : VisualElement
+public sealed class CurveGraphControl : Control
 {
     private static readonly string[] ChannelNames = { "RGB", "Red", "Green", "Blue" };
-    private static readonly SKColor[] ChannelColors =
-    {
-        new(245, 245, 250), // RGB (Clean White/Luma)
-        new(239, 68, 68),   // Red
-        new(34, 197, 94),   // Green
-        new(59, 130, 246)   // Blue
-    };
+    private const float TabH = 24f;
+    private const float TabInset = 2f;
+    private const float FooterH = 20f;
+    private const float PointHitR = 18f;
 
     private CurveChannel _activeChannel = CurveChannel.Rgb;
     private CurvePoint[] _curveRgb = CurveMath.DefaultCurve();
@@ -53,6 +48,13 @@ public sealed class CurveGraphControl : VisualElement
     private float _cursorX = -1f;
     private float _cursorY = -1f;
     private bool _hoveringGraph;
+
+    // _litIdx is the highlighted point whose ring is lit.
+    private int _litIdx = -1;
+    private float _lit;
+    private float _plotHover;
+    private float _resetHover;
+    private float _tabSlide;
 
     private SKRect _plotRect;
     private SKRect _resetRect;
@@ -75,6 +77,9 @@ public sealed class CurveGraphControl : VisualElement
             _activeChannel = value;
             _hoveredPointIdx = -1;
             _draggedPointIdx = -1;
+            ClearLit();
+            _tabSlide = (int)value;
+            InvalidatePaint();
             InvalidatePaint();
         }
     }
@@ -85,28 +90,27 @@ public sealed class CurveGraphControl : VisualElement
     {
         Name = "CurveGraphControl";
         Transform.Height = DefaultHeight;
-        Cursor = StandardCursor.Default;
-        Style = new ElementStyle
-        {
-            BackColor = SKColors.Transparent,
-            Border = new BorderStyle { Width = 0 }
-        };
+        Cursor = UiCursor.Default;
+        Style.BackColor = SKColors.Transparent;
 
         Events.OnMouseDown += OnMouseDown;
         Events.OnMouseMove += OnMouseMove;
         Events.OnMouseUp += OnMouseUp;
         Events.OnMouseDoubleClick += OnMouseDoubleClick;
-        Events.OnMouseLeave += _ =>
-        {
-            _hoveredPointIdx = -1;
-            _hoveredTabIdx = -1;
-            _hoveredReset = false;
-            _hoveringGraph = false;
-            _cursorX = -1f;
-            _cursorY = -1f;
-            Cursor = StandardCursor.Default;
-            InvalidatePaint();
-        };
+
+        this.Bind(_ => { Theme.Observe(); InvalidatePaint(); });
+    }
+
+    protected override void OnHoverChanged()
+    {
+        if (IsHovered) return;
+        SetPointHover(-1);
+        _hoveredTabIdx = -1;
+        SetResetHover(false);
+        SetGraphHover(false);
+        _cursorX = -1f;
+        _cursorY = -1f;
+        Cursor = UiCursor.Default;
     }
 
     public void LoadFromSettings(DevelopSettings s)
@@ -115,6 +119,7 @@ public sealed class CurveGraphControl : VisualElement
         _curveRed = (CurvePoint[])s.CurveRed.Clone();
         _curveGreen = (CurvePoint[])s.CurveGreen.Clone();
         _curveBlue = (CurvePoint[])s.CurveBlue.Clone();
+        ClearLit();
         InvalidatePaint();
     }
 
@@ -148,6 +153,7 @@ public sealed class CurveGraphControl : VisualElement
         SetActivePoints(CurveMath.DefaultCurve());
         _hoveredPointIdx = -1;
         _draggedPointIdx = -1;
+        ClearLit();
         CurveChanged?.Invoke();
         DragEnded?.Invoke();
         InvalidatePaint();
@@ -161,6 +167,7 @@ public sealed class CurveGraphControl : VisualElement
         _curveBlue = CurveMath.DefaultCurve();
         _hoveredPointIdx = -1;
         _draggedPointIdx = -1;
+        ClearLit();
         CurveChanged?.Invoke();
         DragEnded?.Invoke();
         InvalidatePaint();
@@ -172,16 +179,27 @@ public sealed class CurveGraphControl : VisualElement
         return new SKSize(w, DefaultHeight);
     }
 
-    protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
+    private static SKColor ChannelColor(int channel) => channel switch
     {
-        cmds.Add(new DrawCallbackCommand(DrawGraph));
-    }
+        1 => Theme.RedChannel,
+        2 => Theme.GreenChannel,
+        3 => Theme.BlueChannel,
+        _ => Theme.Text
+    };
 
     private CurvePoint[] GetActivePoints() => _activeChannel switch
     {
         CurveChannel.Red => _curveRed,
         CurveChannel.Green => _curveGreen,
         CurveChannel.Blue => _curveBlue,
+        _ => _curveRgb
+    };
+
+    private CurvePoint[] GetPoints(int channel) => channel switch
+    {
+        1 => _curveRed,
+        2 => _curveGreen,
+        3 => _curveBlue,
         _ => _curveRgb
     };
 
@@ -196,133 +214,115 @@ public sealed class CurveGraphControl : VisualElement
         }
     }
 
-    private void DrawGraph(SKCanvas canvas)
+    protected override void Paint(SKCanvas canvas)
     {
-        float w = Transform.Computed.Width;
-        float h = Transform.Computed.Height;
+        float w = W;
+        float h = H;
         if (w < 20f || h < 40f) return;
 
-        // Top Channel Tabs strip (0..24px)
         DrawChannelTabs(canvas, w);
 
-        // Footer readout & reset button at bottom
-        float footerH = 20f;
-        float footerTop = h - footerH - 4f;
-        _resetRect = new SKRect(w - 24f, footerTop, w - 4f, footerTop + 18f);
-
-        // Curve Graph Rectangle (30 .. footerTop - 6)
-        _plotRect = new SKRect(4f, 30f, w - 4f, footerTop - 6f);
+        float footerTop = h - FooterH - 4f;
+        _resetRect = new SKRect(w - 22f, footerTop + 1f, w - 2f, footerTop + 19f);
+        _plotRect = new SKRect(1f, TabH + 6f, w - 1f, footerTop - 6f);
         DrawPlotArea(canvas, _plotRect);
 
-        DrawFooter(canvas, w, _resetRect);
+        DrawFooter(canvas, _resetRect);
     }
+
+    private float TabWidth(float width) => Math.Max(1f, (width - TabInset * 2f) / 4f);
+
+    private int TabAt(float lx) => Math.Clamp((int)((lx - TabInset) / TabWidth(W)), 0, 3);
 
     private void DrawChannelTabs(SKCanvas canvas, float width)
     {
-        float tabW = (width - 9f) / 4f;
-        float tabH = 24f;
+        float r = Math.Min(Theme.RadiusSm + 1f, TabH * 0.5f);
+        var well = new SKRect(0.5f, 0.5f, width - 0.5f, TabH - 0.5f);
+        using (var fill = new SKPaint { Color = Theme.Well, IsAntialias = true })
+            canvas.DrawRoundRect(well, r, r, fill);
+        using (var edge = new SKPaint { Color = Theme.HairlineSubtle, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, IsAntialias = true })
+            canvas.DrawRoundRect(well, r, r, edge);
 
-        using var bgPaint = new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = true };
-        using var borderPaint = new SKPaint { Style = SKPaintStyle.Stroke, StrokeWidth = 1f, IsAntialias = true };
-        using var dotPaint = new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = true };
-        using var textPaint = new SKPaint
+        // Raised segment slides to the active channel.
+        float segW = TabWidth(width);
+        float pos = Math.Clamp(_tabSlide, 0f, 3f);
+        var ind = SKRect.Create(TabInset + segW * pos, TabInset, segW, TabH - TabInset * 2f);
+        float ir = Math.Max(0f, r - 1.5f);
+        if (Theme.UseShadows)
         {
-            IsAntialias = true,
-            TextSize = 11f,
-            Typeface = Theme.GetTypeface(500),
-            TextAlign = SKTextAlign.Center
-        };
-
-        for (int i = 0; i < 4; i++)
-        {
-            float x = i * (tabW + 3f);
-            var rect = new SKRect(x, 0f, x + tabW, tabH);
-            bool isActive = (int)_activeChannel == i;
-            bool isHover = _hoveredTabIdx == i;
-
-            bgPaint.Color = isActive ? Theme.SectionHeaderHover : (isHover ? Theme.WellHover : Theme.Well);
-            borderPaint.Color = isActive ? Theme.HairlineStrong : Theme.Hairline;
-            canvas.DrawRoundRect(rect, Theme.RadiusSm, Theme.RadiusSm, bgPaint);
-            canvas.DrawRoundRect(rect, Theme.RadiusSm, Theme.RadiusSm, borderPaint);
-
-            // Channel Indicator Dot
-            SKColor col = ChannelColors[i];
-            dotPaint.Color = col;
-            float dotX = rect.Left + 10f;
-            float dotY = rect.MidY;
-            canvas.DrawCircle(dotX, dotY, 3.5f, dotPaint);
-
-            // Channel Label Text
-            textPaint.Color = isActive ? Theme.Text : Theme.TextDim;
-            float textX = rect.Left + (tabW + 8f) * 0.5f;
-            float textY = rect.MidY + 3.8f;
-            canvas.DrawText(ChannelNames[i], textX, textY, textPaint);
+            using var blur = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 1.4f);
+            using var shadow = new SKPaint { Color = new SKColor(0, 0, 0, 90), MaskFilter = blur, IsAntialias = true };
+            var s = ind;
+            s.Offset(0, 1f);
+            canvas.DrawRoundRect(s, ir, ir, shadow);
         }
-    }
-
-    private void DrawPlotArea(SKCanvas canvas, SKRect plot)
-    {
-        // 1. Inset Well Background
-        using (var bgPaint = new SKPaint { Color = Theme.Well, Style = SKPaintStyle.Fill, IsAntialias = true })
+        using (var raised = new SKPaint { Color = Theme.Lighten(Theme.Button, 8), IsAntialias = true })
+            canvas.DrawRoundRect(ind, ir, ir, raised);
+        using (var rim = new SKPaint
         {
-            canvas.DrawRoundRect(plot, Theme.RadiusSm, Theme.RadiusSm, bgPaint);
-        }
-
-        // 2. 4x4 Inner Grid
-        using (var gridPaint = new SKPaint { Color = Theme.HairlineSubtle, StrokeWidth = 1f, IsAntialias = true })
-        {
-            for (int i = 1; i <= 3; i++)
-            {
-                float frac = i * 0.25f;
-                float gx = plot.Left + plot.Width * frac;
-                float gy = plot.Top + plot.Height * frac;
-                canvas.DrawLine(gx, plot.Top, gx, plot.Bottom, gridPaint);
-                canvas.DrawLine(plot.Left, gy, plot.Right, gy, gridPaint);
-            }
-        }
-
-        // 3. Diagonal Identity Reference Line
-        using (var diagPaint = new SKPaint
-        {
-            Color = new SKColor(255, 255, 255, 22),
-            StrokeWidth = 1f,
-            IsAntialias = true
-        })
-        {
-            canvas.DrawLine(plot.Left, plot.Bottom, plot.Right, plot.Top, diagPaint);
-        }
-
-        // 4. Histogram Underlay
-        if (_hasHistogram)
-        {
-            DrawHistogramUnderlay(canvas, plot);
-        }
-
-        // 5. Inactive Channels (faint ghost curves)
-        DrawGhostCurves(canvas, plot);
-
-        // 6. Active Channel Curve
-        DrawActiveCurve(canvas, plot);
-
-        // 7. Control Points on Active Curve
-        DrawControlPoints(canvas, plot);
-
-        // 8. Outer Border Stroke
-        using (var border = new SKPaint
-        {
-            Color = _hoveringGraph ? Theme.HairlineStrong : Theme.Hairline,
+            Color = Theme.OutlineAccent ? Theme.Accent : Theme.HairlineStrong,
             Style = SKPaintStyle.Stroke,
             StrokeWidth = 1f,
             IsAntialias = true
         })
         {
-            canvas.DrawRoundRect(plot, Theme.RadiusSm, Theme.RadiusSm, border);
+            var rr = ind;
+            rr.Inflate(-0.5f, -0.5f);
+            canvas.DrawRoundRect(rr, ir, ir, rim);
         }
+
+        using var dot = new SKPaint { IsAntialias = true };
+        using var text = new TextPaint { TextSize = 11f, TextAlign = SKTextAlign.Left };
+        for (int i = 0; i < 4; i++)
+        {
+            bool active = (int)_activeChannel == i;
+            text.Typeface = Theme.GetTypeface(active ? 600 : 500);
+            text.Color = active ? Theme.Text : (_hoveredTabIdx == i ? Theme.TextSecondary : Theme.TextDim);
+
+            const float DotD = 6f;
+            const float DotGap = 5f;
+            float x0 = TabInset + segW * i;
+            float x = x0 + (segW - (DotD + DotGap + text.MeasureText(ChannelNames[i]))) * 0.5f;
+            float cy = TabH * 0.5f;
+
+            SKColor col = ChannelColor(i);
+            dot.Color = active ? col : col.WithAlpha(150);
+            canvas.DrawCircle(x + DotD * 0.5f, cy, DotD * 0.5f, dot);
+
+            var m = text.FontMetrics;
+            canvas.DrawText(ChannelNames[i], x + DotD + DotGap, cy - (m.Ascent + m.Descent) * 0.5f, text);
+        }
+    }
+
+    private void DrawPlotArea(SKCanvas canvas, SKRect plot)
+    {
+        PlotChrome.DrawWell(canvas, plot, _plotHover);
+        PlotChrome.DrawGrid(canvas, plot);
+
+        canvas.Save();
+        canvas.ClipRoundRect(new SKRoundRect(plot, Theme.Radius), antialias: true);
+
+        // Diagonal identity reference.
+        using (var diag = new SKPaint { Color = Theme.Hairline, StrokeWidth = 1f, IsAntialias = true })
+            canvas.DrawLine(plot.Left, plot.Bottom, plot.Right, plot.Top, diag);
+
+        if (_hasHistogram)
+            DrawHistogramUnderlay(canvas, plot);
+
+        DrawGhostCurves(canvas, plot);
+        DrawActiveCurve(canvas, plot);
+
+        canvas.Restore();
+
+        PlotChrome.DrawFrame(canvas, plot);
+
+        // Handles draw over the frame so edge points stay whole.
+        DrawControlPoints(canvas, plot);
     }
 
     private void DrawHistogramUnderlay(SKCanvas canvas, SKRect plot)
     {
-        float[]? data = _activeChannel switch
+        float[] data = _activeChannel switch
         {
             CurveChannel.Red => _histR,
             CurveChannel.Green => _histG,
@@ -330,17 +330,12 @@ public sealed class CurveGraphControl : VisualElement
             _ => _histY
         };
 
-        if (data == null || data.Length == 0) return;
-
         float peak = 0f;
         for (int i = 0; i < 256; i++)
             peak = Math.Max(peak, data[i]);
         if (peak <= 0.001f) return;
 
         float logPeak = MathF.Log(1f + peak);
-        SKColor baseCol = ChannelColors[(int)_activeChannel];
-        SKColor fillCol = new(baseCol.Red, baseCol.Green, baseCol.Blue, 38); // ~15% soft alpha underlay
-
         using var path = new SKPath();
         path.MoveTo(plot.Left, plot.Bottom);
         float stepX = plot.Width / 255f;
@@ -348,15 +343,25 @@ public sealed class CurveGraphControl : VisualElement
         for (int i = 0; i < 256; i++)
         {
             float norm = MathF.Log(1f + data[i]) / logPeak;
-            float x = plot.Left + i * stepX;
-            float y = plot.Bottom - Math.Clamp(norm, 0f, 1f) * plot.Height;
-            path.LineTo(x, y);
+            path.LineTo(plot.Left + i * stepX, plot.Bottom - Math.Clamp(norm, 0f, 1f) * plot.Height);
         }
         path.LineTo(plot.Right, plot.Bottom);
         path.Close();
 
-        using var fillPaint = new SKPaint { Color = fillCol, Style = SKPaintStyle.Fill, IsAntialias = true };
-        canvas.DrawPath(path, fillPaint);
+        SKColor col = ChannelColor((int)_activeChannel);
+        using var fill = new SKPaint { Color = col.WithAlpha(_activeChannel == CurveChannel.Rgb ? (byte)18 : (byte)30), IsAntialias = true };
+        canvas.DrawPath(path, fill);
+    }
+
+    private static SKPath BuildCurvePath(CurvePoint[] points, SKRect plot)
+    {
+        float[] lut = CurveMath.EvaluateSpline(points, (int)Math.Max(10f, plot.Width));
+        var path = new SKPath();
+        float stepX = plot.Width / (lut.Length - 1);
+        path.MoveTo(plot.Left, plot.Bottom - Math.Clamp(lut[0], 0f, 1f) * plot.Height);
+        for (int i = 1; i < lut.Length; i++)
+            path.LineTo(plot.Left + i * stepX, plot.Bottom - Math.Clamp(lut[i], 0f, 1f) * plot.Height);
+        return path;
     }
 
     private void DrawGhostCurves(SKCanvas canvas, SKRect plot)
@@ -364,163 +369,118 @@ public sealed class CurveGraphControl : VisualElement
         for (int ch = 0; ch < 4; ch++)
         {
             if (ch == (int)_activeChannel) continue;
-
-            CurvePoint[] pts = ch switch
-            {
-                1 => _curveRed,
-                2 => _curveGreen,
-                3 => _curveBlue,
-                _ => _curveRgb
-            };
-
+            CurvePoint[] pts = GetPoints(ch);
             if (CurveMath.IsIdentity(pts)) continue;
 
-            float[] lut = CurveMath.EvaluateSpline(pts, (int)Math.Max(10f, plot.Width));
-            using var path = new SKPath();
-            float stepX = plot.Width / (lut.Length - 1);
-            path.MoveTo(plot.Left, plot.Bottom - lut[0] * plot.Height);
-
-            for (int i = 1; i < lut.Length; i++)
+            using var path = BuildCurvePath(pts, plot);
+            using var ghost = new SKPaint
             {
-                float x = plot.Left + i * stepX;
-                float y = plot.Bottom - Math.Clamp(lut[i], 0f, 1f) * plot.Height;
-                path.LineTo(x, y);
-            }
-
-            SKColor c = ChannelColors[ch];
-            using var ghostPaint = new SKPaint
-            {
-                Color = new SKColor(c.Red, c.Green, c.Blue, 70), // subtle faint ghost stroke
+                Color = ChannelColor(ch).WithAlpha(70),
                 Style = SKPaintStyle.Stroke,
                 StrokeWidth = 1.2f,
                 IsAntialias = true
             };
-            canvas.DrawPath(path, ghostPaint);
+            canvas.DrawPath(path, ghost);
         }
     }
 
     private void DrawActiveCurve(SKCanvas canvas, SKRect plot)
     {
-        CurvePoint[] activePoints = GetActivePoints();
-        float[] lut = CurveMath.EvaluateSpline(activePoints, (int)Math.Max(10f, plot.Width));
-        using var path = new SKPath();
-        float stepX = plot.Width / (lut.Length - 1);
-        path.MoveTo(plot.Left, plot.Bottom - lut[0] * plot.Height);
-
-        for (int i = 1; i < lut.Length; i++)
-        {
-            float x = plot.Left + i * stepX;
-            float y = plot.Bottom - Math.Clamp(lut[i], 0f, 1f) * plot.Height;
-            path.LineTo(x, y);
-        }
-
-        SKColor c = ChannelColors[(int)_activeChannel];
-        using var curvePaint = new SKPaint
-        {
-            Color = c,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 2.0f,
-            IsAntialias = true
-        };
-        canvas.DrawPath(path, curvePaint);
+        using var path = BuildCurvePath(GetActivePoints(), plot);
+        SKColor c = ChannelColor((int)_activeChannel);
+        PlotChrome.DrawUnderFill(canvas, path, plot, c, alpha: 26);
+        PlotChrome.StrokeCurve(canvas, path, c, glow: _dragging ? 1f : 0.7f);
     }
 
     private void DrawControlPoints(SKCanvas canvas, SKRect plot)
     {
         CurvePoint[] points = GetActivePoints();
-        SKColor activeCol = ChannelColors[(int)_activeChannel];
-
-        using var fillPaint = new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = true };
-        using var ringPaint = new SKPaint { Style = SKPaintStyle.Stroke, IsAntialias = true };
-        using var shadowPaint = new SKPaint { Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f, Color = new SKColor(0, 0, 0, 110), IsAntialias = true };
-        using var glowPaint = new SKPaint { Style = SKPaintStyle.Stroke, StrokeWidth = 2.5f, IsAntialias = true };
-        using var pipPaint = new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = true };
-
         for (int i = 0; i < points.Length; i++)
         {
-            CurvePoint pt = points[i];
-            float sx = plot.Left + (pt.X / 255f) * plot.Width;
-            float sy = plot.Bottom - (pt.Y / 255f) * plot.Height;
-
-            bool isHighlighted = (i == _hoveredPointIdx) || (i == _draggedPointIdx && _dragging);
-            float radius = isHighlighted ? 9.5f : 7.0f;
-
-            if (isHighlighted)
-            {
-                // Outer warm amber glow halo
-                glowPaint.Color = Theme.Accent;
-                canvas.DrawCircle(sx, sy, radius + 4.0f, glowPaint);
-            }
-
-            // Subtle dark shadow outline for contrast against any background
-            canvas.DrawCircle(sx, sy, radius + 1f, shadowPaint);
-
-            // Disc fill
-            fillPaint.Color = isHighlighted ? SKColors.White : activeCol;
-            canvas.DrawCircle(sx, sy, radius, fillPaint);
-
-            // Ring border
-            ringPaint.Color = isHighlighted ? Theme.Accent : SKColors.White;
-            ringPaint.StrokeWidth = isHighlighted ? 2.5f : 2.0f;
-            canvas.DrawCircle(sx, sy, radius, ringPaint);
-
-            // Precision center pip when hovered or dragged
-            if (isHighlighted)
-            {
-                pipPaint.Color = Theme.Accent;
-                canvas.DrawCircle(sx, sy, 2.5f, pipPaint);
-            }
+            float sx = plot.Left + (points[i].X / 255f) * plot.Width;
+            float sy = plot.Bottom - (points[i].Y / 255f) * plot.Height;
+            bool active = _dragging && i == _draggedPointIdx;
+            PlotChrome.DrawHandle(canvas, sx, sy, i == _litIdx ? _lit : 0f, active);
         }
     }
 
-    private void DrawFooter(SKCanvas canvas, float width, SKRect resetRect)
+    private void DrawFooter(SKCanvas canvas, SKRect resetRect)
     {
-        // Coordinate Readout (In: X  Out: Y)
-        using var textPaint = new SKPaint
+        bool live = _dragging || _hoveredPointIdx >= 0;
+        using var label = new TextPaint { TextSize = 10f, Typeface = Theme.GetTypeface(500), Color = Theme.TextDim };
+        using var value = new TextPaint
         {
-            IsAntialias = true,
             TextSize = 11f,
-            Typeface = Theme.GetTypeface(500),
-            Color = (_dragging || _hoveredPointIdx >= 0) ? Theme.Accent : Theme.TextDim
+            Typeface = Theme.MonospaceTypeface,
+            Color = live ? Theme.Accent : (_cursorX >= 0f ? Theme.TextSecondary : Theme.TextDim)
         };
 
-        string inStr = _cursorX >= 0f ? $"{_cursorX:0}" : "---";
-        string outStr = _cursorY >= 0f ? $"{_cursorY:0}" : "---";
-        string readout = $"In: {inStr,-3}   Out: {outStr,-3}";
-        canvas.DrawText(readout, 6f, resetRect.MidY + 4f, textPaint);
+        var m = value.FontMetrics;
+        float baseline = resetRect.MidY - (m.Ascent + m.Descent) * 0.5f;
+        string inStr = _cursorX >= 0f ? $"{_cursorX,3:0}" : "  –";
+        string outStr = _cursorY >= 0f ? $"{_cursorY,3:0}" : "  –";
 
-        // Reset Button ↺
-        using var resetBg = new SKPaint
-        {
-            Color = _hoveredReset ? Theme.WellHover : Theme.Well,
-            Style = SKPaintStyle.Fill,
-            IsAntialias = true
-        };
-        using var resetBorder = new SKPaint
-        {
-            Color = _hoveredReset ? Theme.Accent : Theme.Hairline,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1f,
-            IsAntialias = true
-        };
-        canvas.DrawRoundRect(resetRect, Theme.RadiusSm, Theme.RadiusSm, resetBg);
-        canvas.DrawRoundRect(resetRect, Theme.RadiusSm, Theme.RadiusSm, resetBorder);
+        float x = 3f;
+        canvas.DrawText("In", x, baseline, label);
+        x += label.MeasureText("In") + 5f;
+        canvas.DrawText(inStr, x, baseline, value);
+        x += value.MeasureText("000") + 14f;
+        canvas.DrawText("Out", x, baseline, label);
+        x += label.MeasureText("Out") + 5f;
+        canvas.DrawText(outStr, x, baseline, value);
 
-        using var iconPaint = new SKPaint
+        PlotChrome.DrawResetButton(canvas, resetRect, _resetHover);
+    }
+
+    private void ClearLit()
+    {
+        _litIdx = -1;
+        _lit = 0f;
+        InvalidatePaint();
+    }
+
+    private void SetPointHover(int index)
+    {
+        if (_hoveredPointIdx == index) return;
+        _hoveredPointIdx = index;
+        if (index >= 0)
         {
-            IsAntialias = true,
-            TextSize = 12f,
-            Typeface = Theme.GetTypeface(600),
-            Color = _hoveredReset ? Theme.Accent : Theme.TextDim,
-            TextAlign = SKTextAlign.Center
-        };
-        canvas.DrawText("↺", resetRect.MidX, resetRect.MidY + 4.5f, iconPaint);
+            if (index != _litIdx)
+            {
+                _litIdx = index;
+                _lit = 0f;
+                InvalidatePaint();
+            }
+            _lit = 1f;
+            InvalidatePaint();
+        }
+        else if (!_dragging)
+        {
+            _lit = 0f;
+            InvalidatePaint();
+        }
+        InvalidatePaint();
+    }
+
+    private void SetResetHover(bool hover)
+    {
+        if (_hoveredReset == hover) return;
+        _hoveredReset = hover;
+        _resetHover = hover ? 1f : 0f;
+        InvalidatePaint();
+    }
+
+    private void SetGraphHover(bool hover)
+    {
+        if (_hoveringGraph == hover) return;
+        _hoveringGraph = hover;
+        _plotHover = hover ? 1f : 0f;
+        InvalidatePaint();
     }
 
     private int HitTestPoint(CurvePoint[] points, float screenX, float screenY)
     {
-        const float hitRadius = 18f; // 18px radius (36px diameter hit target)
-        const float thresholdSq = hitRadius * hitRadius;
+        const float thresholdSq = PointHitR * PointHitR;
         int bestIdx = -1;
         float bestDistSq = thresholdSq;
         for (int i = 0; i < points.Length; i++)
@@ -573,10 +533,22 @@ public sealed class CurveGraphControl : VisualElement
             SetActivePoints(points.ToArray());
             _hoveredPointIdx = -1;
             _draggedPointIdx = -1;
+            ClearLit();
             CurveChanged?.Invoke();
             DragEnded?.Invoke();
             InvalidatePaint();
         }
+    }
+
+    private void BeginPointDrag(int index)
+    {
+        _draggedPointIdx = index;
+        _dragging = true;
+        _litIdx = index;
+        _lit = 1f;
+        InvalidatePaint();
+        CapturePointer();
+        Cursor = UiCursor.Hand;
     }
 
     private void OnMouseDown(object sender, MouseEventArgs args)
@@ -585,23 +557,21 @@ public sealed class CurveGraphControl : VisualElement
         float lx = local.X;
         float ly = local.Y;
 
-        // 1. Channel Tabs
-        if (ly >= 0f && ly <= 26f)
+        // 1. Channel tabs
+        if (ly >= 0f && ly <= TabH + 2f)
         {
-            if (args.Button == (int)MouseButton.Left)
+            if (args.Button == PointerButton.Left)
             {
-                float tabW = (Transform.Computed.Width - 9f) / 4f;
-                int tabIdx = Math.Clamp((int)(lx / (tabW + 3f)), 0, 3);
-                ActiveChannel = (CurveChannel)tabIdx;
+                ActiveChannel = (CurveChannel)TabAt(lx);
                 args.Handled = true;
                 return;
             }
         }
 
-        // 2. Reset Button
+        // 2. Reset button
         if (_resetRect.Contains(lx, ly))
         {
-            if (args.Button == (int)MouseButton.Left)
+            if (args.Button == PointerButton.Left)
             {
                 ResetActiveChannel();
                 args.Handled = true;
@@ -609,13 +579,13 @@ public sealed class CurveGraphControl : VisualElement
             }
         }
 
-        // 3. Graph Area & Control Points (generous grab target)
+        // 3. Graph area & control points (generous grab target)
         var points = GetActivePoints();
         int hit = HitTestPoint(points, lx, ly);
 
         if (hit >= 0)
         {
-            if (args.Button == (int)MouseButton.Right)
+            if (args.Button == PointerButton.Right)
             {
                 if (hit > 0 && hit < points.Length - 1)
                 {
@@ -624,29 +594,21 @@ public sealed class CurveGraphControl : VisualElement
                     return;
                 }
             }
-            else if (args.Button == (int)MouseButton.Left)
+            else if (args.Button == PointerButton.Left)
             {
-                _draggedPointIdx = hit;
-                _dragging = true;
-                CapturePointer();
-                Cursor = StandardCursor.Hand;
+                BeginPointDrag(hit);
                 InvalidatePaint();
                 args.Handled = true;
                 return;
             }
         }
-        else if (_plotRect.Contains(lx, ly) && args.Button == (int)MouseButton.Left)
+        else if (_plotRect.Contains(lx, ly) && args.Button == PointerButton.Left)
         {
             ScreenToCurve(lx, ly, out float cx, out float cy);
-            int newIdx = InsertPoint(cx, cy);
-            _draggedPointIdx = newIdx;
-            _dragging = true;
-            CapturePointer();
-            Cursor = StandardCursor.Hand;
+            BeginPointDrag(InsertPoint(cx, cy));
             CurveChanged?.Invoke();
             InvalidatePaint();
             args.Handled = true;
-            return;
         }
     }
 
@@ -656,18 +618,9 @@ public sealed class CurveGraphControl : VisualElement
         float lx = local.X;
         float ly = local.Y;
 
-        _hoveringGraph = _plotRect.Contains(lx, ly);
-        _hoveredReset = _resetRect.Contains(lx, ly);
-
-        if (ly >= 0f && ly <= 26f)
-        {
-            float tabW = (Transform.Computed.Width - 9f) / 4f;
-            _hoveredTabIdx = Math.Clamp((int)(lx / (tabW + 3f)), 0, 3);
-        }
-        else
-        {
-            _hoveredTabIdx = -1;
-        }
+        SetGraphHover(_plotRect.Contains(lx, ly));
+        SetResetHover(_resetRect.Contains(lx, ly));
+        _hoveredTabIdx = ly >= 0f && ly <= TabH + 2f ? TabAt(lx) : -1;
 
         if (_dragging && _draggedPointIdx >= 0 && HasPointerCapture)
         {
@@ -694,7 +647,7 @@ public sealed class CurveGraphControl : VisualElement
             _cursorX = points[idx].X;
             _cursorY = points[idx].Y;
 
-            Cursor = StandardCursor.Hand;
+            Cursor = UiCursor.Hand;
             CurveChanged?.Invoke();
             InvalidatePaint();
             args.Handled = true;
@@ -702,31 +655,26 @@ public sealed class CurveGraphControl : VisualElement
         }
 
         var pts = GetActivePoints();
-        int hovered = HitTestPoint(pts, lx, ly);
-        if (hovered != _hoveredPointIdx)
-        {
-            _hoveredPointIdx = hovered;
-            InvalidatePaint();
-        }
+        SetPointHover(HitTestPoint(pts, lx, ly));
 
         if (_hoveredPointIdx >= 0)
         {
             _cursorX = pts[_hoveredPointIdx].X;
             _cursorY = pts[_hoveredPointIdx].Y;
-            Cursor = StandardCursor.Hand;
+            Cursor = UiCursor.Hand;
         }
         else if (_hoveringGraph)
         {
             ScreenToCurve(lx, ly, out float cx, out float cy);
             _cursorX = cx;
             _cursorY = cy;
-            Cursor = StandardCursor.Crosshair;
+            Cursor = UiCursor.Crosshair;
         }
         else
         {
             _cursorX = -1f;
             _cursorY = -1f;
-            Cursor = (_hoveredReset || _hoveredTabIdx >= 0) ? StandardCursor.Hand : StandardCursor.Default;
+            Cursor = (_hoveredReset || _hoveredTabIdx >= 0) ? UiCursor.Hand : UiCursor.Default;
         }
 
         InvalidatePaint();
@@ -740,8 +688,11 @@ public sealed class CurveGraphControl : VisualElement
             _draggedPointIdx = -1;
             if (HasPointerCapture)
                 ReleasePointer();
+            if (_hoveredPointIdx < 0)
+                _lit = 0f;
+                InvalidatePaint();
             DragEnded?.Invoke();
-            Cursor = _hoveredPointIdx >= 0 ? StandardCursor.Hand : (_hoveringGraph ? StandardCursor.Crosshair : StandardCursor.Default);
+            Cursor = _hoveredPointIdx >= 0 ? UiCursor.Hand : (_hoveringGraph ? UiCursor.Crosshair : UiCursor.Default);
             InvalidatePaint();
             args.Handled = true;
         }

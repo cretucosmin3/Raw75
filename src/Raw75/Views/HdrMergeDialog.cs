@@ -5,14 +5,18 @@ using System.Threading;
 using System.Threading.Tasks;
 using Blossom;
 using Blossom.Core;
+using Blossom.Core.Input;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
+using Blossom.Desktop;
+using Blossom.Hosting;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using Raw75.Controls;
 using Raw75.Develop;
 using Raw75.Imaging;
 using Raw75.Io;
 using Raw75.Pipeline;
-using Silk.NET.Input;
 using SkiaSharp;
 
 namespace Raw75.Views;
@@ -27,555 +31,267 @@ public sealed class HdrMergeRequest
 }
 
 /// <summary>
-/// Modal dialog for HDR exposure merge:
-/// Displays thumbnail strip sorted by EV, save path, filename, alignment, deghosting options,
-/// and manages background merge job with progress and cancellation.
+/// Modal dialog for HDR exposure merge: bracket strip sorted by EV, save folder, file name,
+/// alignment and deghosting options; runs the merge in the background with progress and cancel.
 /// </summary>
-public sealed class HdrMergeDialog : VisualElement
+public sealed class HdrMergeDialog : ModalDialog
 {
-    private const float CardW = 560f;
-    private const float CardH = 430f;
+    private const float StripH = 84f;
+    private const float StripPad = 6f;
+    private const float CellGap = 6f;
+    private const float CardW = 580f;
 
-    private readonly VisualElement _card;
-    private readonly VisualElement _title;
-    private readonly VisualElement _thumbStrip;
-    private readonly List<VisualElement> _thumbCells = new();
+    private static readonly HdrDeghostMode[] DeghostModes = { HdrDeghostMode.Off, HdrDeghostMode.Low, HdrDeghostMode.High };
 
-    private readonly VisualElement _saveLabel;
-    private readonly VisualElement _saveField;
-    private readonly IconButton _btnBrowse;
+    private readonly RichBox _subtitle;
+    private readonly Stack _strip;
+    private readonly TextField _fileField;
+    private readonly IconButton _browse;
+    private readonly CheckToggle _align;
+    private readonly SegmentedControl _deghostSeg;
+    private readonly Stack _footer;
+    private readonly IconButton _merge;
 
-    private readonly VisualElement _fileLabel;
-    private readonly VisualElement _fileField;
-    private readonly VisualElement _fileCaret;
+    private readonly Signal<string> _saveDir = new("");
+    private readonly Signal<HdrDeghostMode> _deghost = new(HdrDeghostMode.Low);
+    private readonly Signal<bool> _running = new(false);
+    private readonly Signal<float> _progress = new(0f);
+    private readonly Signal<(string Text, bool Error)> _status = new(("", false));
 
-    private readonly VisualElement _optionsLabel;
-    private readonly IconButton _btnAlign;
-    private readonly IconButton[] _deghostBtns;
-
-    private readonly VisualElement _progressTrack;
-    private readonly VisualElement _progressBar;
-    private readonly VisualElement _statusLabel;
-
-    private readonly IconButton _btnMerge;
-    private readonly IconButton _btnCancel;
-
-    private IReadOnlyList<PhotoDocument> _docs = Array.Empty<PhotoDocument>();
     private List<(PhotoDocument doc, float ev)> _sortedStack = new();
-    private string _saveDir = "";
-    private string _fileName = "";
-    private bool _align = true;
-    private HdrDeghostMode _deghost = HdrDeghostMode.Low;
-
-    private int _caretIndex = 0;
-    private bool _caretVisible = true;
-    private System.Threading.Timer? _blinkTimer;
-
     private CancellationTokenSource? _jobCts;
-    private bool _isRunning = false;
 
     public event Action<string>? MergeSucceeded;
 
-    public HdrMergeDialog()
+    public HdrMergeDialog() : base("HdrMergeDialog", zIndex: 1150, cardWidth: CardW)
     {
-        Name = "HdrMergeDialog";
-        Visible = false;
-        ZIndex = 1150;
-        ReceivesKeyboard = true;
-        Transform = new Transform(0, 0, 800, 600)
-        {
-            Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
-        };
-        Style = new ElementStyle { BackColor = new SKColor(0, 0, 0, 160) };
-
-        _card = new VisualElement
-        {
-            Name = "HdrCard",
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Panel,
-                Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = Theme.Radius },
-                Shadow = new ShadowStyle(0, 4f, 12, 12, new SKColor(0, 0, 0, 160))
-            }
-        };
-
-        _title = new VisualElement
-        {
-            Name = "HdrTitle",
-            Text = "Merge HDR Bracket",
-            IsClickthrough = true,
-            Style = new ElementStyle
-            {
-                Text = new TextStyle { Color = Theme.Text, Size = 17, Weight = 700, Alignment = TextAlign.Left }
-            }
-        };
-
-        _thumbStrip = new VisualElement
+        _strip = new Stack
         {
             Name = "HdrThumbStrip",
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Canvas,
-                Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = Theme.RadiusSm }
-            }
+            Orientation = Orientation.Horizontal,
+            Gap = CellGap,
+            Padding = new Thickness(StripPad),
+            Overflow = OverflowMode.Clip,
+            Style = new ElementStyle { Border = new BorderStyle { Width = 1 } }
         };
+        _strip.MinHeight = StripH;
+        _strip.Bind(s =>
+        {
+            s.Style.BackColor = Theme.Well;
+            s.Style.Border.Color = Theme.HairlineSubtle;
+            s.Style.Border.Roundness = Theme.RadiusSm;
+        });
 
-        _saveLabel = Label("SaveLabel", "Save to", Theme.TextDim, 12, 500);
-        _saveField = new VisualElement
+        var pathWell = new RichBox
         {
-            Name = "SaveField",
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Track,
-                Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = Theme.RadiusSm },
-                Text = new TextStyle { Color = Theme.Text, Size = 12, Weight = 400, Alignment = TextAlign.Left, Padding = 8, Overflow = TextOverflow.Ellipsis }
-            }
-        };
-        _btnBrowse = new IconButton("Browse…");
-        _btnBrowse.Clicked += BrowseFolder;
-
-        _fileLabel = Label("FileLabel", "Filename", Theme.TextDim, 12, 500);
-        _fileField = new VisualElement
-        {
-            Name = "FileField",
-            Cursor = StandardCursor.IBeam,
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Track,
-                Border = new BorderStyle { Width = 1, Color = Theme.Accent, Roundness = Theme.RadiusSm },
-                Text = new TextStyle { Color = Theme.Text, Size = 13, Weight = 500, Alignment = TextAlign.Left, Padding = 8 }
-            }
-        };
-        _fileCaret = new VisualElement
-        {
-            Name = "FileCaret",
+            Name = "HdrSavePath",
             IsClickthrough = true,
-            Visible = false,
-            Style = new ElementStyle { BackColor = Theme.Accent }
-        };
-
-        _optionsLabel = Label("OptionsLabel", "Options", Theme.TextDim, 12, 500);
-        _btnAlign = new IconButton("Align", "check");
-        _btnAlign.Toggled = true;
-        _btnAlign.Clicked += () =>
-        {
-            _align = !_align;
-            _btnAlign.Toggled = _align;
-            InvalidatePaint();
-        };
-
-        _deghostBtns = new IconButton[3];
-        _deghostBtns[0] = new IconButton("Ghost: Off");
-        _deghostBtns[0].Clicked += () => SetDeghost(HdrDeghostMode.Off);
-        _deghostBtns[1] = new IconButton("Ghost: Low");
-        _deghostBtns[1].Clicked += () => SetDeghost(HdrDeghostMode.Low);
-        _deghostBtns[2] = new IconButton("Ghost: High");
-        _deghostBtns[2].Clicked += () => SetDeghost(HdrDeghostMode.High);
-        SetDeghost(HdrDeghostMode.Low); // Default Low once tests pass
-
-        _progressTrack = new VisualElement
-        {
-            Name = "ProgressTrack",
-            Visible = false,
+            Padding = new Thickness(10f, 0f, 10f, 0f),
             Style = new ElementStyle
             {
-                BackColor = Theme.Track,
-                Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = 2 }
+                Border = new BorderStyle { Width = 1 },
+                Text = new TextStyle { Size = 12f, Weight = 400, Alignment = TextAlign.Left, Padding = 0, Overflow = TextOverflow.Ellipsis, MaxLines = 1 }
             }
         };
-        _progressBar = new VisualElement
+        pathWell.MinHeight = pathWell.MaxHeight = TextField.DefaultHeight;
+        pathWell.BindText(() => _saveDir.Value);
+        pathWell.Bind(p =>
         {
-            Name = "ProgressBar",
-            Style = new ElementStyle
-            {
-                BackColor = Theme.Accent,
-                Border = new BorderStyle { Width = 0, Roundness = 2 }
-            }
-        };
-        _progressTrack.AddChild(_progressBar);
+            p.Style.BackColor = Theme.Well;
+            p.Style.Border.Color = Theme.Hairline;
+            p.Style.Border.Roundness = Theme.RadiusSm;
+            p.Style.Text.Color = Theme.TextSecondary;
+        });
+        _browse = new IconButton("Browse…", "folder");
+        _browse.Clicked += BrowseFolder;
+        var saveRow = new Stack { Name = "HdrSaveRow", Orientation = Orientation.Horizontal, Align = LayoutAlign.Center, Gap = 8f };
+        saveRow.AddChild(pathWell);
+        saveRow.AddChild(_browse);
+        Stack.SetGrow(pathWell, 1f);
 
-        _statusLabel = new VisualElement
+        _fileField = new TextField("File name") { CharFilter = IsFileNameChar };
+        _fileField.Submitted += StartMerge;
+        _fileField.Escaped += CancelOrClose;
+
+        _align = new CheckToggle(initialChecked: true);
+        _align.Transform.Width = 16f;
+        _align.Transform.Height = 16f;
+        var alignLabel = Label("Align frames before merging", TextRole.Body);
+        alignLabel.IsClickthrough = false;
+        alignLabel.Cursor = UiCursor.Hand;
+        alignLabel.Events.OnClick += (_, e) =>
         {
-            Name = "StatusLabel",
-            IsClickthrough = true,
-            Style = new ElementStyle
-            {
-                Text = new TextStyle { Color = Theme.TextDim, Size = 12, Weight = 400, Alignment = TextAlign.Left }
-            }
-        };
-
-        _btnMerge = new IconButton("Merge HDR", primary: true);
-        _btnMerge.Clicked += StartMerge;
-
-        _btnCancel = new IconButton("Cancel");
-        _btnCancel.Clicked += CancelOrClose;
-
-        AddChild(_card);
-        _card.AddChild(_title);
-        _card.AddChild(_thumbStrip);
-        _card.AddChild(_saveLabel);
-        _card.AddChild(_saveField);
-        _card.AddChild(_btnBrowse);
-        _card.AddChild(_fileLabel);
-        _card.AddChild(_fileField);
-        _card.AddChild(_fileCaret);
-        _card.AddChild(_optionsLabel);
-        _card.AddChild(_btnAlign);
-        foreach (var b in _deghostBtns) _card.AddChild(b);
-        _card.AddChild(_progressTrack);
-        _card.AddChild(_statusLabel);
-        _card.AddChild(_btnMerge);
-        _card.AddChild(_btnCancel);
-
-        Events.OnClick += (_, e) =>
-        {
-            if (!_isRunning && !_card.Transform.Computed.RectF.Contains(e.Global.X, e.Global.Y))
-            {
-                e.Handled = true;
-                Close();
-            }
-        };
-
-        _fileField.Events.OnClick += (_, e) =>
-        {
-            if (_isRunning) return;
-            float localX = e.Global.X - (_fileField.Transform.Computed.X + 8f);
-            _caretIndex = Math.Clamp((int)MathF.Round(localX / 8f), 0, _fileName.Length);
-            SyncFileField();
+            if (e.Button != PointerButton.Left || _running.Peek()) return;
+            _align.Toggle();
             e.Handled = true;
         };
+        var alignRow = new Stack { Name = "HdrAlignRow", Orientation = Orientation.Horizontal, Align = LayoutAlign.Center, Gap = 8f };
+        alignRow.MinHeight = SegmentedControl.DefaultHeight;
+        alignRow.AddChild(_align);
+        alignRow.AddChild(alignLabel);
+        Stack.SetGrow(alignLabel, 1f);
 
-        Events.OnKeyDown += k =>
+        _deghostSeg = Segmented(_deghost, DeghostModes, "Off", "Low", "High");
+
+        var options = new Stack { Name = "HdrOptions", Orientation = Orientation.Horizontal, Gap = 16f };
+        var alignField = Field("Alignment", alignRow);
+        var ghostField = Field("Ghost removal", _deghostSeg);
+        options.AddChild(alignField);
+        options.AddChild(ghostField);
+        Stack.SetGrow(alignField, 1f);
+        Stack.SetGrow(ghostField, 1f);
+
+        var status = Label("", TextRole.Dim);
+        status.Bind(s =>
         {
-            if (!Visible) return;
-            var key = (Key)k;
-            if (key == Key.Escape) { CancelOrClose(); return; }
-            if (key == Key.Enter || key == Key.KeypadEnter) { if (!_isRunning) StartMerge(); return; }
+            var (text, error) = _status.Value;
+            s.Text = text;
+            s.Style.Text.Color = error ? Theme.RedChannel : Theme.TextDim;
+        });
+        var cancel = new IconButton("Cancel");
+        cancel.Clicked += CancelOrClose;
+        _merge = new IconButton("Merge HDR", primary: true);
+        _merge.Clicked += StartMerge;
+        _footer = Footer(status, cancel, _merge);
 
-            if (_isRunning) return;
+        var body = Body();
+        body.AddChild(_strip);
+        body.AddChild(Field("Save to", saveRow));
+        body.AddChild(Field("File name", _fileField));
+        body.AddChild(options);
 
-            if (key == Key.Backspace || (int)key == 259 || (int)key == 8 || (int)key == 127)
-            {
-                if (_caretIndex > 0)
-                {
-                    _fileName = _fileName.Remove(_caretIndex - 1, 1);
-                    _caretIndex--;
-                    SyncFileField();
-                }
-                return;
-            }
+        Card.AddChild(Header("Merge HDR", "", out _subtitle));
+        Card.AddChild(Separator());
+        Card.AddChild(body);
+        Card.AddChild(new ProgressLine(_progress, _running));
+        Card.AddChild(_footer);
 
-            if (key == Key.Delete || (int)key == 261)
-            {
-                if (_caretIndex < _fileName.Length)
-                {
-                    _fileName = _fileName.Remove(_caretIndex, 1);
-                    SyncFileField();
-                }
-                return;
-            }
-
-            if (key == Key.Left) { _caretIndex = Math.Max(0, _caretIndex - 1); SyncFileField(); return; }
-            if (key == Key.Right) { _caretIndex = Math.Min(_fileName.Length, _caretIndex + 1); SyncFileField(); return; }
-        };
-
-        Events.OnKeyType += ch =>
+        // While a merge runs the options freeze and only Cancel stays live.
+        this.Bind(_ =>
         {
-            if (!Visible || _isRunning) return;
-            if (char.IsControl(ch) || "<>:\"/\\|?*".Contains(ch)) return;
-            _fileName = _fileName.Insert(_caretIndex, ch.ToString());
-            _caretIndex++;
-            SyncFileField();
-        };
+            bool idle = !_running.Value;
+            _merge.Visible = idle;
+            _fileField.Enabled = idle;
+            _browse.Enabled = idle;
+            _align.Enabled = idle;
+            alignRow.Opacity = idle ? 1f : 0.45f;
+            _deghostSeg.Interactive = idle;
+            _deghostSeg.Opacity = idle ? 1f : 0.45f;
+            _footer.InvalidateLayout();
+        });
     }
+
+    protected override bool DismissOnScrim => !_running.Peek();
 
     public void Open(IReadOnlyList<PhotoDocument> docs)
     {
-        _docs = docs ?? Array.Empty<PhotoDocument>();
-        if (_docs.Count < 2)
+        docs ??= Array.Empty<PhotoDocument>();
+        if (docs.Count < 2)
             return;
 
         // Sort stack by EV (darkest -> brightest)
         _sortedStack.Clear();
-        foreach (var d in _docs)
-        {
-            float ev = HdrMerge.ComputeEv(d.Metadata);
-            _sortedStack.Add((d, ev));
-        }
+        foreach (var d in docs)
+            _sortedStack.Add((d, HdrMerge.ComputeEv(d.Metadata)));
         _sortedStack.Sort((a, b) => a.ev.CompareTo(b.ev));
 
         // Default save directory: WorkspaceStore.Root ?? dir of first file
         string firstPath = _sortedStack[0].doc.Path;
-        _saveDir = !string.IsNullOrEmpty(WorkspaceStore.Root) && Directory.Exists(WorkspaceStore.Root)
+        string saveDir = !string.IsNullOrEmpty(WorkspaceStore.Root) && Directory.Exists(WorkspaceStore.Root)
             ? WorkspaceStore.Root
             : (Path.GetDirectoryName(firstPath) ?? "");
 
-        string firstStem = Path.GetFileNameWithoutExtension(firstPath);
-        _fileName = $"{firstStem}-HDR.tif";
-        _caretIndex = _fileName.Length;
+        _subtitle.Text = $"{_sortedStack.Count} exposures, darkest to brightest. The median frame (highlighted) is the reference.";
+        _fileField.Text = $"{Path.GetFileNameWithoutExtension(firstPath)}-HDR.tif";
+        _align.IsChecked = true;
 
-        _align = true;
-        _btnAlign.Toggled = true;
-        SetDeghost(HdrDeghostMode.Low);
-
-        _isRunning = false;
-        _btnMerge.Caption = "Merge HDR";
-        _btnMerge.Visible = true;
-        _btnCancel.Caption = "Cancel";
-        _progressTrack.Visible = false;
-        _statusLabel.Text = $"{_sortedStack.Count} photos ready to merge";
-        float w = ParentView?.Width ?? Transform.Width;
-        float h = ParentView?.Height ?? Transform.Height;
-        Transform.SetAbsoluteFrame(0, 0, Math.Max(1f, w), Math.Max(1f, h));
-        Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
+        ReactiveEngine.Batch(() =>
+        {
+            _saveDir.Value = saveDir;
+            _deghost.Value = HdrDeghostMode.Low;
+            _running.Value = false;
+            _progress.Value = 0f;
+            _status.Value = ($"{_sortedStack.Count} photos ready to merge", false);
+        });
 
         BuildThumbCells();
-        LayoutCard();
+        ShowModal(_fileField);
 
-        Visible = true;
-        ParentView?.SetActiveKeyboardElement(this);
-
-        StartBlink();
-        SyncFileField();
-        InvalidatePaint();
+        // Select the stem so typing replaces the name and keeps the extension.
+        _fileField.MoveCaret(0);
+        _fileField.MoveCaret(Path.GetFileNameWithoutExtension(_fileField.Text).Length, extendSelection: true);
     }
 
-    protected override void LayoutChildren()
+    protected override bool HandleKey(UiKey key)
     {
-        LayoutCard();
-    }
-
-    public void Close()
-    {
-        Visible = false;
-        StopBlink();
-        if (ReferenceEquals(ParentView?.ActiveKeyboardElement, this))
-            ParentView.SetActiveKeyboardElement(null);
-        InvalidatePaint();
+        switch (key)
+        {
+            case UiKey.Escape:
+                CancelOrClose();
+                return true;
+            case UiKey.Enter or UiKey.KeypadEnter:
+                StartMerge();
+                return true;
+            default:
+                return false;
+        }
     }
 
     private void CancelOrClose()
     {
-        if (_isRunning && _jobCts != null)
+        if (_running.Peek() && _jobCts != null)
         {
             _jobCts.Cancel();
-            _statusLabel.Text = "Cancelling…";
+            _status.Value = ("Cancelling…", false);
             return;
         }
 
         Close();
     }
 
-    private void SetDeghost(HdrDeghostMode mode)
-    {
-        _deghost = mode;
-        _deghostBtns[0].Toggled = mode == HdrDeghostMode.Off;
-        _deghostBtns[1].Toggled = mode == HdrDeghostMode.Low;
-        _deghostBtns[2].Toggled = mode == HdrDeghostMode.High;
-        InvalidatePaint();
-    }
-
     private void BrowseFolder()
     {
-        if (_isRunning) return;
+        if (_running.Peek()) return;
         string? picked = FileDialogs.OpenFolder();
         if (!string.IsNullOrEmpty(picked) && Directory.Exists(picked))
-        {
-            _saveDir = picked;
-            _saveField.Text = _saveDir;
-            InvalidatePaint();
-        }
+            _saveDir.Value = picked;
     }
 
     private void BuildThumbCells()
     {
-        foreach (var c in _thumbCells)
-            _thumbStrip.RemoveChild(c);
-        _thumbCells.Clear();
-
-        float medianEv = _sortedStack.Count > 0 ? _sortedStack[_sortedStack.Count / 2].ev : 0f;
-
-        for (int i = 0; i < _sortedStack.Count; i++)
+        foreach (var old in new List<VisualElement>(_strip.Children))
         {
-            var (doc, ev) = _sortedStack[i];
-            var cell = new VisualElement
-            {
-                Name = $"HdrThumb_{i}",
-                IsClickthrough = true,
-                Style = new ElementStyle
-                {
-                    BackColor = Theme.Section,
-                    Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = Theme.RadiusSm }
-                }
-            };
+            _strip.RemoveChild(old);
+            old.Dispose();
+        }
 
-            SKImage? img = doc.Thumb ?? doc.Preview ?? doc.Look;
-            var thumbWell = new HdrThumbWell(img)
-            {
-                Name = $"HdrThumbWell_{i}",
-                IsClickthrough = true
-            };
-            cell.AddChild(thumbWell);
+        int n = _sortedStack.Count;
+        float inner = CardW - CardPad * 2f - StripPad * 2f - 2f;
+        float cellW = Math.Clamp(MathF.Floor((inner - CellGap * (n - 1)) / n), 40f, 112f);
+        float medianEv = _sortedStack[n / 2].ev;
 
+        foreach (var (doc, ev) in _sortedStack)
+        {
             float relEv = ev - medianEv;
-            string evText = relEv >= 0f ? $"+{relEv:0.0} EV" : $"{relEv:0.0} EV";
-            if (MathF.Abs(relEv) < 0.05f) evText = "0.0 EV (Ref)";
-
-            var badge = new VisualElement
-            {
-                Name = "EvBadge",
-                IsClickthrough = true,
-                Text = evText,
-                Style = new ElementStyle
-                {
-                    BackColor = new SKColor(0, 0, 0, 180),
-                    Border = new BorderStyle { Width = 0, Roundness = 3 },
-                    Text = new TextStyle { Color = SKColors.White, Size = 9f, Weight = 600, Alignment = TextAlign.Center, Padding = 2 }
-                }
-            };
-            cell.AddChild(badge);
-
-            _thumbCells.Add(cell);
-            _thumbStrip.AddChild(cell);
+            bool reference = MathF.Abs(relEv) < 0.05f;
+            string evText = reference ? "0.0 EV" : relEv > 0f ? $"+{relEv:0.0} EV" : $"{relEv:0.0} EV";
+            var cell = new BracketCell(doc.Thumb ?? doc.Preview ?? doc.Look, evText, reference);
+            cell.Transform.Width = cellW;
+            _strip.AddChild(cell);
         }
-    }
-
-    private void LayoutCard()
-    {
-        float w = ParentView?.Width ?? Transform.Width;
-        float h = ParentView?.Height ?? Transform.Height;
-
-        float cardX = MathF.Round((w - CardW) * 0.5f);
-        float cardY = MathF.Round((h - CardH) * 0.5f);
-        _card.Transform.SetAbsoluteFrame(cardX, cardY, CardW, CardH);
-
-        float pad = 20f;
-        float curY = pad;
-
-        _title.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2, 24);
-        curY += 32;
-
-        // Thumb strip
-        float stripH = 76f;
-        _thumbStrip.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2, stripH);
-
-        int count = _thumbCells.Count;
-        if (count > 0)
-        {
-            float gap = 6f;
-            float availableW = CardW - pad * 2 - 8f;
-            float cellW = MathF.Floor((availableW - gap * (count - 1)) / count);
-            cellW = Math.Clamp(cellW, 40f, 80f);
-            float cellH = stripH - 8f;
-
-            for (int i = 0; i < count; i++)
-            {
-                float cx = cardX + pad + 4f + i * (cellW + gap);
-                float cy = cardY + curY + 4f;
-                _thumbCells[i].Transform.SetAbsoluteFrame(cx, cy, cellW, cellH);
-
-                if (_thumbCells[i].Children.Count > 0)
-                {
-                    _thumbCells[i].Children[0].Transform.SetAbsoluteFrame(cx, cy, cellW, cellH);
-                }
-                if (_thumbCells[i].Children.Count > 1)
-                {
-                    _thumbCells[i].Children[1].Transform.SetAbsoluteFrame(cx + 2, cy + cellH - 16, cellW - 4, 14);
-                }
-            }
-        }
-        curY += stripH + 14;
-
-        // Save to
-        _saveLabel.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2, 16);
-        curY += 20;
-
-        float browseW = 84f;
-        _saveField.Text = _saveDir;
-        _saveField.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2 - browseW - 8, 30);
-        _btnBrowse.Transform.SetAbsoluteFrame(cardX + CardW - pad - browseW, cardY + curY, browseW, 30);
-        curY += 38;
-
-        // Filename
-        _fileLabel.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2, 16);
-        curY += 20;
-
-        _fileField.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2, 30);
-        curY += 38;
-
-        // Options
-        _optionsLabel.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2, 16);
-        curY += 20;
-
-        float optW = 100f;
-        _btnAlign.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, optW, 30);
-        for (int i = 0; i < _deghostBtns.Length; i++)
-        {
-            _deghostBtns[i].Transform.SetAbsoluteFrame(cardX + pad + optW + 8 + i * 94, cardY + curY, 88, 30);
-        }
-        curY += 40;
-
-        // Progress bar
-        _progressTrack.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, CardW - pad * 2, 4);
-        _progressBar.Transform.SetAbsoluteFrame(cardX + pad, cardY + curY, 0, 4);
-
-        // Bottom action row: Status on left, Cancel and Merge on right
-        float btnW = 104f;
-        float btnH = 34f;
-        float bottomY = cardY + CardH - pad - btnH;
-        _statusLabel.Transform.SetAbsoluteFrame(cardX + pad, bottomY + 5f, CardW - pad * 2 - (btnW * 2 + 16f), 24);
-        _btnCancel.Transform.SetAbsoluteFrame(cardX + CardW - pad - btnW * 2 - 10f, bottomY, btnW, btnH);
-        _btnMerge.Transform.SetAbsoluteFrame(cardX + CardW - pad - btnW, bottomY, btnW, btnH);
-    }
-
-    private void SyncFileField()
-    {
-        _fileField.Text = _fileName;
-        float cardX = _card.Transform.Computed.X;
-        float cardY = _card.Transform.Computed.Y;
-        float fx = _fileField.Transform.Computed.X;
-        float fy = _fileField.Transform.Computed.Y;
-        float textW = _caretIndex * 7.5f;
-        _fileCaret.Transform.SetAbsoluteFrame(fx + 8f + textW, fy + 6f, 1.5f, 18f);
-        InvalidatePaint();
-    }
-
-    private void StartBlink()
-    {
-        StopBlink();
-        _caretVisible = true;
-        _fileCaret.Visible = true;
-        _blinkTimer = new System.Threading.Timer(_ =>
-        {
-            _caretVisible = !_caretVisible;
-            Browser.Post(() =>
-            {
-                if (Visible && !_isRunning)
-                {
-                    _fileCaret.Visible = _caretVisible;
-                    InvalidatePaint();
-                }
-            });
-        }, null, 500, 500);
-    }
-
-    private void StopBlink()
-    {
-        _blinkTimer?.Dispose();
-        _blinkTimer = null;
-        _fileCaret.Visible = false;
+        _strip.InvalidateLayout();
     }
 
     private void StartMerge()
     {
-        if (_isRunning || _sortedStack.Count < 2)
+        if (_running.Peek() || _sortedStack.Count < 2)
             return;
 
-        string outDir = _saveDir.Trim();
+        string outDir = _saveDir.Peek().Trim();
         if (string.IsNullOrEmpty(outDir))
             outDir = Directory.GetCurrentDirectory();
 
-        string outName = _fileName.Trim();
+        string outName = _fileField.Text.Trim();
         if (string.IsNullOrEmpty(outName))
             outName = "HDR-Merge.tif";
         if (!outName.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) &&
@@ -586,18 +302,20 @@ public sealed class HdrMergeDialog : VisualElement
 
         string fullOutPath = Path.Combine(outDir, outName);
 
-        _isRunning = true;
         _jobCts = new CancellationTokenSource();
         var ct = _jobCts.Token;
 
-        _btnMerge.Visible = false;
-        _btnCancel.Caption = "Cancel";
-        _progressTrack.Visible = true;
-        _fileCaret.Visible = false;
+        ReactiveEngine.Batch(() =>
+        {
+            _running.Value = true;
+            _progress.Value = 0f;
+        });
+        // The file field just went disabled; keep Escape (cancel) routed to the dialog.
+        ParentView?.SetActiveKeyboardElement(this);
 
         var stackCopy = new List<(PhotoDocument doc, float ev)>(_sortedStack);
-        bool doAlign = _align;
-        HdrDeghostMode deghostMode = _deghost;
+        bool doAlign = _align.IsChecked;
+        HdrDeghostMode deghostMode = _deghost.Peek();
 
         Task.Run(() =>
         {
@@ -699,115 +417,151 @@ public sealed class HdrMergeDialog : VisualElement
 
                 HdrTiff.Write(fullOutPath, mergedRaster, metaCopy, paths, evs);
 
-                Browser.Post(() =>
+                Shell.Post(() =>
                 {
-                    _isRunning = false;
+                    _running.Value = false;
                     Close();
                     MergeSucceeded?.Invoke(fullOutPath);
                 });
             }
             catch (OperationCanceledException)
             {
-                Browser.Post(() =>
-                {
-                    _isRunning = false;
-                    _btnMerge.Visible = true;
-                    _progressTrack.Visible = false;
-                    _statusLabel.Text = "Merge cancelled";
-                    InvalidatePaint();
-                });
+                Shell.Post(() => FinishWithStatus("Merge cancelled", error: false));
             }
             catch (Exception ex)
             {
                 Log.Error("HDR Merge failed: " + ex);
-                Browser.Post(() =>
-                {
-                    _isRunning = false;
-                    _btnMerge.Visible = true;
-                    _progressTrack.Visible = false;
-                    _statusLabel.Text = "Error: " + ex.Message;
-                    InvalidatePaint();
-                });
+                Shell.Post(() => FinishWithStatus("Error: " + ex.Message, error: true));
             }
         });
+    }
+
+    private void FinishWithStatus(string message, bool error)
+    {
+        ReactiveEngine.Batch(() =>
+        {
+            _running.Value = false;
+            _status.Value = (message, error);
+        });
+        if (Visible)
+            ParentView?.SetActiveKeyboardElement(_fileField);
     }
 
     private void UpdateStatus(string message, float progressFraction)
     {
-        Browser.Post(() =>
+        Shell.Post(() =>
         {
             if (!Visible) return;
-            _statusLabel.Text = message;
-            float totalW = CardW - 40f;
-            float w = Math.Clamp(progressFraction * totalW, 0f, totalW);
-            _progressBar.Transform.SetAbsoluteFrame(
-                _progressTrack.Transform.Computed.X,
-                _progressTrack.Transform.Computed.Y,
-                w,
-                _progressTrack.Transform.Computed.Height);
-            InvalidatePaint();
+            ReactiveEngine.Batch(() =>
+            {
+                _status.Value = (message, false);
+                _progress.Value = Math.Clamp(progressFraction, 0f, 1f);
+            });
         });
     }
 
-    private static VisualElement Label(string name, string text, SKColor color, float size, int weight)
+    /// <summary>One bracket frame: thumbnail fitted in a dark well with its EV offset; the reference frame is lit.</summary>
+    private sealed class BracketCell : Control
     {
-        return new VisualElement
-        {
-            Name = name,
-            Text = text,
-            IsClickthrough = true,
-            Style = new ElementStyle
-            {
-                Text = new TextStyle { Color = color, Size = size, Weight = weight, Alignment = TextAlign.Left }
-            }
-        };
-    }
+        private readonly SKImage? _image;
+        private readonly string _evText;
+        private readonly bool _reference;
 
-    private sealed class HdrThumbWell : VisualElement
-    {
-        private static readonly SKPaint SmoothPaint = new()
-        {
-            FilterQuality = SKFilterQuality.Medium,
-            IsAntialias = true
-        };
-
-        private SKImage? _image;
-
-        public HdrThumbWell(SKImage? image)
+        public BracketCell(SKImage? image, string evText, bool reference)
         {
             _image = image;
-            Style = new ElementStyle
+            _evText = evText;
+            _reference = reference;
+            Name = "HdrBracketCell";
+            IsClickthrough = true;
+            Style.BackColor = SKColors.Transparent;
+            this.Bind(_ => { Theme.Observe(); InvalidatePaint(); });
+        }
+
+        protected override void Paint(SKCanvas c)
+        {
+            float r = Theme.RadiusSm;
+            var box = new SKRect(0.5f, 0.5f, W - 0.5f, H - 0.5f);
+
+            using (var well = new SKPaint { Color = Theme.PhotoWell, IsAntialias = true })
+                c.DrawRoundRect(box, r, r, well);
+
+            if (_image != null && _image.Handle != IntPtr.Zero && _image.Width > 0 && _image.Height > 0)
             {
-                BackColor = SKColors.Transparent,
-                Border = new BorderStyle { Width = 0 }
+                float scale = Math.Min(W / _image.Width, H / _image.Height);
+                float dw = _image.Width * scale, dh = _image.Height * scale;
+                var dest = SKRect.Create((W - dw) * 0.5f, (H - dh) * 0.5f, dw, dh);
+                c.Save();
+                c.ClipRoundRect(new SKRoundRect(box, r), antialias: true);
+                c.DrawImage(_image, dest, Sampling.Smooth);
+                c.Restore();
+            }
+
+            using (var edge = new SKPaint
+            {
+                Color = _reference ? Theme.Accent : Theme.Hairline,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = _reference ? 1.5f : 1f,
+                IsAntialias = true
+            })
+            {
+                c.DrawRoundRect(box, r, r, edge);
+            }
+
+            using var text = new TextPaint
+            {
+                TextSize = 9.5f,
+                Typeface = Theme.GetTypeface(600),
+                Color = _reference ? Theme.Accent : Theme.Text
             };
-            Overflow = OverflowMode.Clip;
+            float tw = text.MeasureText(_evText);
+            var pill = SKRect.Create((W - tw) * 0.5f - 5f, H - 19f, tw + 10f, 15f);
+            using (var bg = new SKPaint { Color = Theme.Canvas.WithAlpha(210), IsAntialias = true })
+                c.DrawRoundRect(pill, 7.5f, 7.5f, bg);
+            var m = text.FontMetrics;
+            c.DrawText(_evText, pill.Left + 5f, pill.MidY - (m.Ascent + m.Descent) * 0.5f, text);
+        }
+    }
+
+    /// <summary>Hairline between body and footer that turns into an accent progress bar while merging.</summary>
+    private sealed class ProgressLine : Control
+    {
+        private const float LineH = 2f;
+        private readonly Signal<float> _fraction;
+        private readonly Signal<bool> _active;
+
+        public ProgressLine(Signal<float> fraction, Signal<bool> active)
+        {
+            _fraction = fraction;
+            _active = active;
+            Name = "HdrProgress";
+            IsClickthrough = true;
+            Transform.Height = LineH;
+            Style.BackColor = SKColors.Transparent;
+            this.Bind(line =>
+            {
+                Theme.Observe();
+                _ = fraction.Value;
+                _ = active.Value;
+                line.InvalidatePaint();
+            });
         }
 
-        public void SetImage(SKImage? img)
-        {
-            _image = img;
-            InvalidatePaint();
-        }
+        public override SKSize GetPreferredSize(float maxWidth, float maxHeight) => new(maxWidth, LineH);
 
-        protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
+        protected override void Paint(SKCanvas c)
         {
-            if (_image == null || _image.Handle == IntPtr.Zero) return;
-            float w = Transform.Computed.Width;
-            float h = Transform.Computed.Height;
-            var dest = Contain(w, h, _image.Width, _image.Height);
-            cmds.Add(new DrawSkImageCommand(_image, dest, SmoothPaint));
-        }
+            if (!_active.Peek())
+            {
+                using var hairline = new SKPaint { Color = Theme.HairlineSubtle };
+                c.DrawRect(0, 0, W, 1f, hairline);
+                return;
+            }
 
-        private static SKRect Contain(float boxW, float boxH, int imgW, int imgH)
-        {
-            if (imgW <= 0 || imgH <= 0) return new SKRect(0, 0, boxW, boxH);
-            float scale = Math.Min(boxW / imgW, boxH / imgH);
-            float dw = imgW * scale;
-            float dh = imgH * scale;
-            float x = (boxW - dw) * 0.5f;
-            float y = (boxH - dh) * 0.5f;
-            return new SKRect(x, y, x + dw, y + dh);
+            using (var track = new SKPaint { Color = Theme.Well })
+                c.DrawRect(0, 0, W, H, track);
+            using var fill = new SKPaint { Color = Theme.Accent };
+            c.DrawRect(0, 0, W * Math.Clamp(_fraction.Peek(), 0f, 1f), H, fill);
         }
     }
 }

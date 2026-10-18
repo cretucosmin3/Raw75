@@ -11,8 +11,11 @@ using Blossom.Core.Visual.Enums;
 using Raw75.Develop;
 using Raw75.Imaging;
 using Raw75.Pipeline;
-using Silk.NET.Input;
 using SkiaSharp;
+using Blossom.Hosting;
+using Blossom.Desktop;
+using Blossom.Reactive;
+using Raw75.Controls;
 
 namespace Raw75.Views;
 
@@ -45,6 +48,80 @@ public sealed class PhotoPane : VisualElement
     private readonly DevelopLook _beforeLook = new();
     private readonly DevelopLook _tileBeforeLook = new();
     private bool _lookFast;
+
+    // Histogram sampled from the GPU look itself: small and throttled while dragging, finer once settled.
+    private const int HistogramFastEdge = 256;
+    private const int HistogramFineEdge = 768;
+    private static readonly long HistogramInterval = System.Diagnostics.Stopwatch.Frequency / 20;
+    private readonly HistogramSampler _histogramSampler = new();
+    private bool _histogramDirty = true;
+    private long _histogramLast;
+    private IDisposable? _histogramRetry;
+    private SKImage? _histogramSource;
+
+    /// <summary>Raised (posted after the paint) with R, G, B, luma bins of the displayed look.</summary>
+    public event Action<float[], float[], float[], float[]>? HistogramSampled;
+
+    /// <summary>Asks for a fresh GPU histogram on the next paint.</summary>
+    public void RequestHistogram()
+    {
+        _histogramDirty = true;
+        InvalidatePaint();
+    }
+
+    private void SampleHistogram(SKRect dest, bool fast, bool applyCrop, int frameW, int frameH)
+    {
+        // Read the sample submitted on an earlier frame: the GPU has finished it, so no stall.
+        if (_histogramSampler.HasPending)
+        {
+            var sampled = _histogramSource;
+            Half[]? pixels = _histogramSampler.TryRead();
+            if (pixels != null && ReferenceEquals(sampled, _source))
+            {
+                Task.Run(() =>
+                {
+                    var bins = HistogramSampler.Bin(pixels);
+                    Shell.Post(() =>
+                    {
+                        // Dropped if another photo was bound meanwhile.
+                        if (ReferenceEquals(sampled, _source))
+                            HistogramSampled?.Invoke(bins.R, bins.G, bins.B, bins.Y);
+                    });
+                });
+            }
+        }
+
+        if (!_histogramDirty || _source == null || _settings == null || dest.Height < 1f)
+            return;
+
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (fast && now - _histogramLast < HistogramInterval)
+        {
+            // Throttled: come back for it once the interval has passed.
+            var wait = TimeSpan.FromSeconds((HistogramInterval - (now - _histogramLast)) / (double)System.Diagnostics.Stopwatch.Frequency);
+            ScheduleHistogramFrame(wait);
+            return;
+        }
+
+        if (!_histogramSampler.Render(_look, _source, _settings, dest.Width / dest.Height, fast, applyCrop,
+                frameW, frameH, fast ? HistogramFastEdge : HistogramFineEdge))
+            return;
+
+        _histogramDirty = false;
+        _histogramLast = now;
+        _histogramSource = _source;
+        // Guarantee a later paint to read it, even when nothing else changes (e.g. after release).
+        ScheduleHistogramFrame(TimeSpan.FromMilliseconds(16));
+    }
+
+    private void ScheduleHistogramFrame(TimeSpan wait)
+    {
+        _histogramRetry ??= Shell.PostDelayed(wait, () =>
+        {
+            _histogramRetry = null;
+            InvalidatePaint();
+        });
+    }
 
     private void InvalidateAllLooks()
     {
@@ -150,12 +227,6 @@ public sealed class PhotoPane : VisualElement
     public event Action<bool>? ShowBeforeChanged;
     public event Action<bool>? SplitBeforeChanged;
 
-    private float _beforeProgress = 0f;
-    private float _beforeTarget = 0f;
-    private float _beforeAnimStartProgress = 0f;
-    private long _beforeAnimStartTime = 0;
-    private float _beforeAnimDurationSec = 1.0f;
-
     public bool ShowBefore
     {
         get => _showBefore;
@@ -168,45 +239,10 @@ public sealed class PhotoPane : VisualElement
                 _splitBefore = false;
                 SplitBeforeChanged?.Invoke(false);
             }
-            StartBeforeTransition(_showBefore);
             _beforeLook.InvalidateAll();
             _tileBeforeLook.InvalidateAll();
             InvalidatePaint();
             ShowBeforeChanged?.Invoke(_showBefore);
-        }
-    }
-
-    private void StartBeforeTransition(bool showBefore)
-    {
-        _beforeTarget = showBefore ? 1f : 0f;
-        _beforeAnimStartProgress = _beforeProgress;
-        _beforeAnimStartTime = System.Diagnostics.Stopwatch.GetTimestamp();
-        float dist = Math.Abs(_beforeTarget - _beforeAnimStartProgress);
-        _beforeAnimDurationSec = Math.Max(0.05f, 1.0f * (dist > 0.01f ? dist : 1.0f));
-    }
-
-    private void UpdateBeforeAnimation()
-    {
-        if (Math.Abs(_beforeProgress - _beforeTarget) > 0.0005f)
-        {
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            double elapsedSec = (double)(now - _beforeAnimStartTime) / System.Diagnostics.Stopwatch.Frequency;
-            float t = (float)(elapsedSec / _beforeAnimDurationSec);
-            if (t >= 1f)
-            {
-                _beforeProgress = _beforeTarget;
-            }
-            else
-            {
-                // Quintic smootherstep (6t^5 - 15t^4 + 10t^3)
-                float s = t * t * t * (t * (t * 6f - 15f) + 10f);
-                _beforeProgress = _beforeAnimStartProgress + (_beforeTarget - _beforeAnimStartProgress) * s;
-                InvalidatePaint();
-            }
-        }
-        else
-        {
-            _beforeProgress = _beforeTarget;
         }
     }
 
@@ -274,8 +310,6 @@ public sealed class PhotoPane : VisualElement
             if (_splitBefore && _showBefore)
             {
                 _showBefore = false;
-                _beforeProgress = 0f;
-                _beforeTarget = 0f;
                 ShowBeforeChanged?.Invoke(false);
             }
             _beforeLook.InvalidateAll();
@@ -418,12 +452,12 @@ public sealed class PhotoPane : VisualElement
         Events.OnMouseHover += OnHover;
         Events.OnMouseLeave += OnLeave;
         Events.OnScroll += OnWheel;
-    }
 
-    public void RefreshTheme()
-    {
-        Style.BackColor = Theme.PhotoWell;
-        InvalidatePaint();
+        this.Bind(_ =>
+        {
+            Style.BackColor = Theme.PhotoWell;
+            InvalidatePaint();
+        });
     }
 
     public override void AddedToView()
@@ -445,6 +479,7 @@ public sealed class PhotoPane : VisualElement
         _source = source;
         _settings = settings;
         _lookFast = fast;
+        _histogramDirty = true;
         InvalidateAllLooks();
         if (source != null && source.Handle != IntPtr.Zero)
             SyncViewToSource();
@@ -760,7 +795,6 @@ public sealed class PhotoPane : VisualElement
         if (!Visible || !EffectiveVisible || ComputedVisibility == Visibility.Hidden)
             return;
 
-        UpdateBeforeAnimation();
 
         if (_source == null || _settings == null || _source.Handle == IntPtr.Zero)
             return;
@@ -770,6 +804,8 @@ public sealed class PhotoPane : VisualElement
         bool applyCrop = !_cropTool && _settings.HasCrop;
 
         bool isFast = _lookFast;
+        GetFrameSize(out int fwHist, out int fhHist);
+        SampleHistogram(dest, isFast, applyCrop, fwHist, fhHist);
 
         if (_splitBefore)
         {
@@ -788,7 +824,7 @@ public sealed class PhotoPane : VisualElement
                 GetFrameSize(out int fwB, out int fhB);
                 if (!_beforeLook.Draw(canvas, dest, left, _source, baseSettings, isFast, applyCrop,
                         0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwB, fhB))
-                    canvas.DrawImage(_source, SourceOf(_source, dest, left), left);
+                    canvas.DrawImage(_source, SourceOf(_source, dest, left), left, Sampling.Linear, null);
             }
 
             if (right.Width > 0.5f)
@@ -796,7 +832,7 @@ public sealed class PhotoPane : VisualElement
                 GetFrameSize(out int fwA, out int fhA);
                 if (!_look.Draw(canvas, dest, right, _source, _settings, isFast, applyCrop,
                         0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwA, fhA, showClipping: _showClipping))
-                    canvas.DrawImage(_source, SourceOf(_source, dest, right), right);
+                    canvas.DrawImage(_source, SourceOf(_source, dest, right), right, Sampling.Linear, null);
             }
 
             if (!_cropTool && _tile != null && _tile.Handle != IntPtr.Zero && _tileW > 1e-5f && _tileH > 1e-5f)
@@ -829,43 +865,22 @@ public sealed class PhotoPane : VisualElement
         var vis = _drawClip;
         GetFrameSize(out int fwSingle, out int fhSingle);
 
-        if (_beforeProgress >= 0.999f)
+        if (_showBefore)
         {
             var baseSettings = GetBaselineSettings();
             if (!_beforeLook.Draw(canvas, dest, vis, _source, baseSettings, isFast, applyCrop,
                     0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle))
-                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
+                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis, Sampling.Linear, null);
 
             DrawTileLook(_tileBeforeLook, canvas, dest, vis, _tile, baseSettings, isFast, applyCrop, fwSingle, fhSingle, showClipping: false);
-        }
-        else if (_beforeProgress <= 0.001f)
-        {
-            if (!_look.Draw(canvas, dest, vis, _source, _settings, isFast, applyCrop,
-                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping))
-                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
-
-            DrawTileLook(_tileLook, canvas, dest, vis, _tile, _settings, isFast, applyCrop, fwSingle, fhSingle, _showClipping);
         }
         else
         {
             if (!_look.Draw(canvas, dest, vis, _source, _settings, isFast, applyCrop,
                     0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle, showClipping: _showClipping))
-                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
+                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis, Sampling.Linear, null);
 
             DrawTileLook(_tileLook, canvas, dest, vis, _tile, _settings, isFast, applyCrop, fwSingle, fhSingle, _showClipping);
-
-            byte blendAlpha = (byte)Math.Clamp((int)(_beforeProgress * 255f), 0, 255);
-            using var alphaPaint = new SKPaint { Color = new SKColor(255, 255, 255, blendAlpha) };
-            canvas.SaveLayer(vis, alphaPaint);
-
-            var baseSettings = GetBaselineSettings();
-            if (!_beforeLook.Draw(canvas, dest, vis, _source, baseSettings, isFast, applyCrop,
-                    0f, 0f, 1f, 1f, float.NaN, float.NaN, float.NaN, float.NaN, fwSingle, fhSingle))
-                canvas.DrawImage(_source, SourceOf(_source, dest, vis), vis);
-
-            DrawTileLook(_tileBeforeLook, canvas, dest, vis, _tile, baseSettings, isFast, applyCrop, fwSingle, fhSingle, showClipping: false);
-
-            canvas.Restore();
         }
     }
 
@@ -914,71 +929,43 @@ public sealed class PhotoPane : VisualElement
         {
             float x = w * _splitT;
 
-            // Shadow under divider line for contrast against bright highlights
-            using var shadowPaint = new SKPaint
-            {
-                Color = new SKColor(0, 0, 0, 160),
-                IsAntialias = true,
-                StrokeWidth = 4,
-                Style = SKPaintStyle.Stroke
-            };
-            canvas.DrawLine(x, 0, x, h, shadowPaint);
+            // Dark under-stroke keeps the wipe readable over bright highlights.
+            using (var under = new SKPaint { Color = new SKColor(0, 0, 0, 140), IsAntialias = true, StrokeWidth = 3f, Style = SKPaintStyle.Stroke })
+                canvas.DrawLine(x, 0, x, h, under);
+            using (var wipe = new SKPaint { Color = Theme.Handle.WithAlpha(230), IsAntialias = true, StrokeWidth = 1.5f, Style = SKPaintStyle.Stroke })
+                canvas.DrawLine(x, 0, x, h, wipe);
 
-            using var wipe = new SKPaint
-            {
-                Color = new SKColor(255, 255, 255, 230),
-                IsAntialias = true,
-                StrokeWidth = 2,
-                Style = SKPaintStyle.Stroke
-            };
-            canvas.DrawLine(x, 0, x, h, wipe);
-
-            // Center grab handle pill on the divider
+            // Grab handle on the divider: a glass pill with chevrons.
             float midY = h * 0.5f;
-            using var handleBg = new SKPaint
-            {
-                Color = new SKColor(24, 24, 27, 235),
-                IsAntialias = true,
-                Style = SKPaintStyle.Fill
-            };
-            using var handleBorder = new SKPaint
-            {
-                Color = new SKColor(255, 255, 255, 180),
-                IsAntialias = true,
-                Style = SKPaintStyle.Stroke,
-                StrokeWidth = 1.5f
-            };
-            var pillRect = new SKRoundRect(new SKRect(x - 12, midY - 20, x + 12, midY + 20), 12, 12);
-            canvas.DrawRoundRect(pillRect, handleBg);
-            canvas.DrawRoundRect(pillRect, handleBorder);
+            var pill = new SKRoundRect(new SKRect(x - 11, midY - 18, x + 11, midY + 18), 11, 11);
+            DrawGlass(canvas, pill, Theme.HairlineStrong);
 
             using var arrowPaint = new SKPaint
             {
                 Color = Theme.Text,
                 IsAntialias = true,
                 Style = SKPaintStyle.Stroke,
-                StrokeWidth = 1.8f,
+                StrokeWidth = 1.6f,
                 StrokeCap = SKStrokeCap.Round,
                 StrokeJoin = SKStrokeJoin.Round
             };
             using var leftPath = new SKPath();
-            leftPath.MoveTo(x - 2.5f, midY - 4.5f);
-            leftPath.LineTo(x - 6.5f, midY);
-            leftPath.LineTo(x - 2.5f, midY + 4.5f);
+            leftPath.MoveTo(x - 2.5f, midY - 4f);
+            leftPath.LineTo(x - 6f, midY);
+            leftPath.LineTo(x - 2.5f, midY + 4f);
             canvas.DrawPath(leftPath, arrowPaint);
 
             using var rightPath = new SKPath();
-            rightPath.MoveTo(x + 2.5f, midY - 4.5f);
-            rightPath.LineTo(x + 6.5f, midY);
-            rightPath.LineTo(x + 2.5f, midY + 4.5f);
+            rightPath.MoveTo(x + 2.5f, midY - 4f);
+            rightPath.LineTo(x + 6f, midY);
+            rightPath.LineTo(x + 2.5f, midY + 4f);
             canvas.DrawPath(rightPath, arrowPaint);
 
-            // Badges: "BEFORE" on left side, "AFTER" on right side
-            DrawSplitBadges(canvas, x, w, h);
+            DrawSplitBadges(canvas, x, w);
         }
-        else if (_beforeProgress > 0.01f)
+        else if (_showBefore)
         {
-            DrawBeforeBadge(canvas, w, _beforeProgress);
+            DrawBeforeBadge(canvas, w);
         }
 
         if (_showInfoOverlay && HasPhoto && _metadata != null)
@@ -988,18 +975,12 @@ public sealed class PhotoPane : VisualElement
 
         if (_busy)
         {
-            DrawBusy(canvas, w);
+            DrawBusy(canvas, w, h);
             InvalidatePaint();
         }
 
-        using var stroke = new SKPaint
-        {
-            Color = new SKColor(255, 255, 255, 28),
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1
-        };
-        canvas.DrawRect(new SKRect(8.5f, 8.5f, w - 8.5f, h - 8.5f), stroke);
+        using (var frame = new SKPaint { Color = Theme.HairlineSubtle, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1 })
+            canvas.DrawRoundRect(new SKRect(8.5f, 8.5f, w - 8.5f, h - 8.5f), Theme.RadiusSm, Theme.RadiusSm, frame);
 
         if (_showingPhoto)
             return;
@@ -1010,102 +991,74 @@ public sealed class PhotoPane : VisualElement
         if (_probeNote.Length > 0 && _droppedPath == null)
             line += $"  ·  GPU {_probeNote}";
 
-        using var text = new SKPaint
+        using var text = new TextPaint
         {
-            Color = Theme.TextSecondary,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            HintingLevel = SKPaintHinting.Normal,
-            TextSize = 14,
-            Typeface = Theme.GetTypeface(400)
+            Color = Theme.TextDim,
+            HintingLevel = SKFontHinting.Normal,
+            TextSize = 12.5f,
+            Typeface = Theme.GetTypeface(500)
         };
-        canvas.DrawText(line, 16, h - 16, text);
+        canvas.DrawText(line, 20, h - 20, text);
     }
 
-    private void DrawSplitBadges(SKCanvas canvas, float splitX, float w, float h)
+    /// <summary>Translucent chrome over the photo: soft shadow, Window-toned glass, hairline edge, top lip.</summary>
+    private static void DrawGlass(SKCanvas canvas, SKRoundRect shape, SKColor edge, byte alpha = 214)
     {
-        using var badgeBg = new SKPaint
+        if (Theme.UseShadows)
         {
-            Color = new SKColor(20, 20, 23, 200),
-            IsAntialias = true,
-            Style = SKPaintStyle.Fill
-        };
-        using var badgeBorder = new SKPaint
-        {
-            Color = new SKColor(255, 255, 255, 40),
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1
-        };
-        using var badgeText = new SKPaint
-        {
-            Color = Theme.Text,
-            Typeface = Theme.GetTypeface(600),
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            HintingLevel = SKPaintHinting.Normal,
-            TextSize = 11,
-            TextAlign = SKTextAlign.Center
-        };
+            using var blur = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 6f);
+            using var shadow = new SKPaint { Color = new SKColor(0, 0, 0, (byte)Math.Min(255, Theme.ShadowAlpha + 30)), MaskFilter = blur, IsAntialias = true };
+            var drop = new SKRoundRect(shape);
+            drop.Offset(0, Theme.ShadowY + 1f);
+            canvas.DrawRoundRect(drop, shadow);
+        }
 
-        // Left badge (BEFORE)
+        using (var fill = new SKPaint { Color = Theme.Window.WithAlpha(alpha), IsAntialias = true })
+            canvas.DrawRoundRect(shape, fill);
+
+        var r = shape.Rect;
+        float rad = shape.Radii[0].X;
+        using (var lip = new SKPaint { Color = SKColors.White.WithAlpha((byte)(16 * alpha / 214)), StrokeWidth = 1f, IsAntialias = true })
+            canvas.DrawLine(r.Left + rad, r.Top + 1.5f, r.Right - rad, r.Top + 1.5f, lip);
+
+        using var stroke = new SKPaint { Color = edge, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f };
+        var inner = new SKRoundRect(shape);
+        inner.Inflate(-0.5f, -0.5f);
+        canvas.DrawRoundRect(inner, stroke);
+    }
+
+    private static TextPaint BadgeText(SKColor color) => new()
+    {
+        Color = color,
+        Typeface = Theme.GetTypeface(600),
+        HintingLevel = SKFontHinting.Normal,
+        TextSize = 10.5f,
+        TextAlign = SKTextAlign.Center
+    };
+
+    private static void DrawBadge(SKCanvas canvas, float cx, string label, SKColor textColor, SKColor edge, byte alpha = 214)
+    {
+        using var text = BadgeText(textColor);
+        float bw = Math.Max(64f, text.MeasureText(label) + 26f);
+        var rect = new SKRoundRect(new SKRect(cx - bw * 0.5f, 18, cx + bw * 0.5f, 40), Theme.RadiusSm, Theme.RadiusSm);
+        DrawGlass(canvas, rect, edge, alpha);
+        var m = text.FontMetrics;
+        canvas.DrawText(label, cx, rect.Rect.MidY - (m.Ascent + m.Descent) * 0.5f, text);
+    }
+
+    private static void DrawSplitBadges(SKCanvas canvas, float splitX, float w)
+    {
         if (splitX > 75)
-        {
-            float bx = Math.Max(35, splitX - 50);
-            var rect = new SKRoundRect(new SKRect(bx - 36, 16, bx + 36, 40), 4, 4);
-            canvas.DrawRoundRect(rect, badgeBg);
-            canvas.DrawRoundRect(rect, badgeBorder);
-            canvas.DrawText("BEFORE", bx, 32, badgeText);
-        }
-
-        // Right badge (AFTER)
+            DrawBadge(canvas, Math.Max(40, splitX - 50), "BEFORE", Theme.TextSecondary, Theme.HairlineStrong);
         if (w - splitX > 75)
-        {
-            float bx = Math.Min(w - 35, splitX + 50);
-            var rect = new SKRoundRect(new SKRect(bx - 36, 16, bx + 36, 40), 4, 4);
-            canvas.DrawRoundRect(rect, badgeBg);
-            canvas.DrawRoundRect(rect, badgeBorder);
-            badgeText.Color = Theme.Accent;
-            canvas.DrawText("AFTER", bx, 32, badgeText);
-        }
+            DrawBadge(canvas, Math.Min(w - 40, splitX + 50), "AFTER", Theme.Accent, Theme.HairlineStrong);
     }
 
-    private void DrawBeforeBadge(SKCanvas canvas, float w, float alpha = 1f)
+    private static void DrawBeforeBadge(SKCanvas canvas, float w, float alpha = 1f)
     {
-        byte bgA = (byte)Math.Clamp((int)(220 * alpha), 0, 255);
-        byte fgA = (byte)Math.Clamp((int)(255 * alpha), 0, 255);
-        using var badgeBg = new SKPaint
-        {
-            Color = new SKColor(20, 20, 23, bgA),
-            IsAntialias = true,
-            Style = SKPaintStyle.Fill
-        };
-        using var badgeBorder = new SKPaint
-        {
-            Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, fgA),
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1.5f
-        };
-        using var badgeText = new SKPaint
-        {
-            Color = new SKColor(Theme.Accent.Red, Theme.Accent.Green, Theme.Accent.Blue, fgA),
-            Typeface = Theme.GetTypeface(600),
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            HintingLevel = SKPaintHinting.Normal,
-            TextSize = 12,
-            TextAlign = SKTextAlign.Center
-        };
-
-        float cx = w * 0.5f;
-        var rect = new SKRoundRect(new SKRect(cx - 52, 16, cx + 52, 42), 6, 6);
-        canvas.DrawRoundRect(rect, badgeBg);
-        canvas.DrawRoundRect(rect, badgeBorder);
-        canvas.DrawText("BEFORE", cx, 34, badgeText);
+        byte a = (byte)Math.Clamp((int)(255 * alpha), 0, 255);
+        byte bgA = (byte)Math.Clamp((int)(214 * alpha), 0, 255);
+        DrawBadge(canvas, w * 0.5f, "BEFORE", Theme.Accent.WithAlpha(a), Theme.Accent.WithAlpha((byte)(a * 0.7f)), bgA);
     }
 
     private void DrawInfoOverlay(SKCanvas canvas, SKRect pane)
@@ -1167,26 +1120,17 @@ public sealed class PhotoPane : VisualElement
 
         if (rows.Count == 0) return;
 
-        var tfSemiBold = Theme.GetTypeface(600);
-        var tfMedium = Theme.GetTypeface(500);
-
-        using var labelPaint = new SKPaint
+        using var labelPaint = new TextPaint
         {
-            Typeface = tfMedium,
-            TextSize = 12.5f,
-            Color = Theme.TextDim,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            Typeface = Theme.GetTypeface(500),
+            TextSize = 11.5f,
+            Color = Theme.TextDim
         };
 
-        using var valuePaint = new SKPaint
+        using var valuePaint = new TextPaint
         {
-            Typeface = tfSemiBold,
-            TextSize = 13.5f,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            Typeface = Theme.GetTypeface(600),
+            TextSize = 12.5f
         };
 
         float maxLabelW = 0f;
@@ -1199,86 +1143,41 @@ public sealed class PhotoPane : VisualElement
             if (vw > maxValueW) maxValueW = vw;
         }
 
-        float padX = 16f;
-        float gap = 18f;
-        float rowH = 25f;
-        float headerH = 42f;
-        float bottomPad = 14f;
+        float padX = 14f;
+        float gap = 16f;
+        float rowH = 22f;
+        float headerH = 36f;
+        float bottomPad = 10f;
 
-        float cardW = Math.Clamp(padX + maxLabelW + gap + maxValueW + padX, 320f, 500f);
+        float cardW = Math.Clamp(padX + maxLabelW + gap + maxValueW + padX, 300f, 480f);
         float cardH = headerH + (rows.Count * rowH) + bottomPad;
         float cardX = _cropTool ? (pane.Left + 8f + 84f + 12f) : (pane.Left + 24f);
         float cardY = pane.Top + 24f;
         _infoCardRect = new SKRect(cardX, cardY, cardX + cardW, cardY + cardH);
 
-        // Soft drop shadow
-        using var shadow = new SKPaint
-        {
-            Color = new SKColor(0, 0, 0, 95),
-            IsAntialias = true,
-            Style = SKPaintStyle.Fill
-        };
-        canvas.DrawRoundRect(new SKRoundRect(new SKRect(cardX, cardY + 4, cardX + cardW, cardY + cardH + 4), Theme.Radius, Theme.Radius), shadow);
+        DrawGlass(canvas, new SKRoundRect(_infoCardRect, Theme.Radius, Theme.Radius), Theme.HairlineStrong, alpha: 222);
 
-        // Card background (semi-transparent ~75% opacity dark neutral well)
-        using var bg = new SKPaint
+        // Header: uppercase section-style title.
+        using var title = new TextPaint
         {
-            Color = new SKColor(20, 20, 24, 191),
-            IsAntialias = true,
-            Style = SKPaintStyle.Fill
+            Typeface = Theme.GetTypeface(600),
+            TextSize = 10.5f,
+            Color = Theme.TextSecondary
         };
-        var cardR = new SKRoundRect(_infoCardRect, Theme.Radius, Theme.Radius);
-        canvas.DrawRoundRect(cardR, bg);
-
-        // Card border
-        using var border = new SKPaint
-        {
-            Color = new SKColor(255, 255, 255, 28),
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1f
-        };
-        canvas.DrawRoundRect(cardR, border);
-
-        // Top tag pill: "PHOTO INFO"
-        using var tagBg = new SKPaint
-        {
-            Color = new SKColor(255, 255, 255, 20),
-            IsAntialias = true,
-            Style = SKPaintStyle.Fill
-        };
-        float tagW = 84f;
-        float tagH = 20f;
-        var tagRect = new SKRoundRect(new SKRect(cardX + padX, cardY + 11f, cardX + padX + tagW, cardY + 11f + tagH), Theme.RadiusSm, Theme.RadiusSm);
-        canvas.DrawRoundRect(tagRect, tagBg);
-
-        using var tagText = new SKPaint
-        {
-            Typeface = tfSemiBold,
-            TextSize = 10f,
-            Color = Theme.TextSecondary,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            TextAlign = SKTextAlign.Center
-        };
-        canvas.DrawText("PHOTO INFO", cardX + padX + tagW * 0.5f, cardY + 11f + 14f, tagText);
+        var tm = title.FontMetrics;
+        float headMid = cardY + headerH * 0.5f;
+        canvas.DrawText("PHOTO INFO", cardX + padX, headMid - (tm.Ascent + tm.Descent) * 0.5f, title);
 
         // Close button: vector "✕" (lines drawn manually so no font/tofu glyph dependency)
-        float closeW = 24f;
-        float closeH = 24f;
-        float closeX = cardX + cardW - padX - closeW;
-        float closeY = cardY + 9f;
+        float closeW = 22f;
+        float closeH = 22f;
+        float closeX = cardX + cardW - padX + 6f - closeW;
+        float closeY = headMid - closeH * 0.5f;
         _infoCloseRect = new SKRect(closeX, closeY, closeX + closeW, closeY + closeH);
 
         if (_infoCloseHover)
         {
-            using var closeHoverBg = new SKPaint
-            {
-                Color = new SKColor(255, 255, 255, 32),
-                IsAntialias = true,
-                Style = SKPaintStyle.Fill
-            };
+            using var closeHoverBg = new SKPaint { Color = Theme.Hover, IsAntialias = true };
             canvas.DrawRoundRect(new SKRoundRect(_infoCloseRect, Theme.RadiusSm, Theme.RadiusSm), closeHoverBg);
         }
 
@@ -1287,34 +1186,29 @@ public sealed class PhotoPane : VisualElement
             Color = _infoCloseHover ? Theme.Text : Theme.TextDim,
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1.6f,
+            StrokeWidth = 1.5f,
             StrokeCap = SKStrokeCap.Round
         };
         float cx = _infoCloseRect.MidX;
         float cy = _infoCloseRect.MidY;
-        float arm = 4.5f;
+        float arm = 4f;
         canvas.DrawLine(cx - arm, cy - arm, cx + arm, cy + arm, xPaint);
         canvas.DrawLine(cx + arm, cy - arm, cx - arm, cy + arm, xPaint);
 
-        // Subtle divider line under header
-        using var divider = new SKPaint
-        {
-            Color = Theme.HairlineSubtle,
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1f
-        };
-        float divY = cardY + headerH - 4f;
-        canvas.DrawLine(cardX + padX, divY, cardX + cardW - padX, divY, divider);
+        using var divider = new SKPaint { Color = Theme.Hairline, StrokeWidth = 1f };
+        float divY = MathF.Round(cardY + headerH) - 0.5f;
+        canvas.DrawLine(cardX + 1f, divY, cardX + cardW - 1f, divY, divider);
 
-        // Draw rows vertically
-        float curY = divY + 18f;
+        // Rows: dim labels, values in a left-aligned column; long values ellipsize.
+        var vm = valuePaint.FontMetrics;
+        float rowMid = divY + 4f + rowH * 0.5f;
         float valueX = cardX + padX + maxLabelW + gap;
         float maxValueAvailW = cardX + cardW - padX - valueX;
 
         foreach (var r in rows)
         {
-            canvas.DrawText(r.Label, cardX + padX, curY, labelPaint);
+            float baseline = rowMid - (vm.Ascent + vm.Descent) * 0.5f;
+            canvas.DrawText(r.Label, cardX + padX, baseline, labelPaint);
 
             valuePaint.Color = r.Color;
             string valStr = r.Value;
@@ -1326,9 +1220,9 @@ public sealed class PhotoPane : VisualElement
                 }
                 valStr += "…";
             }
-            canvas.DrawText(valStr, valueX, curY, valuePaint);
+            canvas.DrawText(valStr, valueX, baseline, valuePaint);
 
-            curY += rowH;
+            rowMid += rowH;
         }
     }
 
@@ -1584,7 +1478,7 @@ public sealed class PhotoPane : VisualElement
         Task.Delay(120, token).ContinueWith(t =>
         {
             if (t.IsCanceled) return;
-            Browser.Post(() =>
+            Shell.Post(() =>
             {
                 if (token.IsCancellationRequested) return;
                 _isInteracting = false;
@@ -1613,7 +1507,7 @@ public sealed class PhotoPane : VisualElement
             {
                 _hoverSpot = idx;
                 _hoverPart = part;
-                Cursor = part != SpotPart.None ? StandardCursor.Hand : StandardCursor.Default;
+                Cursor = part != SpotPart.None ? UiCursor.Hand : UiCursor.Default;
                 InvalidatePaint();
             }
             return;
@@ -1668,8 +1562,8 @@ public sealed class PhotoPane : VisualElement
 
         if (CropBarIdAt(lx, ly) != null && _crop.Active == CropHandle.None)
         {
-            Cursor = StandardCursor.Hand;
-            Browser.SetCursor(StandardCursor.Hand);
+            Cursor = UiCursor.Hand;
+            Shell.SetCursor(UiCursor.Hand);
             return;
         }
 
@@ -1678,11 +1572,11 @@ public sealed class PhotoPane : VisualElement
             : _crop.Hit(ImageDest, lx, ly);
         Cursor = handle switch
         {
-            CropHandle.N or CropHandle.S => StandardCursor.VResize,
-            CropHandle.E or CropHandle.W => StandardCursor.HResize,
-            CropHandle.Move => StandardCursor.Hand,
-            CropHandle.None => StandardCursor.Default,
-            _ => StandardCursor.Crosshair
+            CropHandle.N or CropHandle.S => UiCursor.VResize,
+            CropHandle.E or CropHandle.W => UiCursor.HResize,
+            CropHandle.Move => UiCursor.Hand,
+            CropHandle.None => UiCursor.Default,
+            _ => UiCursor.Crosshair
         };
         CropCursors.Apply(handle);
     }
@@ -1865,28 +1759,27 @@ public sealed class PhotoPane : VisualElement
         return new SKRect(u0 * iw, v0 * ih, u1 * iw, v1 * ih);
     }
 
-    private static void DrawBusy(SKCanvas canvas, float paneW)
+    /// <summary>Spinner on a glass disc at the bottom centre, clear of the top badges and info card.</summary>
+    private static void DrawBusy(SKCanvas canvas, float paneW, float paneH)
     {
         float cx = paneW * 0.5f;
-        float cy = 22f;
-        float r = 8f;
+        float cy = paneH - 34f;
+        float r = 7f;
         double ang = DateTime.UtcNow.TimeOfDay.TotalSeconds * 4.0;
-        using var paint = new SKPaint
+        DrawGlass(canvas, new SKRoundRect(new SKRect(cx - r - 7, cy - r - 7, cx + r + 7, cy + r + 7), r + 7), Theme.HairlineStrong);
+
+        var rect = new SKRect(cx - r, cy - r, cx + r, cy + r);
+        using (var track = new SKPaint { Color = Theme.Hairline, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2f })
+            canvas.DrawOval(rect, track);
+        using var arc = new SKPaint
         {
-            Color = new SKColor(255, 255, 255, 220),
+            Color = Theme.Accent,
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
-            StrokeWidth = 2.5f,
+            StrokeWidth = 2f,
             StrokeCap = SKStrokeCap.Round
         };
-        using var bg = new SKPaint
-        {
-            Color = new SKColor(0, 0, 0, 120),
-            IsAntialias = true
-        };
-        canvas.DrawCircle(cx, cy, r + 6, bg);
-        var rect = new SKRect(cx - r, cy - r, cx + r, cy + r);
-        canvas.DrawArc(rect, (float)(ang * 180.0 / Math.PI), 270, false, paint);
+        canvas.DrawArc(rect, (float)(ang * 180.0 / Math.PI), 100, false, arc);
     }
 
     private SKRect ComputeDest() =>
@@ -2116,20 +2009,17 @@ public sealed class PhotoPane : VisualElement
         float gap = 4f;
         float x = pane.Left + 8f;
         float y = pane.Top + 8f;
-        using var bg = new SKPaint { Color = new SKColor(0, 0, 0, 170), IsAntialias = true };
-        using var text = new SKPaint
+        using var text = new TextPaint
         {
             Color = Theme.Text,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            HintingLevel = SKPaintHinting.Normal,
-            TextSize = 12,
+            HintingLevel = SKFontHinting.Normal,
+            TextSize = 11.5f,
             Typeface = Theme.GetTypeface(500),
             TextAlign = SKTextAlign.Center
         };
-        float barH = ids.Length * (h + gap) + 8f;
-        canvas.DrawRoundRect(new SKRect(x - 4, y - 4, x + w + 4, y + barH), 6, 6, bg);
+        var tm = text.FontMetrics;
+        float barH = ids.Length * (h + gap) + 4f;
+        DrawGlass(canvas, new SKRoundRect(new SKRect(x - 4, y - 4, x + w + 4, y + barH), Theme.Radius, Theme.Radius), Theme.HairlineStrong);
         static bool IsRatioId(string id) =>
             id is "free" or "orig" or "1:1" or "4:3" or "3:2" or "16:9";
 
@@ -2157,8 +2047,8 @@ public sealed class PhotoPane : VisualElement
                 };
                 canvas.DrawRoundRect(r, Theme.RadiusSm, Theme.RadiusSm, ring);
             }
-            text.Color = ids[i] == "ok" ? Theme.ButtonTextOnAccent : (selected ? Theme.Text : Theme.Text);
-            canvas.DrawText(LabelOf(ids[i]), r.MidX, r.MidY + 4, text);
+            text.Color = ids[i] == "ok" ? Theme.ButtonTextOnAccent : Theme.Text;
+            canvas.DrawText(LabelOf(ids[i]), r.MidX, r.MidY - (tm.Ascent + tm.Descent) * 0.5f, text);
             y += h + gap;
         }
     }
@@ -2265,7 +2155,7 @@ public sealed class PhotoPane : VisualElement
         if (_cropTool)
             CancelCrop();
         _spotTool = true;
-        Cursor = StandardCursor.Default;
+        Cursor = UiCursor.Default;
         InvalidatePaint();
     }
 
@@ -2489,11 +2379,20 @@ public sealed class PhotoPane : VisualElement
 
     private static void DrawSpotPair(SKCanvas canvas, float dx, float dy, float sx, float sy, float r, float feather, bool selected)
     {
-        SKColor destCol = selected ? Theme.Accent : new SKColor(255, 255, 255, 230);
-        SKColor srcCol = selected ? new SKColor(120, 200, 255, 240) : new SKColor(200, 220, 255, 180);
+        // Destination (healed) ring is solid, the sampled source dashed; the selected pair goes accent.
+        SKColor destCol = selected ? Theme.Accent : Theme.Handle.WithAlpha(230);
+        SKColor srcCol = selected ? Theme.AccentHover.WithAlpha(230) : Theme.Handle.WithAlpha(170);
+
+        // Dark under-strokes keep the rings legible over bright areas.
+        using (var under = new SKPaint { Color = new SKColor(0, 0, 0, 90), IsAntialias = true, StrokeWidth = 3f, Style = SKPaintStyle.Stroke })
+        {
+            canvas.DrawCircle(dx, dy, r, under);
+            canvas.DrawCircle(sx, sy, r, under);
+        }
+
         using var line = new SKPaint
         {
-            Color = selected ? destCol : new SKColor(255, 255, 255, 160),
+            Color = selected ? destCol : Theme.Handle.WithAlpha(160),
             IsAntialias = true,
             StrokeWidth = selected ? 1.8f : 1.2f,
             Style = SKPaintStyle.Stroke,
@@ -2525,7 +2424,7 @@ public sealed class PhotoPane : VisualElement
         {
             using var destInner = new SKPaint
             {
-                Color = new SKColor(destCol.Red, destCol.Green, destCol.Blue, selected ? (byte)200 : (byte)140),
+                Color = destCol.WithAlpha(selected ? (byte)200 : (byte)140),
                 IsAntialias = true,
                 StrokeWidth = 1.15f,
                 Style = SKPaintStyle.Stroke
@@ -2533,7 +2432,7 @@ public sealed class PhotoPane : VisualElement
             canvas.DrawCircle(dx, dy, inner, destInner);
             using var srcInner = new SKPaint
             {
-                Color = new SKColor(srcCol.Red, srcCol.Green, srcCol.Blue, selected ? (byte)190 : (byte)130),
+                Color = srcCol.WithAlpha(selected ? (byte)190 : (byte)130),
                 IsAntialias = true,
                 StrokeWidth = 1.15f,
                 Style = SKPaintStyle.Stroke
@@ -2541,9 +2440,9 @@ public sealed class PhotoPane : VisualElement
             canvas.DrawCircle(sx, sy, inner, srcInner);
         }
 
-        using var destFill = new SKPaint { Color = new SKColor(255, 255, 255, selected ? (byte)40 : (byte)18), IsAntialias = true };
+        using var destFill = new SKPaint { Color = destCol.WithAlpha(selected ? (byte)34 : (byte)16), IsAntialias = true };
         canvas.DrawCircle(dx, dy, r, destFill);
-        using var srcFill = new SKPaint { Color = new SKColor(120, 200, 255, selected ? (byte)36 : (byte)14), IsAntialias = true };
+        using var srcFill = new SKPaint { Color = srcCol.WithAlpha(selected ? (byte)24 : (byte)10), IsAntialias = true };
         canvas.DrawCircle(sx, sy, r, srcFill);
     }
 
@@ -2566,6 +2465,8 @@ public sealed class PhotoPane : VisualElement
 
     public override void Dispose()
     {
+        _histogramRetry?.Dispose();
+        _histogramSampler.Dispose();
         Events.OnMouseDown -= OnPointerDown;
         Events.OnMouseMove -= OnPointerMove;
         Events.OnMouseUp -= OnPointerUp;

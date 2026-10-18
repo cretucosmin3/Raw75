@@ -1,52 +1,38 @@
-using System.Collections.Generic;
-using Blossom.Core;
 using Blossom.Core.Visual;
-using Blossom.Utils;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using SkiaSharp;
 
 namespace Raw75.Controls;
 
-/// <summary>In-chrome wordmark: RAW in white, 75 in accent. Text only.</summary>
-public sealed class BrandMark : VisualElement
+/// <summary>In-chrome wordmark: RAW in the text colour, 75 in accent, cap-height centred. Text only.</summary>
+public sealed class BrandMark : Control
 {
+    private const float FontSize = 22f;
+    private const float Kerning = 1f;
+
     public BrandMark()
     {
         Name = "BrandMark";
         IsClickthrough = true;
         Style = new ElementStyle { BackColor = SKColors.Transparent };
+        this.Bind(_ => { Theme.Observe(); InvalidatePaint(); });
     }
 
-    protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
+    protected override void Paint(SKCanvas canvas)
     {
-        cmds.Add(new DrawCallbackCommand(Draw));
-    }
-
-    private static void Draw(SKCanvas canvas)
-    {
-        using var rawPaint = new SKPaint
+        using var ink = new TextPaint
         {
             Color = Theme.Text,
-            TextSize = 22,
+            TextSize = FontSize,
             Typeface = Theme.GetTypeface(700),
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            HintingLevel = SKPaintHinting.Normal
-        };
-        using var numPaint = new SKPaint
-        {
-            Color = Theme.Accent,
-            TextSize = 22,
-            Typeface = Theme.GetTypeface(700),
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            HintingLevel = SKPaintHinting.Normal
+            HintingLevel = SKFontHinting.Normal
         };
 
-        float y = 22f;
-        canvas.DrawText("RAW", 0, y, rawPaint);
-        float x = rawPaint.MeasureText("RAW") + 1f;
-        canvas.DrawText("75", x, y, numPaint);
+        float baseline = Blossom.Utils.Text.Baseline(ink.Font, H * 0.5f);
+        canvas.DrawText("RAW", 0f, baseline, ink);
+        float x = ink.MeasureText("RAW") + Kerning;
+        ink.Color = Theme.Accent;
+        canvas.DrawText("75", x, baseline, ink);
     }
 }

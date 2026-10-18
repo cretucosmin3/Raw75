@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Blossom;
 using Raw75.Imaging;
 using SkiaSharp;
+using Blossom.Desktop;
 
 namespace Raw75;
 
@@ -35,8 +36,9 @@ internal static class Program
 
         Theme.Apply(Theme.Find(Raw75.Io.UiPrefs.LoadThemeId()), persist: false, notify: false);
 
-        Browser.MaxFps = 120;
+        Shell.MaxFps = 120;
 
+        bool showStats = false;
         foreach (var arg in Environment.GetCommandLineArgs())
         {
             if (arg.Equals("--smoke-test", StringComparison.OrdinalIgnoreCase))
@@ -51,11 +53,18 @@ internal static class Program
                 arg.Equals("--fps", StringComparison.OrdinalIgnoreCase) ||
                 arg.Equals("--debug-overlay", StringComparison.OrdinalIgnoreCase))
             {
-                Browser.ShowDebugOverlay = true;
+                showStats = true;
             }
         }
 
-        Browser.Initialize(new Raw75Application());
+        // F12 always toggles Blossom's performance overlay; --fps starts with it shown.
+        Shell.ShowDebugOverlay = showStats;
+        Shell.Initialize(new Raw75Application { EnableStatsOverlay = true });
+
+        // The window is gone: end the process even if a worker (decode, export, HDR merge) or a
+        // native library thread is still busy, instead of lingering headless in the background.
+        Log.Info("Window closed");
+        Environment.Exit(0);
     }
 
     private static void RunSmokeTest()

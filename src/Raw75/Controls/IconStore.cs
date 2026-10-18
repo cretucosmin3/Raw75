@@ -4,7 +4,7 @@ using System.IO;
 using System.Text;
 using Blossom;
 using Blossom.Core;
-using SkiaSharp.Extended.Svg;
+using Svg.Skia;
 
 namespace Raw75.Controls;
 
@@ -43,6 +43,9 @@ public static class IconStore
         ["fill"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><rect x=""3"" y=""3"" width=""18"" height=""18"" rx=""2""/><path d=""M9 3v18M15 3v18M3 9h18M3 15h18"" stroke-opacity=""0.3""/></svg>",
         ["chevron_down"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2.5"" stroke-linecap=""round"" stroke-linejoin=""round""><polyline points=""6 9 12 15 18 9""/></svg>",
         ["chevron_right"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2.5"" stroke-linecap=""round"" stroke-linejoin=""round""><polyline points=""9 18 15 12 9 6""/></svg>",
+        ["light"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><circle cx=""12"" cy=""12"" r=""4""/><line x1=""12"" y1=""2"" x2=""12"" y2=""4""/><line x1=""12"" y1=""20"" x2=""12"" y2=""22""/><line x1=""4.93"" y1=""4.93"" x2=""6.34"" y2=""6.34""/><line x1=""17.66"" y1=""17.66"" x2=""19.07"" y2=""19.07""/><line x1=""2"" y1=""12"" x2=""4"" y2=""12""/><line x1=""20"" y1=""12"" x2=""22"" y2=""12""/><line x1=""4.93"" y1=""19.07"" x2=""6.34"" y2=""17.66""/><line x1=""17.66"" y1=""6.34"" x2=""19.07"" y2=""4.93""/></svg>",
+        ["color"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><path d=""M12 2.7l5.66 5.66a8 8 0 1 1-11.31 0z""/><path d=""M12 2.7v18.6"" stroke-opacity=""0.35""/><path d=""M12 9.5l4.6 4.6a5 5 0 0 1-4.6 3.4z"" fill=""#FFFFFF"" fill-opacity=""0.35"" stroke=""none""/></svg>",
+        ["tools"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><path d=""M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z""/></svg>",
         ["info"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><circle cx=""12"" cy=""12"" r=""10""/><line x1=""12"" y1=""16"" x2=""12"" y2=""12""/><line x1=""12"" y1=""8"" x2=""12.01"" y2=""8""/></svg>",
         ["clipping"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><circle cx=""12"" cy=""12"" r=""9""/><path d=""M12 3a9 9 0 0 1 0 18z"" fill=""#FFFFFF"" fill-opacity=""0.35""/><line x1=""12"" y1=""3"" x2=""12"" y2=""21""/></svg>",
         ["copy"] = @"<svg xmlns=""http://www.w3.org/2000/svg"" viewBox=""0 0 24 24"" fill=""none"" stroke=""#FFFFFF"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""><rect x=""9"" y=""9"" width=""13"" height=""13"" rx=""2"" ry=""2""/><path d=""M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1""/></svg>",

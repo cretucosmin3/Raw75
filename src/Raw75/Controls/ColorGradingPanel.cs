@@ -1,16 +1,18 @@
 using System;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using Raw75.Develop;
 using SkiaSharp;
 
 namespace Raw75.Controls;
 
 /// <summary>
-/// 3-way color grading: midtones on top, shadows and highlights below,
-/// then blending and balance sliders.
+/// 3-way color grading as a vertical <see cref="Stack"/>: a wheel <see cref="Grid"/> (midtones
+/// centred on top, shadows and highlights below), a hairline rule, then blending and balance sliders.
 /// </summary>
-public sealed class ColorGradingPanel : VisualElement
+public sealed class ColorGradingPanel : Stack
 {
     private const float PairGap = 8f;
     private const float RowGap = 12f;
@@ -20,7 +22,6 @@ public sealed class ColorGradingPanel : VisualElement
     private readonly ColorWheelControl _midtones;
     private readonly ColorWheelControl _shadows;
     private readonly ColorWheelControl _highlights;
-    private readonly VisualElement _spacer;
     private readonly SliderRow _blending;
     private readonly SliderRow _balance;
     private bool _sync;
@@ -32,6 +33,8 @@ public sealed class ColorGradingPanel : VisualElement
     public ColorGradingPanel()
     {
         Name = "ColorGradingPanel";
+        Orientation = Orientation.Vertical;
+        Gap = Theme.SliderGap;
         Overflow = OverflowMode.Visible;
         Style = new ElementStyle { BackColor = SKColors.Transparent };
 
@@ -42,26 +45,39 @@ public sealed class ColorGradingPanel : VisualElement
         BindWheel(_shadows);
         BindWheel(_highlights);
 
-        _spacer = new VisualElement
-        {
-            Name = "ColorGrading_Spacer",
-            IsClickthrough = true,
-            Style = new ElementStyle { BackColor = Theme.Hairline }
-        };
+        var wheels = new WheelGrid { Name = "ColorGrading_Wheels" };
+        wheels.AddChild(_midtones);
+        wheels.AddChild(_shadows);
+        wheels.AddChild(_highlights);
+        Grid.SetCell(_midtones, column: 0, row: 0, columnSpan: 2);
+        Grid.SetCell(_shadows, column: 0, row: 1);
+        Grid.SetCell(_highlights, column: 1, row: 1);
 
-        _blending = new SliderRow("Blending", 0f, 100f, "0");
+        // Hairline centred in the spacer band between wheels and sliders.
+        float band = SliderSpacer - Gap * 2f;
+        var divider = new Stack
+        {
+            Name = "ColorGrading_Divider",
+            IsClickthrough = true,
+            Padding = new Thickness(8f, (band - 1f) * 0.5f, 8f, (band - 1f) * 0.5f),
+            Style = new ElementStyle { BackColor = SKColors.Transparent }
+        };
+        var rule = new VisualElement { Name = "ColorGrading_Rule", IsClickthrough = true };
+        rule.Transform.Height = 1f;
+        rule.Bind(r => r.Style.BackColor = Theme.Hairline);
+        divider.AddChild(rule);
+
+        _blending = new SliderRow("Blending", 0f, 100f, "0", inline: false);
         _blending.DefaultValue = 50f;
         _blending.Value = 50f;
-        _balance = new SliderRow("Balance", -100f, 100f, "0");
+        _balance = new SliderRow("Balance", -100f, 100f, "0", inline: false);
         _balance.DefaultValue = 0f;
 
         BindSlider(_blending);
         BindSlider(_balance);
 
-        AddChild(_midtones);
-        AddChild(_shadows);
-        AddChild(_highlights);
-        AddChild(_spacer);
+        AddChild(wheels);
+        AddChild(divider);
         AddChild(_blending);
         AddChild(_balance);
     }
@@ -75,7 +91,6 @@ public sealed class ColorGradingPanel : VisualElement
         _blending.Value = s.GradingBlending;
         _balance.Value = s.GradingBalance;
         _sync = false;
-        InvalidatePaint();
     }
 
     public void SaveToSettings(DevelopSettings s)
@@ -105,61 +120,10 @@ public sealed class ColorGradingPanel : VisualElement
         Changed?.Invoke();
     }
 
-    public void RefreshTheme()
-    {
-        if (_spacer.Style != null)
-            _spacer.Style.BackColor = Theme.Hairline;
-        _blending.RefreshTheme();
-        _balance.RefreshTheme();
-        InvalidatePaint();
-    }
-
     public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
     {
-        float w = maxWidth > 0 ? maxWidth : Theme.RightW;
-        float wheel = MeasureWheel(w);
-        float wheelH = ColorWheelControl.HeightForWidth(wheel);
-        float botY = BottomRowOffset(wheel);
-        float h = botY
-                  + wheelH
-                  + SliderSpacer
-                  + Theme.RowH
-                  + Theme.SliderGap
-                  + Theme.RowH;
-        return new SKSize(w, h);
-    }
-
-    protected override void LayoutChildren()
-    {
-        float ox = Transform.Computed.X;
-        float oy = Transform.Computed.Y;
-        float w = Math.Max(1f, Transform.Width);
-        float wheel = MeasureWheel(w);
-        float wheelH = ColorWheelControl.HeightForWidth(wheel);
-
-        _midtones.Transform.SetAbsoluteFrame(ox + (w - wheel) * 0.5f, oy, wheel, wheelH);
-
-        float pairW = wheel * 2f + PairGap;
-        float pairX = ox + (w - pairW) * 0.5f;
-        float botY = oy + BottomRowOffset(wheel);
-        _shadows.Transform.SetAbsoluteFrame(pairX, botY, wheel, wheelH);
-        _highlights.Transform.SetAbsoluteFrame(pairX + wheel + PairGap, botY, wheel, wheelH);
-
-        float slidersY = BottomRowOffset(wheel) + wheelH + SliderSpacer;
-        _spacer.Transform.SetAbsoluteFrame(ox + 8f, oy + slidersY - SliderSpacer * 0.5f, Math.Max(1f, w - 16f), 1f);
-
-        _blending.Transform.SetAbsoluteFrame(ox, oy + slidersY, w, Theme.RowH);
-        _balance.Transform.SetAbsoluteFrame(ox, oy + slidersY + Theme.RowH + Theme.SliderGap, w, Theme.RowH);
-    }
-
-    private static float BottomRowOffset(float wheel)
-    {
-        return ColorWheelControl.HeightForWidth(wheel) + RowGap;
-    }
-
-    private static float MeasureWheel(float width)
-    {
-        return Math.Clamp((width - PairGap) * 0.5f, 96f, MaxWheel);
+        var size = base.GetPreferredSize(maxWidth > 0 ? maxWidth : Theme.RightW, 0f);
+        return new SKSize(maxWidth > 0 ? maxWidth : Theme.RightW, size.Height);
     }
 
     private void BindWheel(ColorWheelControl wheel)
@@ -182,5 +146,30 @@ public sealed class ColorGradingPanel : VisualElement
         };
         row.DragStarted += () => DragStarted?.Invoke();
         row.DragEnded += () => DragEnded?.Invoke();
+    }
+
+    /// <summary>
+    /// Two equal columns, two equal rows; cells centre their wheel. The grid's height follows the
+    /// wheel diameter its width allows, so it sizes inside a stack.
+    /// </summary>
+    private sealed class WheelGrid : Grid
+    {
+        public WheelGrid()
+        {
+            Columns = "*, *";
+            Rows = "*, *";
+            ColumnGap = PairGap;
+            RowGap = ColorGradingPanel.RowGap;
+            Align = LayoutAlign.Center;
+            Overflow = OverflowMode.Visible;
+            Style = new ElementStyle { BackColor = SKColors.Transparent };
+        }
+
+        public override SKSize GetPreferredSize(float maxWidth, float maxHeight)
+        {
+            float w = maxWidth > 0 ? maxWidth : Theme.RightW;
+            float wheel = Math.Clamp((w - PairGap) * 0.5f, 96f, MaxWheel);
+            return new SKSize(w, ColorWheelControl.HeightForWidth(wheel) * 2f + ColorGradingPanel.RowGap);
+        }
     }
 }

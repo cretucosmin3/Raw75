@@ -1,8 +1,9 @@
 using System;
 using Blossom;
 using Silk.NET.Core;
-using Silk.NET.Input;
 using SkiaSharp;
+using Blossom.Hosting;
+using Blossom.Desktop;
 
 namespace Raw75.Views;
 
@@ -21,33 +22,33 @@ internal static class CropCursors
         {
             case CropHandle.N:
             case CropHandle.S:
-                Browser.SetCursor(StandardCursor.VResize);
+                Shell.SetCursor(UiCursor.VResize);
                 break;
             case CropHandle.E:
             case CropHandle.W:
-                Browser.SetCursor(StandardCursor.HResize);
+                Shell.SetCursor(UiCursor.HResize);
                 break;
             case CropHandle.NW:
             case CropHandle.SE:
-                Browser.SetCustomCursor(_nwse, 16, 16);
+                Shell.SetCustomCursor(_nwse, 16, 16);
                 break;
             case CropHandle.NE:
             case CropHandle.SW:
-                Browser.SetCustomCursor(_nesw, 16, 16);
+                Shell.SetCustomCursor(_nesw, 16, 16);
                 break;
             case CropHandle.Move:
-                Browser.SetCursor(StandardCursor.Hand);
+                Shell.SetCursor(UiCursor.Hand);
                 break;
             case CropHandle.Rotate:
-                Browser.SetCustomCursor(_rotate, 16, 16);
+                Shell.SetCustomCursor(_rotate, 16, 16);
                 break;
             default:
-                Browser.SetCursor(StandardCursor.Default);
+                Shell.SetCursor(UiCursor.Default);
                 break;
         }
     }
 
-    public static void Reset() => Browser.SetCursor(StandardCursor.Default);
+    public static void Reset() => Shell.SetCursor(UiCursor.Default);
 
     private static void Ensure()
     {

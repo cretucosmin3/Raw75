@@ -4,7 +4,7 @@
 
 A fast, modern desktop application for editing RAW photos. Free and open-source software under the AGPL-3.0 license.
 
-UI is built with [Blossom](https://github.com/cretucosmin3/Blossom), with real-time hardware-accelerated photo development rendered via Skia and SkSL shaders on the GPU.
+UI is built with [Blossom](https://github.com/cretucosmin3/Blossom) (NuGet package `Blossom`: core, primitives and reactive signals), with real-time hardware-accelerated photo development rendered via Skia and SkSL shaders on the GPU.
 
 ---
 
@@ -59,7 +59,7 @@ Download the latest release archive for your platform from the [Releases](https:
 
 ### Clone & Run
 ```bash
-git clone --recurse-submodules https://github.com/cretucosmin3/Raw75.git
+git clone https://github.com/cretucosmin3/Raw75.git
 cd Raw75
 dotnet run --project src/Raw75/Raw75.csproj
 ```

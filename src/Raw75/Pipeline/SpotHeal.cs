@@ -287,17 +287,17 @@ internal static class SpotHeal
                 float dist = length(d);
                 float inner = u_radius * (1.0 - clamp(u_feather, 0.0, 1.0));
                 float m = 1.0 - smoother(dist, inner, u_radius);
-                half4 base = sample(u_image, p);
+                half4 base = u_image.eval(p);
                 if (m < 0.001) {
                     return base;
                 }
                 float2 srcP = p + (u_src - u_dst) * u_size;
                 srcP = clamp(srcP, float2(0.5, 0.5), u_size - float2(0.5, 0.5));
-                half4 healed = sample(u_image, srcP);
+                half4 healed = u_image.eval(srcP);
                 return mix(base, healed, m);
             }
         ";
-        _effect = SKRuntimeEffect.Create(sksl, out string err);
+        _effect = SKRuntimeEffect.CreateShader(sksl, out string err);
         if (_effect == null)
         {
             _failed = true;

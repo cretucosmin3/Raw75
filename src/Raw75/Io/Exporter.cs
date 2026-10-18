@@ -104,7 +104,7 @@ public static class Exporter
                 img.Save(path, new JpegEncoder
                 {
                     Quality = q,
-                    ColorType = q >= 90 ? JpegColorType.YCbCrRatio444 : JpegColorType.YCbCrRatio422
+                    ColorType = q >= 90 ? JpegEncodingColor.YCbCrRatio444 : JpegEncodingColor.YCbCrRatio422
                 });
                 break;
         }
@@ -143,11 +143,11 @@ public static class Exporter
         if (metadata?.CaptureTime.HasValue == true)
         {
             string dtStr = metadata.CaptureTime.Value.ToString("yyyy:MM:dd HH:mm:ss");
-            if (profile.GetValue(ExifTag.DateTimeOriginal) == null)
+            if (!profile.TryGetValue(ExifTag.DateTimeOriginal, out _))
                 profile.SetValue(ExifTag.DateTimeOriginal, dtStr);
-            if (profile.GetValue(ExifTag.DateTimeDigitized) == null)
+            if (!profile.TryGetValue(ExifTag.DateTimeDigitized, out _))
                 profile.SetValue(ExifTag.DateTimeDigitized, dtStr);
-            if (profile.GetValue(ExifTag.DateTime) == null)
+            if (!profile.TryGetValue(ExifTag.DateTime, out _))
                 profile.SetValue(ExifTag.DateTime, dtStr);
         }
 
@@ -184,37 +184,37 @@ public static class Exporter
 
         if (metadata != null)
         {
-            if (!string.IsNullOrEmpty(metadata.CameraMake) && profile.GetValue(ExifTag.Make) == null)
+            if (!string.IsNullOrEmpty(metadata.CameraMake) && !profile.TryGetValue(ExifTag.Make, out _))
                 profile.SetValue(ExifTag.Make, metadata.CameraMake);
 
-            if (!string.IsNullOrEmpty(metadata.CameraModel) && profile.GetValue(ExifTag.Model) == null)
+            if (!string.IsNullOrEmpty(metadata.CameraModel) && !profile.TryGetValue(ExifTag.Model, out _))
                 profile.SetValue(ExifTag.Model, metadata.CameraModel);
 
-            if (!string.IsNullOrEmpty(metadata.LensModel) && profile.GetValue(ExifTag.LensModel) == null)
+            if (!string.IsNullOrEmpty(metadata.LensModel) && !profile.TryGetValue(ExifTag.LensModel, out _))
                 profile.SetValue(ExifTag.LensModel, metadata.LensModel);
 
-            if (metadata.Iso > 0.1f && profile.GetValue(ExifTag.ISOSpeedRatings) == null)
+            if (metadata.Iso > 0.1f && !profile.TryGetValue(ExifTag.ISOSpeedRatings, out _))
                 profile.SetValue(ExifTag.ISOSpeedRatings, new ushort[] { (ushort)Math.Clamp(Math.Round(metadata.Iso), 1, ushort.MaxValue) });
 
-            if (metadata.ShutterSpeed > 0.000001f && profile.GetValue(ExifTag.ExposureTime) == null)
+            if (metadata.ShutterSpeed > 0.000001f && !profile.TryGetValue(ExifTag.ExposureTime, out _))
                 profile.SetValue(ExifTag.ExposureTime, DoubleToRational(metadata.ShutterSpeed));
 
-            if (metadata.Aperture > 0.01f && profile.GetValue(ExifTag.FNumber) == null)
+            if (metadata.Aperture > 0.01f && !profile.TryGetValue(ExifTag.FNumber, out _))
                 profile.SetValue(ExifTag.FNumber, DoubleToRational(metadata.Aperture));
 
-            if (metadata.FocalLength > 0.1f && profile.GetValue(ExifTag.FocalLength) == null)
+            if (metadata.FocalLength > 0.1f && !profile.TryGetValue(ExifTag.FocalLength, out _))
                 profile.SetValue(ExifTag.FocalLength, DoubleToRational(metadata.FocalLength));
 
-            if (metadata.FocalLengthIn35mm > 0.1f && profile.GetValue(ExifTag.FocalLengthIn35mmFilm) == null)
+            if (metadata.FocalLengthIn35mm > 0.1f && !profile.TryGetValue(ExifTag.FocalLengthIn35mmFilm, out _))
                 profile.SetValue(ExifTag.FocalLengthIn35mmFilm, (ushort)Math.Clamp(Math.Round(metadata.FocalLengthIn35mm), 1, ushort.MaxValue));
 
-            if (!string.IsNullOrEmpty(metadata.Artist) && profile.GetValue(ExifTag.Artist) == null)
+            if (!string.IsNullOrEmpty(metadata.Artist) && !profile.TryGetValue(ExifTag.Artist, out _))
                 profile.SetValue(ExifTag.Artist, metadata.Artist);
 
-            if (!string.IsNullOrEmpty(metadata.Copyright) && profile.GetValue(ExifTag.Copyright) == null)
+            if (!string.IsNullOrEmpty(metadata.Copyright) && !profile.TryGetValue(ExifTag.Copyright, out _))
                 profile.SetValue(ExifTag.Copyright, metadata.Copyright);
 
-            if (!string.IsNullOrEmpty(metadata.Description) && profile.GetValue(ExifTag.ImageDescription) == null)
+            if (!string.IsNullOrEmpty(metadata.Description) && !profile.TryGetValue(ExifTag.ImageDescription, out _))
                 profile.SetValue(ExifTag.ImageDescription, metadata.Description);
         }
 

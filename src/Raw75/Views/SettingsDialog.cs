@@ -1,204 +1,151 @@
 using System;
-using System.Collections.Generic;
 using Blossom;
+using Blossom.Animations;
 using Blossom.Core;
 using Blossom.Core.Visual;
 using Blossom.Core.Visual.Enums;
+using Blossom.Primitives;
+using Blossom.Reactive;
 using Raw75.Controls;
 using Raw75.Develop;
 using Raw75.Imaging;
 using Raw75.Io;
-using Silk.NET.Input;
 using SkiaSharp;
 
 namespace Raw75.Views;
 
-/// <summary>Modal settings: vertical tabs. Dev tab dumps a memory inventory to disk.</summary>
-public sealed class SettingsDialog : VisualElement
+/// <summary>Modal settings with Themes / General / Dev tabs. Dev dumps a memory inventory to disk.</summary>
+public sealed class SettingsDialog : ModalDialog
 {
-    private const float CardW = 960f;
-    private const float CardH = 720f;
-    private const float TabW = 140f;
+    private enum Tab { Themes, General, Dev }
 
-    private readonly VisualElement _card;
-    private readonly VisualElement _title;
-    private readonly IconButton _close;
-    private readonly IconButton _tabThemes;
-    private readonly IconButton _tabGeneral;
-    private readonly IconButton _tabDev;
-    private readonly VisualElement _panelGeneral;
-    private readonly VisualElement _panelThemes;
-    private readonly ScrollContainer _themesScroll;
-    private readonly VisualElement _panelDev;
-    private readonly VisualElement _themesHint;
-    private readonly ThemePickerCard[] _themeCards;
-    private readonly VisualElement _genWorkspace;
-    private readonly VisualElement _genPhotos;
-    private readonly VisualElement _genCache;
-    private readonly VisualElement _genDiskCache;
-    private readonly VisualElement _genLog;
-    private readonly VisualElement _clearCacheDivider;
-    private readonly VisualElement _clearCacheHeading;
-    private readonly VisualElement _clearCacheHint;
-    private readonly IconButton _clearCacheBtn;
-    private readonly VisualElement _clearCacheStatus;
-    private readonly IconButton _dumpBtn;
-    private readonly VisualElement _dumpHint;
-    private readonly VisualElement _dumpSummary;
-    private readonly VisualElement _dumpPath;
+    private const float CardW = 880f;
+    private const float CardH = 620f;
+    private const float KeyW = 150f;
+
+    private readonly Signal<Tab> _tab = new(Tab.Themes);
+    private readonly Signal<(string Text, bool Error)> _clearStatus = new(("", false));
+
+    private readonly RichBox _genWorkspace;
+    private readonly RichBox _genPhotos;
+    private readonly RichBox _genCache;
+    private readonly RichBox _genDiskCache;
+    private readonly RichBox _genLog;
+    private readonly RichBox _dumpSummary;
+    private readonly RichBox _dumpPath;
 
     public event Action? CacheCleared;
 
-    private string _tab = "Themes";
     private Session? _session;
     private PhotoPane? _pane;
 
-    public SettingsDialog()
+    public SettingsDialog() : base("SettingsDialog", zIndex: 1000, cardWidth: CardW, cardHeight: CardH)
     {
-        Name = "SettingsDialog";
-        Visible = false;
-        ZIndex = 1000;
-        ReceivesKeyboard = true;
-        Transform = new Transform(0, 0, 800, 600)
+        // Header: title over a strip of navigation tabs whose underline sits on the hairline below.
+        var tabs = new Stack { Name = "SettingsTabs", Orientation = Orientation.Horizontal, Gap = 4f };
+        tabs.MinHeight = 34f;
+        var header = new Stack
         {
-            Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom
+            Name = "SettingsHeader",
+            Orientation = Orientation.Vertical,
+            Gap = 8f,
+            Padding = new Thickness(CardPad, 16f, CardPad, 0f)
         };
-        Style = new ElementStyle { BackColor = new SKColor(0, 0, 0, 160) };
+        header.AddChild(Label("Settings", TextRole.Title));
+        header.AddChild(tabs);
 
-        _card = Box("Card", Theme.Panel, Theme.Radius);
-        _title = Label("Title", "Settings", Theme.Text, 18, 700, TextAlign.Left);
-        _close = new IconButton("Close");
-        _close.Clicked += Close;
+        // Themes
+        var themesPanel = Panel("Themes");
+        themesPanel.AddChild(Label(
+            "Chrome stays colour-neutral; the accent only marks buttons and selection, and the photo well stays dark for grading.",
+            TextRole.Body));
+        var gallery = new ThemeGallery();
+        themesPanel.AddChild(gallery);
+        Stack.SetGrow(gallery, 1f);
 
-        _tabThemes = new IconButton("Themes");
-        _tabGeneral = new IconButton("General");
-        _tabDev = new IconButton("Dev");
-        _tabThemes.Clicked += () => SetTab("Themes");
-        _tabGeneral.Clicked += () => SetTab("General");
-        _tabDev.Clicked += () => SetTab("Dev");
+        // General
+        var generalPanel = Panel("General");
+        var info = new Stack { Name = "GeneralInfo", Orientation = Orientation.Vertical, Gap = 6f };
+        info.AddChild(InfoRow("Workspace", out _genWorkspace));
+        info.AddChild(InfoRow("Photos", out _genPhotos));
+        info.AddChild(InfoRow("Working copies", out _genCache));
+        info.AddChild(InfoRow("Disk cache", out _genDiskCache));
+        info.AddChild(InfoRow("Log", out _genLog));
+        generalPanel.AddChild(Field("Session", info));
+        generalPanel.AddChild(Separator());
 
-        _panelGeneral = Box("PanelGeneral", Theme.PanelAlt, 6f);
-        _genWorkspace = Label("GenWs", "", Theme.Text, 14, 500, TextAlign.Left);
-        _genPhotos = Label("GenPhotos", "", Theme.Text, 14, 500, TextAlign.Left);
-        _genCache = Label("GenCache", "", Theme.TextDim, 12.5f, 400, TextAlign.Left);
-        _genDiskCache = Label("GenDiskCache", "", Theme.TextDim, 12.5f, 400, TextAlign.Left);
-        _genLog = Label("GenLog", "", Theme.TextDim, 12, 400, TextAlign.Left);
-
-        _clearCacheDivider = Box("ClearCacheDivider", Theme.HairlineSubtle, 0f);
-        _clearCacheHeading = Label("ClearCacheHeading", "STORED PHOTO MEMORY & CACHE", Theme.TextSecondary, 12f, 600, TextAlign.Left);
-        _clearCacheHint = Label("ClearCacheHint",
-            "Delete cached preview images, thumbnails, and saved edit metadata (.raw75/cache). Resets loaded photos to original defaults if they were edited by previous versions.",
-            Theme.TextDim, 12f, 400, TextAlign.Left);
-        _clearCacheBtn = new IconButton("Clear Photo Cache & History", "rotate_left");
-        _clearCacheBtn.Clicked += ClearCacheClicked;
-        _clearCacheStatus = Label("ClearCacheStatus", "", Theme.Accent, 12f, 500, TextAlign.Left);
-
-        _panelGeneral.AddChild(_genWorkspace);
-        _panelGeneral.AddChild(_genPhotos);
-        _panelGeneral.AddChild(_genCache);
-        _panelGeneral.AddChild(_genDiskCache);
-        _panelGeneral.AddChild(_genLog);
-        _panelGeneral.AddChild(_clearCacheDivider);
-        _panelGeneral.AddChild(_clearCacheHeading);
-        _panelGeneral.AddChild(_clearCacheHint);
-        _panelGeneral.AddChild(_clearCacheBtn);
-        _panelGeneral.AddChild(_clearCacheStatus);
-
-        _panelThemes = Box("PanelThemes", Theme.PanelAlt, Theme.Radius);
-        _themesScroll = new ScrollContainer
+        var clearBtn = new IconButton("Clear photo cache & edits", "rotate_left");
+        clearBtn.Clicked += ClearCacheClicked;
+        var clearStatus = Label("", TextRole.Dim);
+        clearStatus.Bind(s =>
         {
-            Name = "ThemesScroll",
-            OverflowX = OverflowMode.Clip,
-            OverflowY = OverflowMode.Scroll,
-            ScrollbarVisibilityX = ScrollbarVisibility.Hidden,
-            ScrollbarVisibilityY = ScrollbarVisibility.Auto,
-            ScrollbarThickness = 8f,
-            ScrollbarRadius = 4f,
-            ScrollbarThumbColor = Theme.HairlineStrong,
-            ScrollbarTrackColor = SKColors.Transparent,
-            Style = new ElementStyle { BackColor = SKColors.Transparent }
+            var (text, error) = _clearStatus.Value;
+            s.Text = text;
+            s.Style.Text.Color = error ? Theme.RedChannel : Theme.Accent;
+        });
+        generalPanel.AddChild(Field("Stored photo memory & cache",
+            Label("Deletes cached previews, thumbnails and saved edit metadata (.raw75/cache). Loaded photos reset to their original defaults.",
+                TextRole.Body),
+            ActionRow(clearBtn, clearStatus)));
+
+        // Dev
+        var devPanel = Panel("Dev");
+        var dumpBtn = new IconButton("Dump memory inventory", "info");
+        dumpBtn.Clicked += Dump;
+        _dumpPath = Label("", TextRole.Dim);
+        _dumpSummary = Label("No dump yet.", TextRole.Body);
+        _dumpSummary.Scrollable = true;
+        _dumpSummary.IsClickthrough = false;
+        devPanel.AddChild(Field("Diagnostics",
+            Label("Writes an on-disk report of live managed objects, cached images and native handles.", TextRole.Body),
+            ActionRow(dumpBtn, _dumpPath)));
+        devPanel.AddChild(_dumpSummary);
+        Stack.SetGrow(_dumpSummary, 1f);
+
+        var content = new Stack { Name = "SettingsContent", Orientation = Orientation.Vertical };
+        var panels = new (Tab Id, IconButton Button, Stack Panel)[]
+        {
+            (Tab.Themes, TabButton("Themes"), themesPanel),
+            (Tab.General, TabButton("General"), generalPanel),
+            (Tab.Dev, TabButton("Dev"), devPanel)
         };
-        _themesHint = Label("ThemesHint",
-            "Chrome stays color-neutral. Accents only hit buttons and selection. Photo well stays dark for grading.",
-            Theme.TextDim, 12.5f, 400, TextAlign.Left);
-        _themeCards = new ThemePickerCard[Theme.All.Length];
-        for (int i = 0; i < Theme.All.Length; i++)
+        foreach (var (id, button, panel) in panels)
         {
-            var pack = Theme.All[i];
-            var card = new ThemePickerCard(pack);
-            card.Clicked += () => Theme.Apply(pack);
-            _themeCards[i] = card;
-            _themesScroll.AddChild(card);
+            button.Clicked += () => _tab.Value = id;
+            tabs.AddChild(button);
+            content.AddChild(panel);
+            Stack.SetGrow(panel, 1f);
         }
-        _themesScroll.AddChild(_themesHint);
-        _panelThemes.AddChild(_themesScroll);
 
-        _panelDev = Box("PanelDev", Theme.PanelAlt, Theme.Radius);
-        _dumpHint = Label("DumpHint",
-            "Generate an on-disk diagnostic report of active managed objects, cached images, and native handles.",
-            Theme.TextDim, 13, 400, TextAlign.Left);
-        _dumpBtn = new IconButton("Dump Memory Inventory", "save");
-        _dumpBtn.Clicked += Dump;
-        _dumpSummary = Label("DumpSummary", "No dump yet.", Theme.Text, 13, 500, TextAlign.Left);
-        if (_dumpSummary is RichBox dumpBox)
-            dumpBox.Scrollable = true;
-        _dumpPath = Label("DumpPath", "", Theme.TextDim, 12, 400, TextAlign.Left);
-        _panelDev.AddChild(_dumpHint);
-        _panelDev.AddChild(_dumpBtn);
-        _panelDev.AddChild(_dumpSummary);
-        _panelDev.AddChild(_dumpPath);
+        var done = new IconButton("Done", primary: true);
+        done.Clicked += Close;
 
-        AddChild(_card);
-        _card.AddChild(_title);
-        _card.AddChild(_close);
-        _card.AddChild(_tabThemes);
-        _card.AddChild(_tabGeneral);
-        _card.AddChild(_tabDev);
-        _card.AddChild(_panelGeneral);
-        _card.AddChild(_panelThemes);
-        _card.AddChild(_panelDev);
+        Card.AddChild(header);
+        Card.AddChild(Separator());
+        Card.AddChild(content);
+        Stack.SetGrow(content, 1f);
+        Card.AddChild(Separator());
+        Card.AddChild(Footer(null, done));
 
-        Events.OnClick += (_, args) =>
+        this.Bind(_ =>
         {
-            if (!_card.Transform.Computed.RectF.Contains(args.Global.X, args.Global.Y))
+            var tab = _tab.Value;
+            foreach (var (id, button, panel) in panels)
             {
-                args.Handled = true;
-                Close();
+                button.Toggled = id == tab;
+                panel.Visible = id == tab;
             }
-        };
-        Events.OnKeyDown += k =>
-        {
-            if (!Visible)
-                return;
-            if ((Key)k == Key.Escape)
-                Close();
-        };
-
-        SetTab("Themes");
+            content.InvalidateLayout();
+        });
     }
 
     public void Open(Session session, PhotoPane pane)
     {
         _session = session;
         _pane = pane;
-        _clearCacheStatus.Text = "";
+        _clearStatus.Value = ("", false);
         RefreshGeneral();
-        CoverView();
-        Visible = true;
-        ParentView?.SetActiveKeyboardElement(this);
-        InvalidateLayout();
-        ForceLayoutSubtree();
-        InvalidatePaint();
-    }
-
-    public void Close()
-    {
-        if (!Visible)
-            return;
-        if (ParentView?.ActiveKeyboardElement == this)
-            ParentView.SetActiveKeyboardElement(null);
-        Visible = false;
-        InvalidatePaint();
+        ShowModal();
     }
 
     private void ClearCacheClicked()
@@ -208,18 +155,13 @@ public sealed class SettingsDialog : VisualElement
             int entries = WorkspaceStore.ClearCache();
             _session?.ResetAllDocuments();
             CacheCleared?.Invoke();
-            _clearCacheStatus.Text = $"Cleared {entries} cache items. Memory and edits reset.";
-            if (_clearCacheStatus.Style?.Text != null)
-                _clearCacheStatus.Style.Text.Color = Theme.Accent;
+            _clearStatus.Value = ($"Cleared {entries} cache items. Memory and edits reset.", false);
             RefreshGeneral();
         }
         catch (Exception ex)
         {
-            _clearCacheStatus.Text = "Clear failed: " + ex.Message;
-            if (_clearCacheStatus.Style?.Text != null)
-                _clearCacheStatus.Style.Text.Color = Theme.RedChannel;
+            _clearStatus.Value = ("Clear failed: " + ex.Message, true);
         }
-        InvalidatePaint();
     }
 
     private void Dump()
@@ -238,311 +180,205 @@ public sealed class SettingsDialog : VisualElement
             _dumpPath.Text = "";
             Log.Error("Memory dump failed: " + ex);
         }
-
-        InvalidatePaint();
     }
 
     private void RefreshGeneral()
     {
         string? root = WorkspaceStore.Root;
-        _genWorkspace.Text = string.IsNullOrEmpty(root)
-            ? "Workspace  none  (caches in app data)"
-            : "Workspace  " + root;
+        _genWorkspace.Text = string.IsNullOrEmpty(root) ? "None (caches in app data)" : root;
         int n = _session?.Documents.Count ?? 0;
         int i = _session?.ActiveIndex ?? -1;
-        _genPhotos.Text = n == 0 ? "Photos  none" : $"Photos  {n}   active  {i + 1}/{n}";
-        _genCache.Text = "Working copies kept in RAM  " + (_session?.CacheLimit ?? 1)
-                         + "  (inactive photos drop proxy/linear, keep preview)";
+        _genPhotos.Text = n == 0 ? "None" : $"{n}  ·  active {i + 1}/{n}";
+        _genCache.Text = $"{_session?.CacheLimit ?? 1} kept in RAM  (inactive photos drop proxy/linear, keep preview)";
         var stats = WorkspaceStore.GetCacheStats();
-        _genDiskCache.Text = $"Disk cache  {stats.Count} items  ·  {MemSize.Bytes(stats.Bytes)}";
-        _genLog.Text = "Log  " + Log.LogFilePath;
+        _genDiskCache.Text = $"{stats.Count} items  ·  {MemSize.Bytes(stats.Bytes)}";
+        _genLog.Text = Log.LogFilePath;
     }
 
-    private void SetTab(string tab)
+    private static Stack Panel(string name) => new()
     {
-        _tab = tab;
-        _panelGeneral.Visible = tab == "General";
-        _panelThemes.Visible = tab == "Themes";
-        _panelDev.Visible = tab == "Dev";
-        _tabGeneral.Toggled = tab == "General";
-        _tabThemes.Toggled = tab == "Themes";
-        _tabDev.Toggled = tab == "Dev";
-        SyncThemeCards();
-        InvalidateLayout();
-        InvalidatePaint();
+        Name = $"SettingsPanel_{name}",
+        Orientation = Orientation.Vertical,
+        Gap = 16f,
+        Padding = new Thickness(CardPad, 18f, CardPad, 18f)
+    };
+
+    private static IconButton TabButton(string caption)
+    {
+        var button = new IconButton(caption) { Variant = ButtonVariant.Tab };
+        button.MinWidth = 76f;
+        button.MinHeight = button.MaxHeight = 34f;
+        return button;
     }
 
-    public void RefreshTheme()
+    /// <summary>Fixed-width key with its value filling the rest of the row.</summary>
+    private static Stack InfoRow(string key, out RichBox value)
     {
-        PaintBox(_card, Theme.Panel, Theme.Radius);
-        PaintBox(_panelGeneral, Theme.PanelAlt, Theme.Radius);
-        PaintBox(_panelThemes, Theme.PanelAlt, Theme.Radius);
-        _themesScroll.ScrollbarThumbColor = Theme.HairlineStrong;
-        _themesScroll.ScrollbarThumbDragColor = Theme.Accent;
-        PaintBox(_panelDev, Theme.PanelAlt, Theme.Radius);
-        if (_title.Style?.Text != null) _title.Style.Text.Color = Theme.Text;
-        PaintLabel(_themesHint, Theme.TextDim);
-        PaintLabel(_genWorkspace, Theme.Text);
-        PaintLabel(_genPhotos, Theme.Text);
-        PaintLabel(_genCache, Theme.TextDim);
-        PaintLabel(_genDiskCache, Theme.TextDim);
-        PaintLabel(_genLog, Theme.TextDim);
-        _clearCacheDivider.Style.BackColor = Theme.HairlineSubtle;
-        PaintLabel(_clearCacheHeading, Theme.TextSecondary);
-        PaintLabel(_clearCacheHint, Theme.TextDim);
-        PaintLabel(_dumpHint, Theme.TextDim);
-        PaintLabel(_dumpSummary, Theme.Text);
-        PaintLabel(_dumpPath, Theme.TextDim);
-        SyncThemeCards();
-        InvalidatePaint();
+        var row = new Stack { Name = $"Info_{key}", Orientation = Orientation.Horizontal, Align = LayoutAlign.Center, Gap = 12f };
+        var keyLabel = Label(key, TextRole.Dim);
+        keyLabel.MinWidth = keyLabel.MaxWidth = KeyW;
+        value = Label("", TextRole.Body);
+        value.Bind(v => v.Style.Text.Color = Theme.Text);
+        row.AddChild(keyLabel);
+        row.AddChild(value);
+        Stack.SetGrow(value, 1f);
+        return row;
     }
 
-    private void SyncThemeCards()
+    private static Stack ActionRow(IconButton action, VisualElement note)
     {
-        for (int i = 0; i < _themeCards.Length; i++)
-            _themeCards[i].Selected = _themeCards[i].Pack.Id == Theme.Id;
+        var row = new Stack { Name = "ActionRow", Orientation = Orientation.Horizontal, Align = LayoutAlign.Center, Gap = 12f };
+        row.AddChild(action);
+        row.AddChild(note);
+        Stack.SetGrow(note, 1f);
+        return row;
     }
 
-    private static void PaintBox(VisualElement e, SKColor fill, float round)
+    /// <summary>Scrolling two-column gallery of theme cards. Scroll content keeps explicit frames.</summary>
+    private sealed class ThemeGallery : ScrollContainer
     {
-        e.Style.BackColor = fill;
-        if (e.Style.Border != null)
+        private const float TileH = 96f;
+        private const float TileGap = 10f;
+        private readonly ThemePickerCard[] _cards;
+
+        public ThemeGallery()
         {
-            e.Style.Border.Color = Theme.Hairline;
-            e.Style.Border.Roundness = round;
+            Name = "ThemesScroll";
+            OverflowX = OverflowMode.Clip;
+            OverflowY = OverflowMode.Scroll;
+            ScrollbarVisibilityX = ScrollbarVisibility.Hidden;
+            ScrollbarVisibilityY = ScrollbarVisibility.Auto;
+            ScrollbarThickness = 6f;
+            ScrollbarRadius = 3f;
+            ScrollbarTrackColor = SKColors.Transparent;
+            Style = new ElementStyle { BackColor = SKColors.Transparent };
+
+            _cards = new ThemePickerCard[Theme.All.Length];
+            for (int i = 0; i < _cards.Length; i++)
+            {
+                var pack = Theme.All[i];
+                var card = new ThemePickerCard(pack);
+                card.Clicked += () => Theme.Apply(pack);
+                _cards[i] = card;
+                AddChild(card);
+            }
+
+            this.Bind(s =>
+            {
+                s.ScrollbarThumbColor = Theme.HairlineStrong;
+                s.ScrollbarThumbHoverColor = Theme.TextDim;
+                s.ScrollbarThumbDragColor = Theme.Accent;
+                s.InvalidatePaint();
+            });
+        }
+
+        protected override void LayoutChildren()
+        {
+            float x = Transform.Computed.X;
+            float y = Transform.Computed.Y;
+            float w = Math.Max(1f, Transform.Computed.Width - ScrollbarThickness - 6f);
+            float tileW = (w - TileGap) * 0.5f;
+            int rows = (_cards.Length + 1) / 2;
+            for (int i = 0; i < _cards.Length; i++)
+                _cards[i].Transform.SetAbsoluteFrame(x + (i % 2) * (tileW + TileGap), y + (i / 2) * (TileH + TileGap), tileW, TileH);
+            SetContentSize(w, rows * TileH + (rows - 1) * TileGap);
+            base.LayoutChildren();
         }
     }
-
-    private static void PaintLabel(VisualElement e, SKColor color)
-    {
-        if (e.Style?.Text != null)
-            e.Style.Text.Color = color;
-    }
-
-    private void CoverView()
-    {
-        float w = ParentView?.Width ?? Transform.Width;
-        float h = ParentView?.Height ?? Transform.Height;
-        if (w < 1f) w = 1f;
-        if (h < 1f) h = 1f;
-        Transform.SetAbsoluteFrame(0, 0, w, h);
-        Transform.Anchor = Anchor.Left | Anchor.Right | Anchor.Top | Anchor.Bottom;
-    }
-
-    protected override void LayoutChildren()
-    {
-        float ox = Transform.Computed.X;
-        float oy = Transform.Computed.Y;
-        float w = Math.Max(1f, Transform.Computed.Width);
-        float h = Math.Max(1f, Transform.Computed.Height);
-        float cardX = ox + Math.Max(0, (w - CardW) / 2f);
-        float cardY = oy + Math.Max(0, (h - CardH) / 2f);
-        _card.Transform.SetAbsoluteFrame(cardX, cardY, CardW, CardH);
-
-        const float pad = 18f;
-        _title.Transform.SetAbsoluteFrame(cardX + pad, cardY + 14, 240, 26);
-        _close.Transform.SetAbsoluteFrame(cardX + CardW - pad - 96, cardY + 12, 96, 32);
-
-        float tabX = cardX + 10;
-        float tabY = cardY + 54;
-        float tabH = 34f;
-        _tabThemes.Transform.SetAbsoluteFrame(tabX, tabY, TabW, tabH);
-        _tabGeneral.Transform.SetAbsoluteFrame(tabX, tabY + tabH + 6, TabW, tabH);
-        _tabDev.Transform.SetAbsoluteFrame(tabX, tabY + (tabH + 6) * 2, TabW, tabH);
-
-        float px = cardX + 10 + TabW + 12;
-        float py = cardY + 54;
-        float pw = cardX + CardW - pad - px;
-        float ph = cardY + CardH - pad - py;
-        _panelGeneral.Transform.SetAbsoluteFrame(px, py, pw, ph);
-        _panelThemes.Transform.SetAbsoluteFrame(px, py, pw, ph);
-        _panelDev.Transform.SetAbsoluteFrame(px, py, pw, ph);
-
-        float ix = px + 16;
-        float iy = py + 16;
-        float iw = pw - 32;
-        _genWorkspace.Transform.SetAbsoluteFrame(ix, iy, iw, 28);
-        _genPhotos.Transform.SetAbsoluteFrame(ix, iy + 32, iw, 24);
-        _genCache.Transform.SetAbsoluteFrame(ix, iy + 60, iw, 24);
-        _genDiskCache.Transform.SetAbsoluteFrame(ix, iy + 88, iw, 24);
-        _genLog.Transform.SetAbsoluteFrame(ix, iy + 116, iw, 24);
-
-        _clearCacheDivider.Transform.SetAbsoluteFrame(ix, iy + 152, iw, 1);
-        _clearCacheHeading.Transform.SetAbsoluteFrame(ix, iy + 166, iw, 20);
-        _clearCacheHint.Transform.SetAbsoluteFrame(ix, iy + 190, iw, 36);
-        _clearCacheBtn.Transform.SetAbsoluteFrame(ix, iy + 236, 260, 36);
-        _clearCacheStatus.Transform.SetAbsoluteFrame(ix + 272, iy + 236, iw - 272, 36);
-
-        _dumpHint.Transform.SetAbsoluteFrame(ix, iy, iw, 56);
-        _dumpBtn.Transform.SetAbsoluteFrame(ix, iy + 68, 220, 34);
-        _dumpSummary.Transform.SetAbsoluteFrame(ix, iy + 112, iw, 48);
-        _dumpPath.Transform.SetAbsoluteFrame(ix, iy + 164, iw, 36);
-
-        float sx = px + 10f;
-        float sy = py + 10f;
-        float sw = pw - 20f;
-        float sh = ph - 20f;
-        _themesScroll.Transform.SetAbsoluteFrame(sx, sy, sw, sh);
-
-        float padX = 8f;
-        float innerW = Math.Max(1f, sw - padX * 2f - 10f);
-        _themesHint.Transform.SetAbsoluteFrame(sx + padX, sy + 8f, innerW, 36f);
-        float gap = 10f;
-        float cardW = (innerW - gap) * 0.5f;
-        float cardH = 100f;
-        float gridY = sy + 50f;
-        int rows = (_themeCards.Length + 1) / 2;
-        for (int i = 0; i < _themeCards.Length; i++)
-        {
-            int col = i % 2;
-            int row = i / 2;
-            _themeCards[i].Transform.SetAbsoluteFrame(
-                sx + padX + col * (cardW + gap),
-                gridY + row * (cardH + gap),
-                cardW, cardH);
-        }
-        float contentH = 50f + rows * (cardH + gap) + 8f;
-        _themesScroll.SetContentSize(sw, Math.Max(contentH, sh));
-    }
-
-    private static VisualElement Box(string name, SKColor fill, float round)
-    {
-        return new VisualElement
-        {
-            Name = name,
-            Style = new ElementStyle
-            {
-                BackColor = fill,
-                Border = new BorderStyle { Width = 1, Color = Theme.Hairline, Roundness = round }
-            }
-        };
-    }
-
-    private static VisualElement Label(string name, string text, SKColor color, float size, int weight, TextAlign align)
-    {
-        return new RichBox
-        {
-            Name = name,
-            Text = text,
-            IsClickthrough = true,
-            Overflow = OverflowMode.Clip,
-            Style = new ElementStyle
-            {
-                BackColor = SKColors.Transparent,
-                Text = new TextStyle
-                {
-                    Color = color,
-                    Size = size,
-                    Weight = weight,
-                    Alignment = align,
-                    Padding = 2,
-                    Overflow = TextOverflow.Ellipsis,
-                    MaxLines = name is "DumpPath" or "DumpHint" or "DumpSummary" or "ClearCacheHint" or "ThemesHint" ? 2 : 1
-                }
-            }
-        };
-    }
-
 }
 
-internal sealed class ThemePickerCard : VisualElement
+/// <summary>Theme preview tile on <see cref="ButtonBase"/>, painted in its own pack's colours.</summary>
+internal sealed class ThemePickerCard : ButtonBase
 {
-    public UiThemePack Pack { get; }
-    public event Action? Clicked;
-
+    private float _hover;
     private bool _selected;
-    private bool _hovered;
 
-    public bool Selected
-    {
-        get => _selected;
-        set
-        {
-            if (_selected == value) return;
-            _selected = value;
-            ApplyChrome();
-        }
-    }
+    public UiThemePack Pack { get; }
 
     public ThemePickerCard(UiThemePack pack)
     {
         Pack = pack;
         Name = "ThemeCard_" + pack.Id;
-        Cursor = StandardCursor.Hand;
-        Style = new ElementStyle
-        {
-            BackColor = pack.Section,
-            Border = new BorderStyle
-            {
-                Width = 1.5f,
-                Color = Theme.Hairline,
-                Roundness = pack.Radius
-            }
-        };
+        ReceivesKeyboard = false;
+        Style.BackColor = SKColors.Transparent;
+        Events.OnClick += (_, e) => { if (e.Button == PointerButton.Left) e.Handled = true; };
 
-        Events.OnMouseEnter += _ => { _hovered = true; ApplyChrome(); };
-        Events.OnMouseLeave += _ => { _hovered = false; ApplyChrome(); };
-        Events.OnClick += (_, args) =>
+        this.Bind(card =>
         {
-            if (args.Button != (int)MouseButton.Left) return;
-            Clicked?.Invoke();
-            args.Handled = true;
-        };
+            card._selected = Theme.Id == pack.Id;
+            card.InvalidatePaint();
+        });
     }
 
-    protected override void OnAfterStyleDraw(List<DrawCommand> cmds)
+    protected override void OnHoverChanged()
     {
-        cmds.Add(new DrawCallbackCommand(Draw));
-    }
-
-    private void ApplyChrome()
-    {
-        Style.BackColor = Pack.Section;
-        if (Style.Border != null)
-        {
-            Style.Border.Color = _selected ? Pack.Accent : (_hovered ? Pack.HairlineStrong : Pack.Hairline);
-            Style.Border.Roundness = Pack.Radius;
-            Style.Border.Width = _selected ? 2f : 1f;
-        }
+        _hover = IsHovered ? 1f : 0f;
         InvalidatePaint();
     }
 
-    private void Draw(SKCanvas canvas)
+    protected override void Paint(SKCanvas canvas)
     {
-        float w = Transform.Computed.Width;
-        float h = Transform.Computed.Height;
+        float w = W, h = H;
         if (w < 8f || h < 8f) return;
 
-        float pad = 12f;
-        float sw = (w - pad * 2f - 12f) / 4f;
-        float sh = 22f;
-        float sy = 14f;
-        SKColor[] chips = { Pack.Window, Pack.Panel, Pack.Section, Pack.Accent };
-        using var fill = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
-        using var stroke = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, Color = Pack.Hairline };
-        for (int i = 0; i < 4; i++)
+        var p = Pack;
+        float r = p.Radius;
+        float hover = _hover;
+        var box = new SKRect(0.5f, 0.5f, w - 0.5f, h - 0.5f);
+
+        using (var fill = new SKPaint { Color = Anim.Lerp(p.Section, p.SectionHeaderHover, hover * 0.5f), IsAntialias = true })
+            canvas.DrawRoundRect(box, r, r, fill);
+        using (var edge = new SKPaint
         {
-            fill.Color = chips[i];
-            var r = new SKRect(pad + i * (sw + 4f), sy, pad + i * (sw + 4f) + sw, sy + sh);
-            canvas.DrawRoundRect(r, Pack.RadiusSm, Pack.RadiusSm, fill);
-            canvas.DrawRoundRect(r, Pack.RadiusSm, Pack.RadiusSm, stroke);
+            Color = _selected ? p.Accent : Anim.Lerp(p.Hairline, p.HairlineStrong, hover),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = _selected ? 2f : 1f,
+            IsAntialias = true
+        })
+        {
+            var rim = box;
+            if (_selected) rim.Inflate(-0.5f, -0.5f);
+            canvas.DrawRoundRect(rim, r, r, edge);
         }
 
-        using var title = new SKPaint
+        // Swatches: window, panel, section, accent.
+        const float pad = 12f;
+        const float sy = 12f;
+        const float sh = 20f;
+        float sw = (w - pad * 2f - 12f) / 4f;
+        SKColor[] chips = { p.Window, p.Panel, p.Section, p.Accent };
+        using (var chip = new SKPaint { IsAntialias = true })
+        using (var chipEdge = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, Color = p.Hairline })
         {
-            IsAntialias = true,
-            Color = Pack.Text,
-            TextSize = 14f,
-            Typeface = Theme.GetTypeface(700)
-        };
-        using var body = new SKPaint
+            for (int i = 0; i < chips.Length; i++)
+            {
+                chip.Color = chips[i];
+                var rect = SKRect.Create(pad + i * (sw + 4f), sy, sw, sh);
+                canvas.DrawRoundRect(rect, p.RadiusSm, p.RadiusSm, chip);
+                canvas.DrawRoundRect(rect, p.RadiusSm, p.RadiusSm, chipEdge);
+            }
+        }
+
+        using var title = new TextPaint { Color = p.Text, TextSize = 13f, Typeface = Theme.GetTypeface(600) };
+        using var body = new TextPaint { Color = p.TextDim, TextSize = 11.5f, Typeface = Theme.GetTypeface(400) };
+        canvas.DrawText(p.Name, pad, sy + sh + 22f, title);
+        canvas.DrawText(p.Description, pad, sy + sh + 40f, body);
+
+        if (!_selected) return;
+
+        // Active badge: accent disc with a check in the bottom-right corner.
+        float cx = w - pad - 8f, cy = h - pad - 8f;
+        using (var disc = new SKPaint { Color = p.Accent, IsAntialias = true })
+            canvas.DrawCircle(cx, cy, 8f, disc);
+        using var check = new SKPaint
         {
-            IsAntialias = true,
-            Color = Pack.TextDim,
-            TextSize = 11.5f,
-            Typeface = Theme.GetTypeface(400)
+            Color = p.OutlineAccent ? p.Window : p.ButtonTextOnAccent,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1.6f,
+            StrokeCap = SKStrokeCap.Round,
+            IsAntialias = true
         };
-        canvas.DrawText(Pack.Name, pad, sy + sh + 20f, title);
-        canvas.DrawText(Pack.Description, pad, sy + sh + 38f, body);
+        canvas.DrawLine(cx - 3.5f, cy + 0.2f, cx - 1f, cy + 2.7f, check);
+        canvas.DrawLine(cx - 1f, cy + 2.7f, cx + 3.6f, cy - 2.4f, check);
     }
 }
