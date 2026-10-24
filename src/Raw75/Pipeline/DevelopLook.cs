@@ -47,6 +47,7 @@ internal sealed class DevelopLook : IDisposable
     // Monolithic fallback cache
     private SKShader? _fxFast;
     private SKShader? _fxQuality;
+    private SKShader? _monoMasks;
     private bool _cachedCrop;
     private bool _cachedClipping;
     private float _cachedTx, _cachedTy, _cachedTw = 1f, _cachedTh = 1f;
@@ -62,6 +63,9 @@ internal sealed class DevelopLook : IDisposable
     }
 
     public void InvalidateSpots() => RetireSpot();
+
+    /// <summary>Mask shapes or parameters moved: only the final pass changes (stages 1 and 2 stay cached).</summary>
+    public void InvalidateMasks() => _dirty = true;
 
     public void InvalidateAll()
     {
@@ -293,6 +297,7 @@ internal sealed class DevelopLook : IDisposable
             using var stage3CurveShader = curve.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
             if (stage3CurveShader == null) return false;
             ch3.Add("u_curve", stage3CurveShader);
+            using SKShader? stage3Masks = BindMasks(u3, ch3, settings, source, frameW, frameH, fast);
 
             bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
             using SKShader? fx = eff3.ToShader(u3, ch3);
@@ -412,6 +417,8 @@ internal sealed class DevelopLook : IDisposable
                 using var curveShader = curve.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
                 if (curveShader == null) return false;
                 children.Add("u_curve", curveShader);
+                if (_monoMasks != null) GpuRetain.RetireShader(_monoMasks);
+                _monoMasks = BindMasks(uniforms, children, settings, source, frameW, frameH, fast);
 
                 bool tilePartial = tileW < 0.999f || tileH < 0.999f || tileX > 0.0001f || tileY > 0.0001f;
                 SKShader? fx = effect.ToShader(uniforms, children);
@@ -457,6 +464,22 @@ internal sealed class DevelopLook : IDisposable
         }
     }
 
+    /// <summary>
+    /// Mask atlas child and uniforms for this draw. The atlas is built at the full source's aspect, which a
+    /// viewport tile doesn't share: derive it from the (rotated) frame when one is given.
+    /// </summary>
+    private static SKShader? BindMasks(
+        SKRuntimeEffectUniforms u, SKRuntimeEffectChildren children, DevelopSettings settings,
+        SKImage source, int frameW, int frameH, bool fast)
+    {
+        float aspect = source.Width / (float)Math.Max(1, source.Height);
+        if (frameW > 0 && frameH > 0)
+            aspect = (settings.Rotate90 & 1) != 0 ? frameH / (float)frameW : frameW / (float)frameH;
+        MaskAtlas? atlas = MaskRaster.Get(settings, aspect, fast ? MaskRaster.FastLongSide : MaskRaster.GpuLongSide);
+        SKImage? image = atlas != null ? MaskRaster.Image(atlas) : null;
+        return MaskRaster.Bind(u, children, settings, atlas, image);
+    }
+
     private void BindSource(SKImage source)
     {
         if (ReferenceEquals(_source, source) && _img != null)
@@ -484,8 +507,10 @@ internal sealed class DevelopLook : IDisposable
         RetireSpot();
         if (_fxFast != null) GpuRetain.RetireShader(_fxFast);
         if (_fxQuality != null) GpuRetain.RetireShader(_fxQuality);
+        if (_monoMasks != null) GpuRetain.RetireShader(_monoMasks);
         _fxFast = null;
         _fxQuality = null;
+        _monoMasks = null;
         _img?.Dispose();
         _lut?.Dispose();
         _mask?.Dispose();

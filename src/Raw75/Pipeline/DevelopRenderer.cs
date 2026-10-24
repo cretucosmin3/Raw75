@@ -87,6 +87,8 @@ public static class DevelopRenderer
         if (surface == null)
             return Blit(source, outW, outH);
 
+        SKImage? masksImage = null;
+        SKShader? masksShader = null;
         try
         {
             using var imgShader = source.ToShader();
@@ -98,6 +100,7 @@ public static class DevelopRenderer
                 return Blit(source, outW, outH);
 
             SKShader? shader;
+            MaskAtlas? masksAtlas;
             lock (Gate)
             {
                 var uniforms = new SKRuntimeEffectUniforms(effect);
@@ -108,6 +111,9 @@ public static class DevelopRenderer
                 children.Add("u_lut", lutShader);
                 children.Add("u_mask", maskShader);
                 children.Add("u_curve", curveShader);
+                masksAtlas = MaskRaster.Get(s, source.Width / (float)Math.Max(1, source.Height), MaskRaster.GpuLongSide);
+                masksImage = masksAtlas != null ? MaskRaster.CreateImage(masksAtlas) : null;
+                masksShader = MaskRaster.Bind(uniforms, children, s, masksAtlas, masksImage);
 
                 shader = effect.ToShader(uniforms, children);
             }
@@ -133,6 +139,8 @@ public static class DevelopRenderer
         finally
         {
             surface.Dispose();
+            masksShader?.Dispose();
+            masksImage?.Dispose();
         }
     }
 
@@ -828,6 +836,278 @@ public static class DevelopRenderer
         return new SKRect(x, y, x + w, y + h);
     }
 
+    // Mask atlas child + per-slot parameter blocks (see MaskRaster.Bind).
+    private const string MaskUniformsSksl = @"
+            uniform shader u_masks;
+            uniform float u_maskCount;
+            uniform float2 u_maskTile;
+            uniform float4 u_mA0;
+            uniform float4 u_mB0;
+            uniform float4 u_mC0;
+            uniform float4 u_mA1;
+            uniform float4 u_mB1;
+            uniform float4 u_mC1;
+            uniform float4 u_mA2;
+            uniform float4 u_mB2;
+            uniform float4 u_mC2;
+            uniform float4 u_mA3;
+            uniform float4 u_mB3;
+            uniform float4 u_mC3;
+            uniform float4 u_mA4;
+            uniform float4 u_mB4;
+            uniform float4 u_mC4;
+            uniform float4 u_mA5;
+            uniform float4 u_mB5;
+            uniform float4 u_mC5;
+            uniform float4 u_mA6;
+            uniform float4 u_mB6;
+            uniform float4 u_mC6;
+            uniform float4 u_mA7;
+            uniform float4 u_mB7;
+            uniform float4 u_mC7;
+    ";
+
+    // Shared by Stage 3 and the monolithic fallback: the global look, its tone steps as functions,
+    // and the per-mask local adjustments built from the same steps.
+    private const string LookSksl = @"
+            float3 look_wb(float3 col, float temp, float tint) {
+                // Multiplicative chromatic white balance (preserves black levels and photon ratios)
+                col.r *= exp(0.55 * temp + 0.18 * tint);
+                col.g *= exp(-0.35 * tint);
+                col.b *= exp(-0.55 * temp - 0.18 * tint);
+                return max(col, 0.0);
+            }
+
+            // Whites: bright-end white point, not global exposure and not only speculars.
+            // 0 at middle gray, ramps through light tones / white surfaces, full by ~+2 EV.
+            float3 look_whites(float3 col, float whites) {
+                if (abs(whites) > 0.0001) {
+                    float pixel_luma = max(luma2020(col), 0.00001);
+                    float ev_w = log2(pixel_luma / 0.18);
+                    float w = smoother(ev_w, 0.3, 2.0);
+                    if (w > 0.0001) {
+                        float target_ev;
+                        if (whites > 0.0) {
+                            target_ev = ev_w + whites * 2.4;
+                        } else {
+                            float k = -whites * 1.15;
+                            target_ev = ev_w / (1.0 + k * max(ev_w - 0.3, 0.0));
+                        }
+                        float new_ev = mix(ev_w, target_ev, w);
+                        col *= (0.18 * exp2(new_ev)) / pixel_luma;
+                    }
+                }
+                return col;
+            }
+
+            // Shadows & Blacks: Perceptual gamma-domain bell curve with anti-mud contrast restoration
+            float3 look_shadows_blacks(float3 col, float shadows, float blacks) {
+                float sh = shadows * 0.833333;
+                float bl = blacks * 2.5;
+                if (abs(sh) > 0.001 || abs(bl) > 0.001) {
+                    float pixel_luma = max(luma2020(col), 0.00001);
+                    float t_pixel = pow(pixel_luma, 0.4545);
+
+                    float shadow_lift = sh * t_pixel * pow(max(1.0 - t_pixel, 0.0), 4.5);
+                    float black_lift = bl * t_pixel * pow(max(1.0 - t_pixel, 0.0), 12.0);
+                    float lift_amount = max(shadow_lift + black_lift, 0.0);
+
+                    float t_pixel_curved = max(t_pixel + shadow_lift + black_lift, 0.0);
+
+                    const float shadow_pivot = 0.2;
+                    float stretch_factor = 1.0 + (lift_amount * 1.3);
+                    float contrasted_t = shadow_pivot + (t_pixel_curved - shadow_pivot) * stretch_factor;
+
+                    float final_t = max(mix(t_pixel_curved, contrasted_t, 0.85), 0.0);
+                    float curved_luma = pow(final_t, 2.2);
+
+                    float luma_ratio = curved_luma / pixel_luma;
+                    col *= luma_ratio;
+
+                    if (luma_ratio > 1.0) {
+                        float recovered_luma = luma2020(col);
+                        float boost_amount = clamp((luma_ratio - 1.0) * 0.15, 0.0, 0.4);
+                        col = mix(col, float3(recovered_luma), boost_amount);
+                    }
+                }
+                return col;
+            }
+
+            // Highlights: Rational compressive shoulder & highlight recovery
+            float3 look_highlights(float3 col, float highlights) {
+                float hl = highlights * 0.833333;
+                if (abs(hl) > 0.001) {
+                    float pixel_luma = max(luma2020(col), 0.00001);
+                    if (pixel_luma > 0.18) {
+                        float ev_h = log2(pixel_luma / 0.18);
+                        float target_ev;
+                        if (hl < 0.0) {
+                            float k = -hl * 1.0;
+                            target_ev = ev_h / (1.0 + k * ev_h * 0.35);
+                        } else {
+                            target_ev = ev_h * (1.0 + hl * 0.35);
+                        }
+                        float w_hl = smoother(ev_h, 0.0, 1.5);
+                        float new_ev = ev_h + (target_ev - ev_h) * w_hl;
+                        float new_luma = 0.18 * exp2(new_ev);
+                        float luma_ratio = new_luma / pixel_luma;
+                        float spec_desat = smoother(pixel_luma, 6.0, 15.0);
+                        col = mix(col * luma_ratio, float3(new_luma), spec_desat);
+                    }
+                }
+                return col;
+            }
+
+            // Contrast: Per-channel symmetric power S-curve in gamma 2.2 with specular highlight protection
+            float3 look_contrast(float3 col, float contrast) {
+                if (abs(contrast) > 0.0005) {
+                    float3 safe_c = max(col, 0.0);
+                    const float g = 2.2;
+                    float3 p = pow(safe_c, float3(1.0 / g));
+                    float3 cp = clamp(p, 0.0, 1.0);
+
+                    float strength = pow(2.0, contrast * 1.25);
+                    float3 low_part  = 0.5 * pow(2.0 * cp, float3(strength));
+                    float3 high_part = 1.0 - 0.5 * pow(2.0 * (1.0 - cp), float3(strength));
+
+                    float3 curved_p;
+                    curved_p.r = (cp.r < 0.5) ? low_part.r : high_part.r;
+                    curved_p.g = (cp.g < 0.5) ? low_part.g : high_part.g;
+                    curved_p.b = (cp.b < 0.5) ? low_part.b : high_part.b;
+
+                    float3 contrast_adjusted_c = pow(curved_p, float3(g));
+                    float3 mix_factor = smoother3(safe_c, 1.0, 1.01);
+                    col = mix(contrast_adjusted_c, safe_c, mix_factor);
+                }
+                return max(col, 0.0);
+            }
+
+            // Dehaze: Physical atmospheric transmission & radiance recovery
+            float3 look_dehaze(float3 col, float dehaze) {
+                if (abs(dehaze) > 0.001) {
+                    float3 air = float3(max(u_atmosphereR, 0.01), max(u_atmosphereG, 0.01), max(u_atmosphereB, 0.01));
+                    float m = min(col.r / air.r, min(col.g / air.g, col.b / air.b));
+                    m = max(m, 0.0);
+                    float t_raw = 1.0 - m * dehaze;
+                    float dist = clamp(u_dehazeDistance, 0.0, 1.0);
+                    float dMax = max(u_atmosphereDepthMax, 0.5);
+                    float t_min = clamp(exp(-dist * dMax), 0.0009765625, 1.0);
+                    float t = max(t_raw, t_min);
+                    col = max((col - air) / t + air, 0.0);
+                }
+                return col;
+            }
+
+            float3 look_vib_sat(float3 col, float vibrance, float saturation) {
+                float lum3 = luma2020(col);
+                float3 gray = float3(lum3);
+                float sat = 0.0;
+                float mx = max(max(col.r, col.g), col.b);
+                float mn = min(min(col.r, col.g), col.b);
+                if (mx > 0.00001) {
+                    sat = (mx - mn) / mx;
+                }
+                float vBoost = vibrance * (1.0 - sat);
+                col = mix(gray, col, 1.0 + vBoost);
+                return mix(float3(luma2020(col)), col, 1.0 + saturation);
+            }
+
+            float3 apply_look(float3 col) {
+                // 1. White balance
+                col = look_wb(col, u_temp, u_tint);
+
+                // 2. Linear Exposure gain
+                if (u_expCurveActive > 0.5) {
+                    float in_luma = max(luma2020(col), 0.00001);
+                    float t = clamp(pow(in_luma, 0.4545), 0.0, 1.0);
+                    float delta_ev = (u_curve.eval(float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
+                    col *= exp2(delta_ev);
+                } else {
+                    col *= pow(2.0, u_ev);
+                }
+
+                // 3. Match Gray (target middle gray at 0.18)
+                if (u_match > 0.001) {
+                    float lum0 = max(luma2020(col), 0.0001);
+                    float g = 0.18 / lum0;
+                    col *= mix(1.0, g, u_match * 0.35);
+                }
+
+                // 4-7. Whites, Shadows & Blacks, Highlights, Contrast
+                col = look_whites(col, u_whites);
+                col = look_shadows_blacks(col, u_shadows, u_blacks);
+                col = look_highlights(col, u_highlights);
+                col = look_contrast(col, u_contrast);
+
+                col = look_dehaze(col, u_dehaze);
+                col = look_vib_sat(col, u_vibrance, u_saturation);
+
+                float3 hsl = rgb_to_hsl(max(col, 0.0));
+                float w0 = hue_w(hsl.x, 0.0, 35.0);
+                float w1 = hue_w(hsl.x, 30.0, 30.0);
+                float w2 = hue_w(hsl.x, 60.0, 30.0);
+                float w3 = hue_w(hsl.x, 120.0, 45.0);
+                float w4 = hue_w(hsl.x, 180.0, 35.0);
+                float w5 = hue_w(hsl.x, 240.0, 45.0);
+                float hueShift = (u_hsl0.x * w0 + u_hsl1.x * w1 + u_hsl2.x * w2 + u_hsl3.x * w3 + u_hsl4.x * w4 + u_hsl5.x * w5) * 45.0;
+                float satMul = 1.0 + (u_hsl0.y * w0 + u_hsl1.y * w1 + u_hsl2.y * w2 + u_hsl3.y * w3 + u_hsl4.y * w4 + u_hsl5.y * w5);
+                float lumMul = 1.0 + (u_hsl0.z * w0 + u_hsl1.z * w1 + u_hsl2.z * w2 + u_hsl3.z * w3 + u_hsl4.z * w4 + u_hsl5.z * w5);
+                hsl.x = hsl.x + hueShift;
+                if (hsl.x < 0.0) hsl.x += 360.0;
+                if (hsl.x >= 360.0) hsl.x -= 360.0;
+                hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
+                hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
+                col = hsl_to_rgb(hsl);
+                col = apply_color_grading(col);
+                return max(col, 0.0);
+            }
+
+            // Mask a/b/c: see MaskRaster.Pack. Local edits stack on the global look, in the same op order.
+            float3 apply_local(float3 col, float4 a, float4 b, float4 c) {
+                col = look_wb(col, b.z, b.w);
+                col *= exp2(a.x);
+                col = look_whites(col, b.x);
+                col = look_shadows_blacks(col, a.w, b.y);
+                col = look_highlights(col, a.z);
+                col = look_contrast(col, a.y);
+                col = look_dehaze(col, c.z);
+                col = look_vib_sat(col, c.y, c.x);
+                return max(col, 0.0);
+            }
+
+            // Coverage of atlas tile `slot` at source UV; c.w < 0 inverts, |c.w| scales.
+            float mask_weight(float slot, float2 suv, float amount) {
+                float2 p = clamp(suv, 0.0, 1.0) * u_maskTile;
+                p = clamp(p, float2(0.5), u_maskTile - float2(0.5));
+                p.y += slot * u_maskTile.y;
+                float m = u_masks.eval(p).r;
+                if (amount < 0.0) {
+                    m = 1.0 - m;
+                }
+                return m * abs(amount);
+            }
+
+            float3 mask_step(float3 col, float slot, float2 suv, float4 a, float4 b, float4 c) {
+                float w = mask_weight(slot, suv, c.w);
+                if (w > 0.0005) {
+                    col = mix(col, apply_local(col, a, b, c), w);
+                }
+                return col;
+            }
+
+            float3 apply_masks(float3 col, float2 suv) {
+                if (u_maskCount > 0.5) col = mask_step(col, 0.0, suv, u_mA0, u_mB0, u_mC0);
+                if (u_maskCount > 1.5) col = mask_step(col, 1.0, suv, u_mA1, u_mB1, u_mC1);
+                if (u_maskCount > 2.5) col = mask_step(col, 2.0, suv, u_mA2, u_mB2, u_mC2);
+                if (u_maskCount > 3.5) col = mask_step(col, 3.0, suv, u_mA3, u_mB3, u_mC3);
+                if (u_maskCount > 4.5) col = mask_step(col, 4.0, suv, u_mA4, u_mB4, u_mC4);
+                if (u_maskCount > 5.5) col = mask_step(col, 5.0, suv, u_mA5, u_mB5, u_mC5);
+                if (u_maskCount > 6.5) col = mask_step(col, 6.0, suv, u_mA6, u_mB6, u_mC6);
+                if (u_maskCount > 7.5) col = mask_step(col, 7.0, suv, u_mA7, u_mB7, u_mC7);
+                return col;
+            }
+    ";
+
     // Stage 1: Sensor Physics & RAW Inpainting (Lens Vignetting + Opposed/LCh Highlight Reconstruction + Bilateral Color Inpainting)
     public const string Stage1Sksl = @"
             uniform shader u_image;
@@ -1257,6 +1537,7 @@ public static class DevelopRenderer
             uniform shader u_lut;
             uniform shader u_mask;
             uniform shader u_curve;
+            " + MaskUniformsSksl + @"
             uniform float2 u_destOrigin;
             uniform float2 u_destSize;
             uniform float2 u_srcSize;
@@ -1536,170 +1817,7 @@ public static class DevelopRenderer
                 return sigmoid_rgb(x);
             }
 
-            float3 apply_look(float3 col) {
-                // 1. Multiplicative chromatic white balance
-                float wb_r = exp(0.55 * u_temp + 0.18 * u_tint);
-                float wb_b = exp(-0.55 * u_temp - 0.18 * u_tint);
-                float wb_g = exp(-0.35 * u_tint);
-                col.r *= wb_r;
-                col.g *= wb_g;
-                col.b *= wb_b;
-                col = max(col, 0.0);
-
-                // 2. Linear Exposure gain
-                if (u_expCurveActive > 0.5) {
-                    float in_luma = max(luma2020(col), 0.00001);
-                    float t = clamp(pow(in_luma, 0.4545), 0.0, 1.0);
-                    float delta_ev = (u_curve.eval(float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
-                    col *= exp2(delta_ev);
-                } else {
-                    col *= pow(2.0, u_ev);
-                }
-
-                // 3. Match Gray
-                if (u_match > 0.001) {
-                    float lum0 = max(luma2020(col), 0.0001);
-                    float g = 0.18 / lum0;
-                    col *= mix(1.0, g, u_match * 0.35);
-                }
-
-                // 4. Whites: bright-end white point, not global exposure and not only speculars.
-                // 0 at middle gray, ramps through light tones / white surfaces, full by ~+2 EV.
-                if (abs(u_whites) > 0.0001) {
-                    float pixel_luma = max(luma2020(col), 0.00001);
-                    float ev_w = log2(pixel_luma / 0.18);
-                    float w = smoother(ev_w, 0.3, 2.0);
-                    if (w > 0.0001) {
-                        float target_ev;
-                        if (u_whites > 0.0) {
-                            target_ev = ev_w + u_whites * 2.4;
-                        } else {
-                            float k = -u_whites * 1.15;
-                            target_ev = ev_w / (1.0 + k * max(ev_w - 0.3, 0.0));
-                        }
-                        float new_ev = mix(ev_w, target_ev, w);
-                        col *= (0.18 * exp2(new_ev)) / pixel_luma;
-                    }
-                }
-
-                // 5. Shadows & Blacks: Perceptual gamma-domain bell curve with anti-mud contrast restoration
-                float sh = u_shadows * 0.833333;
-                float bl = u_blacks * 2.5;
-                if (abs(sh) > 0.001 || abs(bl) > 0.001) {
-                    float pixel_luma = max(luma2020(col), 0.00001);
-                    float t_pixel = pow(pixel_luma, 0.4545);
-
-                    float shadow_lift = sh * t_pixel * pow(max(1.0 - t_pixel, 0.0), 4.5);
-                    float black_lift = bl * t_pixel * pow(max(1.0 - t_pixel, 0.0), 12.0);
-                    float lift_amount = max(shadow_lift + black_lift, 0.0);
-
-                    float t_pixel_curved = max(t_pixel + shadow_lift + black_lift, 0.0);
-
-                    const float shadow_pivot = 0.2;
-                    float stretch_factor = 1.0 + (lift_amount * 1.3);
-                    float contrasted_t = shadow_pivot + (t_pixel_curved - shadow_pivot) * stretch_factor;
-
-                    float final_t = max(mix(t_pixel_curved, contrasted_t, 0.85), 0.0);
-                    float curved_luma = pow(final_t, 2.2);
-
-                    float luma_ratio = curved_luma / pixel_luma;
-                    col *= luma_ratio;
-
-                    if (luma_ratio > 1.0) {
-                        float recovered_luma = luma2020(col);
-                        float boost_amount = clamp((luma_ratio - 1.0) * 0.15, 0.0, 0.4);
-                        col = mix(col, float3(recovered_luma), boost_amount);
-                    }
-                }
-
-                // 6. Highlights: Rational compressive shoulder & highlight recovery
-                float hl = u_highlights * 0.833333;
-                if (abs(hl) > 0.001) {
-                    float pixel_luma = max(luma2020(col), 0.00001);
-                    if (pixel_luma > 0.18) {
-                        float ev_h = log2(pixel_luma / 0.18);
-                        float target_ev;
-                        if (hl < 0.0) {
-                            float k = -hl * 1.0;
-                            target_ev = ev_h / (1.0 + k * ev_h * 0.35);
-                        } else {
-                            target_ev = ev_h * (1.0 + hl * 0.35);
-                        }
-                        float w_hl = smoother(ev_h, 0.0, 1.5);
-                        float new_ev = ev_h + (target_ev - ev_h) * w_hl;
-                        float new_luma = 0.18 * exp2(new_ev);
-                        float luma_ratio = new_luma / pixel_luma;
-                        float spec_desat = smoother(pixel_luma, 6.0, 15.0);
-                        col = mix(col * luma_ratio, float3(new_luma), spec_desat);
-                    }
-                }
-
-                // 7. Contrast: Per-channel symmetric power S-curve in gamma 2.2 with specular highlight protection
-                if (abs(u_contrast) > 0.0005) {
-                    float3 safe_c = max(col, 0.0);
-                    const float g = 2.2;
-                    float3 p = pow(safe_c, float3(1.0 / g));
-                    float3 cp = clamp(p, 0.0, 1.0);
-
-                    float strength = pow(2.0, u_contrast * 1.25);
-                    float3 low_part  = 0.5 * pow(2.0 * cp, float3(strength));
-                    float3 high_part = 1.0 - 0.5 * pow(2.0 * (1.0 - cp), float3(strength));
-
-                    float3 curved_p;
-                    curved_p.r = (cp.r < 0.5) ? low_part.r : high_part.r;
-                    curved_p.g = (cp.g < 0.5) ? low_part.g : high_part.g;
-                    curved_p.b = (cp.b < 0.5) ? low_part.b : high_part.b;
-
-                    float3 contrast_adjusted_c = pow(curved_p, float3(g));
-                    float3 mix_factor = smoother3(safe_c, 1.0, 1.01);
-                    col = mix(contrast_adjusted_c, safe_c, mix_factor);
-                }
-                col = max(col, 0.0);
-
-                // Dehaze: Physical atmospheric transmission & radiance recovery
-                if (abs(u_dehaze) > 0.001) {
-                    float3 air = float3(max(u_atmosphereR, 0.01), max(u_atmosphereG, 0.01), max(u_atmosphereB, 0.01));
-                    float m = min(col.r / air.r, min(col.g / air.g, col.b / air.b));
-                    m = max(m, 0.0);
-                    float t_raw = 1.0 - m * u_dehaze;
-                    float dist = clamp(u_dehazeDistance, 0.0, 1.0);
-                    float dMax = max(u_atmosphereDepthMax, 0.5);
-                    float t_min = clamp(exp(-dist * dMax), 0.0009765625, 1.0);
-                    float t = max(t_raw, t_min);
-                    col = max((col - air) / t + air, 0.0);
-                }
-
-                float lum3 = luma2020(col);
-                float3 gray = float3(lum3);
-                float sat = 0.0;
-                float mx = max(max(col.r, col.g), col.b);
-                float mn = min(min(col.r, col.g), col.b);
-                if (mx > 0.00001) {
-                    sat = (mx - mn) / mx;
-                }
-                float vBoost = u_vibrance * (1.0 - sat);
-                col = mix(gray, col, 1.0 + vBoost);
-                col = mix(float3(luma2020(col)), col, 1.0 + u_saturation);
-
-                float3 hsl = rgb_to_hsl(max(col, 0.0));
-                float w0 = hue_w(hsl.x, 0.0, 35.0);
-                float w1 = hue_w(hsl.x, 30.0, 30.0);
-                float w2 = hue_w(hsl.x, 60.0, 30.0);
-                float w3 = hue_w(hsl.x, 120.0, 45.0);
-                float w4 = hue_w(hsl.x, 180.0, 35.0);
-                float w5 = hue_w(hsl.x, 240.0, 45.0);
-                float hueShift = (u_hsl0.x * w0 + u_hsl1.x * w1 + u_hsl2.x * w2 + u_hsl3.x * w3 + u_hsl4.x * w4 + u_hsl5.x * w5) * 45.0;
-                float satMul = 1.0 + (u_hsl0.y * w0 + u_hsl1.y * w1 + u_hsl2.y * w2 + u_hsl3.y * w3 + u_hsl4.y * w4 + u_hsl5.y * w5);
-                float lumMul = 1.0 + (u_hsl0.z * w0 + u_hsl1.z * w1 + u_hsl2.z * w2 + u_hsl3.z * w3 + u_hsl4.z * w4 + u_hsl5.z * w5);
-                hsl.x = hsl.x + hueShift;
-                if (hsl.x < 0.0) hsl.x += 360.0;
-                if (hsl.x >= 360.0) hsl.x -= 360.0;
-                hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
-                hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
-                col = hsl_to_rgb(hsl);
-                col = apply_color_grading(col);
-                return max(col, 0.0);
-            }
+            " + LookSksl + @"
 
             half4 main(float2 fragCoord) {
                 float2 destUv = (fragCoord - u_destOrigin) / u_destSize;
@@ -1716,6 +1834,7 @@ public static class DevelopRenderer
                 }
                 uv = crop.xy + destUv * crop.zw;
                 float2 srcUv = apply_geom(uv);
+                float2 maskUv = srcUv;
                 if (srcUv.x < -0.001 || srcUv.x > 1.001 || srcUv.y < -0.001 || srcUv.y > 1.001) {
                     return half4(0.0, 0.0, 0.0, 1.0);
                 }
@@ -1750,7 +1869,7 @@ public static class DevelopRenderer
                 }
                 float3 processed = lin;
                 if (lookAmt > 0.001) {
-                    processed = apply_look(lin);
+                    processed = apply_masks(apply_look(lin), maskUv);
                 }
 
                 if (u_noise > 0.005) {
@@ -1807,6 +1926,7 @@ public static class DevelopRenderer
             uniform shader u_lut;
             uniform shader u_mask;
             uniform shader u_curve;
+            " + MaskUniformsSksl + @"
             uniform float2 u_destOrigin;
             uniform float2 u_destSize;
             uniform float2 u_srcSize;
@@ -2126,170 +2246,7 @@ public static class DevelopRenderer
                 return float3(opp_r * opp_r * opp_r, opp_g * opp_g * opp_g, opp_b * opp_b * opp_b);
             }
 
-            float3 apply_look(float3 col) {
-                // 1. Multiplicative chromatic white balance (preserves black levels and photon ratios)
-                float wb_r = exp(0.55 * u_temp + 0.18 * u_tint);
-                float wb_b = exp(-0.55 * u_temp - 0.18 * u_tint);
-                float wb_g = exp(-0.35 * u_tint);
-                col.r *= wb_r;
-                col.g *= wb_g;
-                col.b *= wb_b;
-                col = max(col, 0.0);
-
-                // 2. Linear Exposure gain
-                if (u_expCurveActive > 0.5) {
-                    float in_luma = max(luma2020(col), 0.00001);
-                    float t = clamp(pow(in_luma, 0.4545), 0.0, 1.0);
-                    float delta_ev = (u_curve.eval(float2(t * 255.0 + 0.5, 2.5)).r * 255.0 - 128.0) * (5.0 / 127.0);
-                    col *= exp2(delta_ev);
-                } else {
-                    col *= pow(2.0, u_ev);
-                }
-
-                // 3. Match Gray (target middle gray at 0.18)
-                if (u_match > 0.001) {
-                    float lum0 = max(luma2020(col), 0.0001);
-                    float g = 0.18 / lum0;
-                    col *= mix(1.0, g, u_match * 0.35);
-                }
-
-                // 4. Whites: bright-end white point, not global exposure and not only speculars.
-                // 0 at middle gray, ramps through light tones / white surfaces, full by ~+2 EV.
-                if (abs(u_whites) > 0.0001) {
-                    float pixel_luma = max(luma2020(col), 0.00001);
-                    float ev_w = log2(pixel_luma / 0.18);
-                    float w = smoother(ev_w, 0.3, 2.0);
-                    if (w > 0.0001) {
-                        float target_ev;
-                        if (u_whites > 0.0) {
-                            target_ev = ev_w + u_whites * 2.4;
-                        } else {
-                            float k = -u_whites * 1.15;
-                            target_ev = ev_w / (1.0 + k * max(ev_w - 0.3, 0.0));
-                        }
-                        float new_ev = mix(ev_w, target_ev, w);
-                        col *= (0.18 * exp2(new_ev)) / pixel_luma;
-                    }
-                }
-
-                // 5. Shadows & Blacks: Perceptual gamma-domain bell curve with anti-mud contrast restoration
-                float sh = u_shadows * 0.833333;
-                float bl = u_blacks * 2.5;
-                if (abs(sh) > 0.001 || abs(bl) > 0.001) {
-                    float pixel_luma = max(luma2020(col), 0.00001);
-                    float t_pixel = pow(pixel_luma, 0.4545);
-
-                    float shadow_lift = sh * t_pixel * pow(max(1.0 - t_pixel, 0.0), 4.5);
-                    float black_lift = bl * t_pixel * pow(max(1.0 - t_pixel, 0.0), 12.0);
-                    float lift_amount = max(shadow_lift + black_lift, 0.0);
-
-                    float t_pixel_curved = max(t_pixel + shadow_lift + black_lift, 0.0);
-
-                    const float shadow_pivot = 0.2;
-                    float stretch_factor = 1.0 + (lift_amount * 1.3);
-                    float contrasted_t = shadow_pivot + (t_pixel_curved - shadow_pivot) * stretch_factor;
-
-                    float final_t = max(mix(t_pixel_curved, contrasted_t, 0.85), 0.0);
-                    float curved_luma = pow(final_t, 2.2);
-
-                    float luma_ratio = curved_luma / pixel_luma;
-                    col *= luma_ratio;
-
-                    if (luma_ratio > 1.0) {
-                        float recovered_luma = luma2020(col);
-                        float boost_amount = clamp((luma_ratio - 1.0) * 0.15, 0.0, 0.4);
-                        col = mix(col, float3(recovered_luma), boost_amount);
-                    }
-                }
-
-                // 6. Highlights: Rational compressive shoulder & highlight recovery
-                float hl = u_highlights * 0.833333;
-                if (abs(hl) > 0.001) {
-                    float pixel_luma = max(luma2020(col), 0.00001);
-                    if (pixel_luma > 0.18) {
-                        float ev_h = log2(pixel_luma / 0.18);
-                        float target_ev;
-                        if (hl < 0.0) {
-                            float k = -hl * 1.0;
-                            target_ev = ev_h / (1.0 + k * ev_h * 0.35);
-                        } else {
-                            target_ev = ev_h * (1.0 + hl * 0.35);
-                        }
-                        float w_hl = smoother(ev_h, 0.0, 1.5);
-                        float new_ev = ev_h + (target_ev - ev_h) * w_hl;
-                        float new_luma = 0.18 * exp2(new_ev);
-                        float luma_ratio = new_luma / pixel_luma;
-                        float spec_desat = smoother(pixel_luma, 6.0, 15.0);
-                        col = mix(col * luma_ratio, float3(new_luma), spec_desat);
-                    }
-                }
-
-                // 7. Contrast: Per-channel symmetric power S-curve in gamma 2.2 with specular highlight protection
-                if (abs(u_contrast) > 0.0005) {
-                    float3 safe_c = max(col, 0.0);
-                    const float g = 2.2;
-                    float3 p = pow(safe_c, float3(1.0 / g));
-                    float3 cp = clamp(p, 0.0, 1.0);
-
-                    float strength = pow(2.0, u_contrast * 1.25);
-                    float3 low_part  = 0.5 * pow(2.0 * cp, float3(strength));
-                    float3 high_part = 1.0 - 0.5 * pow(2.0 * (1.0 - cp), float3(strength));
-
-                    float3 curved_p;
-                    curved_p.r = (cp.r < 0.5) ? low_part.r : high_part.r;
-                    curved_p.g = (cp.g < 0.5) ? low_part.g : high_part.g;
-                    curved_p.b = (cp.b < 0.5) ? low_part.b : high_part.b;
-
-                    float3 contrast_adjusted_c = pow(curved_p, float3(g));
-                    float3 mix_factor = smoother3(safe_c, 1.0, 1.01);
-                    col = mix(contrast_adjusted_c, safe_c, mix_factor);
-                }
-                col = max(col, 0.0);
-
-                // Dehaze: Physical atmospheric transmission & radiance recovery
-                if (abs(u_dehaze) > 0.001) {
-                    float3 air = float3(max(u_atmosphereR, 0.01), max(u_atmosphereG, 0.01), max(u_atmosphereB, 0.01));
-                    float m = min(col.r / air.r, min(col.g / air.g, col.b / air.b));
-                    m = max(m, 0.0);
-                    float t_raw = 1.0 - m * u_dehaze;
-                    float dist = clamp(u_dehazeDistance, 0.0, 1.0);
-                    float dMax = max(u_atmosphereDepthMax, 0.5);
-                    float t_min = clamp(exp(-dist * dMax), 0.0009765625, 1.0);
-                    float t = max(t_raw, t_min);
-                    col = max((col - air) / t + air, 0.0);
-                }
-
-                float lum3 = luma2020(col);
-                float3 gray = float3(lum3);
-                float sat = 0.0;
-                float mx = max(max(col.r, col.g), col.b);
-                float mn = min(min(col.r, col.g), col.b);
-                if (mx > 0.00001) {
-                    sat = (mx - mn) / mx;
-                }
-                float vBoost = u_vibrance * (1.0 - sat);
-                col = mix(gray, col, 1.0 + vBoost);
-                col = mix(float3(luma2020(col)), col, 1.0 + u_saturation);
-
-                float3 hsl = rgb_to_hsl(max(col, 0.0));
-                float w0 = hue_w(hsl.x, 0.0, 35.0);
-                float w1 = hue_w(hsl.x, 30.0, 30.0);
-                float w2 = hue_w(hsl.x, 60.0, 30.0);
-                float w3 = hue_w(hsl.x, 120.0, 45.0);
-                float w4 = hue_w(hsl.x, 180.0, 35.0);
-                float w5 = hue_w(hsl.x, 240.0, 45.0);
-                float hueShift = (u_hsl0.x * w0 + u_hsl1.x * w1 + u_hsl2.x * w2 + u_hsl3.x * w3 + u_hsl4.x * w4 + u_hsl5.x * w5) * 45.0;
-                float satMul = 1.0 + (u_hsl0.y * w0 + u_hsl1.y * w1 + u_hsl2.y * w2 + u_hsl3.y * w3 + u_hsl4.y * w4 + u_hsl5.y * w5);
-                float lumMul = 1.0 + (u_hsl0.z * w0 + u_hsl1.z * w1 + u_hsl2.z * w2 + u_hsl3.z * w3 + u_hsl4.z * w4 + u_hsl5.z * w5);
-                hsl.x = hsl.x + hueShift;
-                if (hsl.x < 0.0) hsl.x += 360.0;
-                if (hsl.x >= 360.0) hsl.x -= 360.0;
-                hsl.y = clamp(hsl.y * satMul, 0.0, 1.0);
-                hsl.z = clamp(hsl.z * lumMul, 0.0, 1.0);
-                col = hsl_to_rgb(hsl);
-                col = apply_color_grading(col);
-                return max(col, 0.0);
-            }
+            " + LookSksl + @"
 
             float3 fetch_look(float2 coord, float lookAmt) {
                 float3 s = u_image.eval(clamp(coord, float2(0.5), u_srcSize - float2(0.5))).rgb;
@@ -2311,6 +2268,7 @@ public static class DevelopRenderer
                 }
                 uv = crop.xy + destUv * crop.zw;
                 float2 srcUv = apply_geom(uv);
+                float2 maskUv = srcUv;
                 if (srcUv.x < -0.001 || srcUv.x > 1.001 || srcUv.y < -0.001 || srcUv.y > 1.001) {
                     return half4(0.0, 0.0, 0.0, 1.0);
                 }
@@ -2495,7 +2453,7 @@ public static class DevelopRenderer
 
                 float3 processed = lin;
                 if (lookAmt > 0.001) {
-                    processed = apply_look(lin);
+                    processed = apply_masks(apply_look(lin), maskUv);
                 }
 
                 // Local contrast & Clarity (step 8): halo-free perceptual bilateral midtone enhancement

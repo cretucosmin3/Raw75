@@ -17,6 +17,16 @@
     <PackageReference Include="Sdcb.LibRaw.runtime.linux64" Version="0.21.1" />
     <PackageReference Include="Sdcb.LibRaw.runtime.win64" Version="0.21.1" />
   </ItemGroup>
+
+  <!-- GLFW 3.3 (X11) for Linux under the name Silk.NET loads first, so the window icon shows (assets/glfw/README.md) -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == '' or '$(RuntimeIdentifier)' == 'linux-x64'">
+    <None Include="..\..\assets\glfw\libglfw.so.3.3">
+      <Link>libglfw.so.3.3</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
   <ItemGroup>
     <Content Include="Presets\builtin\**\*" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\assets\icon.png">

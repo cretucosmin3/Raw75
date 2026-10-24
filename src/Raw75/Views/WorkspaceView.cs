@@ -25,7 +25,7 @@ using Blossom.Reactive;
 
 namespace Raw75.Views;
 
-public sealed class WorkspaceView : View
+public sealed partial class WorkspaceView : View
 {
     private readonly Session _session = new();
     private readonly WorkspaceState _state = new();
@@ -227,6 +227,7 @@ public sealed class WorkspaceView : View
         _presets.CopyClicked += CopyAdjustments;
         _presets.PasteClicked += PasteAdjustments;
         AddElement(_presets);
+        BuildMaskPanel(leftInset, H - film - leftInset - 200f, L - leftInset * 2, 200f);
 
         // Right dock background + cards
         _rightDockBar = Bar("RightDock", () => Theme.Window, W - R, top, R, H - top - film, Anchor.Right | Anchor.Top | Anchor.Bottom);
@@ -257,6 +258,7 @@ public sealed class WorkspaceView : View
         _inspectorTabs.AddChild(InspectorTabButton("Color", "color", InspectorTab.Color));
         _inspectorTabs.AddChild(InspectorTabButton("Tools", "tools", InspectorTab.Tools));
         AddElement(_inspectorTabs);
+        BuildMaskHeader(W - R + rightInset, tabsY, R - rightInset * 2, InspectorTabsH);
 
         float rightDockTop = tabsY + InspectorTabsH + 4f;
         _rightColumn = new RightColumn
@@ -371,6 +373,7 @@ public sealed class WorkspaceView : View
         };
         _photo.SpotSelectionChanged += SyncSpotSliders;
         _photo.HistogramSampled += OnGpuHistogram;
+        WireMaskPhotoEvents();
 
         // Floating photo view overlay: top-right corner of photo viewport
         float overlayW = 88f;
@@ -581,8 +584,9 @@ public sealed class WorkspaceView : View
         AddElement(root);
 
         // Develop-only chrome follows the view mode; the gallery grid is its inverse.
-        foreach (var e in new VisualElement[] { _leftDockBar, _histogram, _inspectorTabs, _rightColumn, _film, _viewOverlay, _zoomLabel })
+        foreach (var e in new VisualElement[] { _leftDockBar, _masks, _histogram, _rightColumn, _film, _viewOverlay, _zoomLabel })
             e.BindVisible(() => !_state.GalleryMode.Value);
+        _inspectorTabs.BindVisible(() => !_state.GalleryMode.Value && _state.ActiveMask.Value < 0);
         _gallery.BindVisible(() => _state.GalleryMode.Value);
 
         SetViewMode(false);
@@ -976,12 +980,13 @@ public sealed class WorkspaceView : View
         AddSection(host, InspectorTab.Color, _gradingGroup);
         AddSection(host, InspectorTab.Tools, _geomGroup);
         AddSection(host, InspectorTab.Tools, _spotGroup);
+        BuildMaskInspector(host);
     }
 
     private void AddSection(RightColumn host, InspectorTab tab, PanelGroup group)
     {
         host.AddBody(group);
-        group.BindVisible(() => _state.Inspector.Value == tab);
+        group.BindVisible(() => _state.Inspector.Value == tab && _state.ActiveMask.Value < 0);
     }
 
     /// <summary>Switches the inspector tab, keeping each tab's own scroll position.</summary>
@@ -1118,6 +1123,11 @@ public sealed class WorkspaceView : View
         if (IsGallery) _gallery.Bind(_session.Documents, _session.ActiveIndex, _session.SelectedIndices);
         _filmThumb = _session.Active?.Thumb;
         var d = _session.Active;
+        if (!ReferenceEquals(_maskDoc, d))
+        {
+            _maskDoc = d;
+            ResetMaskEditing();
+        }
         SyncActiveMarks();
         UpdateHdrButton();
         if (d == null)
@@ -1172,6 +1182,8 @@ public sealed class WorkspaceView : View
             _photo.EndSpotTool();
             _state.SpotTool.Value = false;
         }
+        if (gallery)
+            ResetMaskEditing();
 
         _state.GalleryMode.Value = gallery;
 
@@ -1213,7 +1225,7 @@ public sealed class WorkspaceView : View
     {
         if (_photo == null || _presets == null || _gallery == null || _rightDockBar == null ||
             _leftDockBar == null || _film == null || _rightColumn == null || _histogram == null || _inspectorTabs == null ||
-            _viewOverlay == null || _zoomLabel == null)
+            _viewOverlay == null || _zoomLabel == null || _masks == null || _maskHeader == null)
             return;
 
         float W = Width;
@@ -1268,11 +1280,17 @@ public sealed class WorkspaceView : View
             _leftDockBar.Transform.SetAbsoluteFrame(0, top, L, H - top - film);
             _leftDockBar.Transform.Anchor = Anchor.Left | Anchor.Top | Anchor.Bottom;
 
-            // 2. Presets on left dock
+            // 2. Presets on left dock, masks below them (as tall as their content, up to 70%)
             float presetTop = top + leftInset;
-            float presetH = H - presetTop - leftInset - film;
-            _presets.Transform.SetAbsoluteFrame(leftInset, presetTop, L - leftInset * 2f, presetH);
+            float leftH = H - presetTop - leftInset - film;
+            float leftW = L - leftInset * 2f;
+            float maskH = Math.Min(_masks.GetPreferredSize(leftW, 0f).Height, Math.Max(120f, leftH * 0.7f));
+            float presetH = Math.Max(120f, leftH - maskH - gap);
+            maskH = Math.Max(0f, leftH - presetH - gap);
+            _presets.Transform.SetAbsoluteFrame(leftInset, presetTop, leftW, presetH);
             _presets.Transform.Anchor = Anchor.Left | Anchor.Top | Anchor.Bottom;
+            _masks.Transform.SetAbsoluteFrame(leftInset, presetTop + presetH + gap, leftW, maskH);
+            _masks.Transform.Anchor = Anchor.Left | Anchor.Bottom;
 
             // 3. Central photo pane
             float photoX = L;
@@ -1295,6 +1313,8 @@ public sealed class WorkspaceView : View
             float tabsY = top + rightInset + HistogramH + 10f;
             _inspectorTabs.Transform.SetAbsoluteFrame(W - R + rightInset, tabsY, R - rightInset * 2f, InspectorTabsH);
             _inspectorTabs.Transform.Anchor = Anchor.Right | Anchor.Top;
+            _maskHeader.Transform.SetAbsoluteFrame(W - R + rightInset, tabsY + 2f, R - rightInset * 2f, InspectorTabsH - 4f);
+            _maskHeader.Transform.Anchor = Anchor.Right | Anchor.Top;
 
             float rightDockTop = tabsY + InspectorTabsH + 4f;
             _rightColumn.Transform.SetAbsoluteFrame(W - R, rightDockTop, R, H - rightDockTop - film);
@@ -1608,6 +1628,7 @@ public sealed class WorkspaceView : View
         _vignetteMidpoint.Value = s.VignetteMidpoint;
         SyncActiveHslSliders();
         _sync = false;
+        SyncMaskUi();
     }
 
     private void SyncActiveHslSliders()
@@ -1849,6 +1870,8 @@ public sealed class WorkspaceView : View
         }
         if (_photo.CropTool)
             _photo.CancelCrop();
+        if (MaskSelected)
+            SelectMask(-1);
         _state.SpotTool.Value = true;
         SelectInspectorTab(InspectorTab.Tools);
         _photo.BeginSpotTool();
@@ -2027,6 +2050,8 @@ public sealed class WorkspaceView : View
             _photo.CancelCrop();
             return;
         }
+        if (MaskSelected)
+            SelectMask(-1);
         _state.CropTool.Value = true;
         SelectInspectorTab(InspectorTab.Tools);
         _photo.BeginCrop();
@@ -2517,7 +2542,8 @@ public sealed class WorkspaceView : View
             return;
         }
 
-        // 4. Develop view navigation & overlays:
+        // 4. Develop view navigation & overlays (mask keys first: O toggles the mask overlay there):
+        if (_session.Active != null && OnMaskKey(key)) return;
         if (key == UiKey.G) { SetViewMode(true); return; }
         if (key == UiKey.P) { ToggleReady(true); return; }
         if (key == UiKey.X) { ToggleReady(false); return; }
@@ -2618,6 +2644,8 @@ public sealed class WorkspaceView : View
         bool targetFlipV = d.Settings.FlipV;
         bool targetSpotsEn = d.Settings.EnableSpotRemoval;
         var targetSpots = d.Settings.Spots;
+        bool targetMasksEn = d.Settings.EnableMasks;
+        var targetMasks = d.Settings.Masks;
 
         d.Settings.CopyFrom(_copiedSettings);
 
@@ -2631,6 +2659,8 @@ public sealed class WorkspaceView : View
         d.Settings.FlipV = targetFlipV;
         d.Settings.EnableSpotRemoval = targetSpotsEn;
         d.Settings.Spots = targetSpots;
+        d.Settings.EnableMasks = targetMasksEn;
+        d.Settings.Masks = targetMasks;
 
         PullSliders(d);
         WorkspaceStore.SaveSettings(d);

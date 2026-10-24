@@ -31,7 +31,7 @@ public enum ZoomMode
 /// Photo surface: GPU image blit + smooth zoom/pan and crop overlay.
 /// Decode/develop stay out of this type.
 /// </summary>
-public sealed class PhotoPane : VisualElement
+public sealed partial class PhotoPane : VisualElement
 {
     private const float DragSlop = 4f;
     private const float MinZoom = 0.02f;
@@ -899,6 +899,8 @@ public sealed class PhotoPane : VisualElement
         if (_spotTool && HasPhoto)
             DrawSpots(canvas, pane);
 
+        DrawMasks(canvas, pane);
+
         if (_splitBefore)
         {
             float x = w * _splitT;
@@ -1238,6 +1240,9 @@ public sealed class PhotoPane : VisualElement
             }
         }
 
+        if (OnMaskPointerDown(e.Relative.X, e.Relative.Y))
+            return;
+
         if (_spotTool)
         {
             if (OnSpotPointerDown(e.Relative.X, e.Relative.Y))
@@ -1288,6 +1293,12 @@ public sealed class PhotoPane : VisualElement
         if (_spotTool && _dragPart != SpotPart.None)
         {
             OnSpotPointerMove(e.Relative.X, e.Relative.Y);
+            e.Handled = true;
+            return;
+        }
+
+        if (OnMaskPointerMove(e.Relative.X, e.Relative.Y))
+        {
             e.Handled = true;
             return;
         }
@@ -1380,6 +1391,9 @@ public sealed class PhotoPane : VisualElement
             return;
         }
 
+        if (!wasSplit && OnMaskPointerUp(e.Relative.X, e.Relative.Y, wasDrag))
+            return;
+
         if (wasDrag || wasCrop || wasSpot || _cropTool || _spotTool || !HasPhoto)
             return;
 
@@ -1392,6 +1406,12 @@ public sealed class PhotoPane : VisualElement
             return;
 
         if (_spotTool && OnSpotScroll(e.Offset.Y))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (OnMaskScroll(e.Offset.Y))
         {
             e.Handled = true;
             return;
@@ -1470,6 +1490,12 @@ public sealed class PhotoPane : VisualElement
                 InvalidatePaint();
         }
 
+        if (MaskMode)
+        {
+            OnMaskHover(_pointerLocal.X, _pointerLocal.Y);
+            return;
+        }
+
         if (_spotTool)
         {
             HitSpot(_pointerLocal.X, _pointerLocal.Y, out int idx, out SpotPart part);
@@ -1503,11 +1529,17 @@ public sealed class PhotoPane : VisualElement
             return;
         _crop.Hover = CropHandle.None;
         _cropHoverId = null;
-        if (!_cropTool && !_spotTool)
+        if (!_cropTool && !_spotTool && _placing == null)
             Cursor = null;
         CropCursors.Reset();
         _hoverSpot = -1;
         _hoverPart = SpotPart.None;
+        if (_maskHover != MaskPart.None)
+        {
+            _maskHover = MaskPart.None;
+            _maskHoverIndex = -1;
+            InvalidatePaint();
+        }
         if (_cropTool)
             InvalidatePaint();
     }
@@ -1517,6 +1549,9 @@ public sealed class PhotoPane : VisualElement
 
     private bool CtrlHeld =>
         (ParentView?.Events.IsControlDown ?? false) || Events.IsControlDown;
+
+    private bool AltHeld =>
+        (ParentView?.Events.IsAltDown ?? false) || Events.IsAltDown;
 
     private void ApplyCropCursor(float lx, float ly)
     {
@@ -1819,6 +1854,7 @@ public sealed class PhotoPane : VisualElement
         if (_crop.W < 0.001f || _crop.H < 0.001f)
             _crop.ResetFull();
         EndSpotTool();
+        CancelMaskPlacement();
         _cropTool = true;
         _crop.EndDrag();
         _crop.Hover = CropHandle.None;
@@ -2124,6 +2160,7 @@ public sealed class PhotoPane : VisualElement
     {
         if (_cropTool)
             CancelCrop();
+        CancelMaskPlacement();
         _spotTool = true;
         Cursor = UiCursor.Default;
         InvalidatePaint();
@@ -2451,6 +2488,8 @@ public sealed class PhotoPane : VisualElement
         _tileLook.Dispose();
         _beforeLook.Dispose();
         _tileBeforeLook.Dispose();
+        GpuRetain.Retire(_overlayImage);
+        _overlayImage = null;
         _viewW = 0;
         _viewH = 0;
         base.Dispose();

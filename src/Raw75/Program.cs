@@ -688,6 +688,115 @@ internal static class Program
             throw new InvalidOperationException("HdrMerge should reject more than 7 frames!");
         Console.WriteLine("PASSED.");
 
+        // 16. Masks: local edits land inside their shape only (CPU develop)
+        Console.Write("16. Checking mask local adjustments (CPU)... ");
+        int mw = 96, mh = 64;
+        var maskSrc = GrayLinear(mw, mh, 0.18f);
+        static int Px(Raw75.Imaging.RasterBuffer r, int x, int y) => r.Rgba![(y * r.Width + x) * 4];
+        var plain = Raw75.Pipeline.DevelopCpu.Apply(maskSrc, new Raw75.Develop.DevelopSettings(), fast: true);
+        var radial = new Raw75.Develop.MaskLayer
+        {
+            Shape = Raw75.Develop.MaskShape.Radial,
+            CenterX = 0.5f, CenterY = 0.5f, RadiusX = 0.3f, RadiusY = 0.3f, Feather = 30f, Exposure = 1.5f
+        };
+        var sRadial = new Raw75.Develop.DevelopSettings { Masks = { radial } };
+        var rRadial = Raw75.Pipeline.DevelopCpu.Apply(maskSrc, sRadial, fast: true);
+        if (Px(rRadial, mw / 2, mh / 2) < Px(plain, mw / 2, mh / 2) + 40)
+            throw new InvalidOperationException("Radial mask +EV should brighten its center.");
+        if (Math.Abs(Px(rRadial, 2, 2) - Px(plain, 2, 2)) > 1)
+            throw new InvalidOperationException("Radial mask must leave the corners untouched.");
+
+        radial.Invert = true;
+        var rInv = Raw75.Pipeline.DevelopCpu.Apply(maskSrc, sRadial, fast: true);
+        if (Math.Abs(Px(rInv, mw / 2, mh / 2) - Px(plain, mw / 2, mh / 2)) > 1 || Px(rInv, 2, 2) < Px(plain, 2, 2) + 40)
+            throw new InvalidOperationException("Inverted radial mask should edit only outside the shape.");
+        radial.Invert = false;
+
+        var linear = new Raw75.Develop.MaskLayer
+        {
+            Shape = Raw75.Develop.MaskShape.Linear,
+            StartX = 0.5f, StartY = 0.2f, EndX = 0.5f, EndY = 0.6f, Exposure = -1.5f
+        };
+        var rLinear = Raw75.Pipeline.DevelopCpu.Apply(maskSrc, new Raw75.Develop.DevelopSettings { Masks = { linear } }, fast: true);
+        if (Px(rLinear, mw / 2, 2) > Px(plain, mw / 2, 2) - 30 || Math.Abs(Px(rLinear, mw / 2, mh - 3) - Px(plain, mw / 2, mh - 3)) > 1)
+            throw new InvalidOperationException("Linear mask should darken the top and leave the bottom untouched.");
+
+        var spline = new Raw75.Develop.MaskLayer
+        {
+            Shape = Raw75.Develop.MaskShape.Spline,
+            Feather = 0f,
+            Temperature = 60f,
+            Points = { new(0.3f, 0.3f), new(0.7f, 0.3f), new(0.7f, 0.7f), new(0.3f, 0.7f) }
+        };
+        var rSpline = Raw75.Pipeline.DevelopCpu.Apply(maskSrc, new Raw75.Develop.DevelopSettings { Masks = { spline } }, fast: true);
+        int sc = ((mh / 2) * mw + mw / 2) * 4;
+        if (rSpline.Rgba![sc] <= rSpline.Rgba[sc + 2] + 10)
+            throw new InvalidOperationException("Spline mask warm temperature should tint its inside.");
+        if (Math.Abs(Px(rSpline, 2, mh / 2) - Px(plain, 2, mh / 2)) > 1)
+            throw new InvalidOperationException("Spline mask must leave the outside untouched.");
+
+        var sBoth = new Raw75.Develop.DevelopSettings { Masks = { radial.Clone(), spline.Clone() } };
+        if (!sBoth.Clone().LooksLike(sBoth) || sBoth.LooksLike(new Raw75.Develop.DevelopSettings()))
+            throw new InvalidOperationException("Mask settings must clone and compare.");
+        string maskJson = System.Text.Json.JsonSerializer.Serialize(sBoth);
+        var sBack = System.Text.Json.JsonSerializer.Deserialize<Raw75.Develop.DevelopSettings>(maskJson)!;
+        if (!sBack.LooksLike(sBoth) || !maskJson.Contains("\"Spline\""))
+            throw new InvalidOperationException("Masks must survive a JSON round-trip.");
+        Console.WriteLine("PASSED.");
+
+        // 17. Masks in the SkSL look (rendered on Skia's CPU raster backend) match the CPU develop
+        Console.Write("17. Checking mask local adjustments (SkSL)... ");
+        var maskPin = System.Runtime.InteropServices.GCHandle.Alloc(maskSrc.Linear!, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try
+        {
+            using var maskImg = SKImage.FromPixelCopy(new SKImageInfo(mw, mh, SKColorType.RgbaF32, SKAlphaType.Unpremul), maskPin.AddrOfPinnedObject(), mw * 16);
+            using var gpuPlain = Raw75.Pipeline.DevelopRenderer.Apply(maskImg, new Raw75.Develop.DevelopSettings());
+            using var gpuRadial = Raw75.Pipeline.DevelopRenderer.Apply(maskImg, sRadial);
+            using var bp = SKBitmap.FromImage(gpuPlain!);
+            using var br = SKBitmap.FromImage(gpuRadial!);
+            int gc = br.GetPixel(mw / 2, mh / 2).Red, gcPlain = bp.GetPixel(mw / 2, mh / 2).Red;
+            if (gc < gcPlain + 40)
+                throw new InvalidOperationException($"SkSL radial mask should brighten its center ({gc} vs {gcPlain}).");
+            if (Math.Abs(br.GetPixel(2, 2).Red - bp.GetPixel(2, 2).Red) > 1)
+                throw new InvalidOperationException("SkSL radial mask must leave the corners untouched.");
+            if (Math.Abs(gc - Px(rRadial, mw / 2, mh / 2)) > 6)
+                throw new InvalidOperationException($"SkSL and CPU masks disagree ({gc} vs {Px(rRadial, mw / 2, mh / 2)}).");
+
+            // Stage 3 (the live staged look) with the same mask.
+            var e3 = Raw75.Pipeline.DevelopRenderer.EnsureStage3Effect()!;
+            int Stage3Center(Raw75.Develop.DevelopSettings st, int x, int y)
+            {
+                var su = new SKRuntimeEffectUniforms(e3);
+                Raw75.Pipeline.DevelopRenderer.BindStage3Uniforms(su, st, mw, mh, 0f, 0f, mw, mh, 0f, false, 2f, 0f, applyCrop: false);
+                var sc3 = new SKRuntimeEffectChildren(e3);
+                using var imgSh = maskImg.ToShader();
+                using var lutSh = Raw75.Pipeline.DevelopRenderer.WhitePixel().ToShader();
+                using var curveSh = Raw75.Pipeline.DevelopRenderer.GetCurveTexture(st, out _, out _).ToShader();
+                sc3.Add("u_image", imgSh);
+                sc3.Add("u_lut", lutSh);
+                sc3.Add("u_mask", lutSh);
+                sc3.Add("u_curve", curveSh);
+                var atlas = Raw75.Pipeline.MaskRaster.Get(st, mw / (float)mh, Raw75.Pipeline.MaskRaster.GpuLongSide);
+                using var atlasImg = atlas != null ? Raw75.Pipeline.MaskRaster.CreateImage(atlas) : null;
+                using var masksSh = Raw75.Pipeline.MaskRaster.Bind(su, sc3, st, atlas, atlasImg);
+                using var fx = e3.ToShader(su, sc3);
+                using var surf = SKSurface.Create(new SKImageInfo(mw, mh, SKColorType.Rgba8888, SKAlphaType.Premul));
+                using (var p3 = new SKPaint { Shader = fx })
+                    surf.Canvas.DrawRect(0, 0, mw, mh, p3);
+                using var snap3 = surf.Snapshot();
+                using var b3 = SKBitmap.FromImage(snap3);
+                return b3.GetPixel(x, y).Red;
+            }
+            int s3Mask = Stage3Center(sRadial, mw / 2, mh / 2), s3Plain = Stage3Center(new Raw75.Develop.DevelopSettings(), mw / 2, mh / 2);
+            if (s3Mask < s3Plain + 40 || Math.Abs(Stage3Center(sRadial, 2, 2) - Stage3Center(new Raw75.Develop.DevelopSettings(), 2, 2)) > 1)
+                throw new InvalidOperationException($"Stage 3 radial mask should brighten only its center ({s3Mask} vs {s3Plain}).");
+        }
+        finally
+        {
+            maskPin.Free();
+        }
+        Console.WriteLine("PASSED.");
+
         Console.WriteLine("=== All Raw75 Pipeline Smoke Tests Passed Successfully ===");
     }
 

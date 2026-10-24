@@ -38,6 +38,7 @@ public sealed class DevelopSettings
     public bool EnableDetail { get; set; } = true;
     public bool EnableGeometry { get; set; } = true;
     public bool EnableSpotRemoval { get; set; } = true;
+    public bool EnableMasks { get; set; } = true;
 
     // White balance. Temp/Tint 0 = as shot (camera multipliers).
     public float Temperature { get; set; } // -100..100 (amber/blue offset)
@@ -126,6 +127,9 @@ public sealed class DevelopSettings
 
     public List<SpotPatch> Spots { get; set; } = new();
 
+    /// <summary>Local adjustments, bottom to top; only the first <see cref="MaskLayer.MaxMasks"/> enabled ones render.</summary>
+    public List<MaskLayer> Masks { get; set; } = new();
+
     [JsonIgnore]
     public bool HasCrop =>
         CropW > 0.001f && CropH > 0.001f
@@ -148,6 +152,7 @@ public sealed class DevelopSettings
         c.CurveBlue = CurveBlue != null ? (CurvePoint[])CurveBlue.Clone() : Raw75.Pipeline.CurveMath.DefaultCurve();
         c.ExposureCurve = ExposureCurve != null ? (ExposureCurvePoint[])ExposureCurve.Clone() : Raw75.Pipeline.CurveMath.DefaultExposureCurve();
         c.Spots = CloneSpots(Spots);
+        c.Masks = CloneMasks(Masks);
         return c;
     }
 
@@ -169,6 +174,7 @@ public sealed class DevelopSettings
         EnableDetail = src.EnableDetail;
         EnableGeometry = src.EnableGeometry;
         EnableSpotRemoval = src.EnableSpotRemoval;
+        EnableMasks = src.EnableMasks;
 
         Temperature = src.Temperature;
         Tint = src.Tint;
@@ -237,6 +243,7 @@ public sealed class DevelopSettings
         if (src.Hsl != null && src.Hsl.Length == 6)
             Array.Copy(src.Hsl, Hsl, 6);
         Spots = CloneSpots(src.Spots);
+        Masks = CloneMasks(src.Masks);
     }
 
     public bool LooksLike(DevelopSettings o)
@@ -254,6 +261,7 @@ public sealed class DevelopSettings
             && EnableDetail == o.EnableDetail
             && EnableGeometry == o.EnableGeometry
             && EnableSpotRemoval == o.EnableSpotRemoval
+            && EnableMasks == o.EnableMasks
             && EnableCurve == o.EnableCurve
             && Temperature == o.Temperature && Tint == o.Tint
             && Exposure == o.Exposure && BaseExposure == o.BaseExposure && Contrast == o.Contrast
@@ -285,6 +293,7 @@ public sealed class DevelopSettings
             && CurveEqual(CurveBlue, o.CurveBlue)
             && ExposureCurveEqual(ExposureCurve, o.ExposureCurve)
             && SpotsEqual(Spots, o.Spots)
+            && MasksEqual(Masks, o.Masks)
             && HslEqual(o);
     }
 
@@ -295,6 +304,29 @@ public sealed class DevelopSettings
         for (int i = 0; i < src.Count; i++)
             list.Add(src[i].Clone());
         return list;
+    }
+
+    private static List<MaskLayer> CloneMasks(List<MaskLayer>? src)
+    {
+        var list = new List<MaskLayer>();
+        if (src == null) return list;
+        for (int i = 0; i < src.Count; i++)
+            list.Add(src[i].Clone());
+        return list;
+    }
+
+    private static bool MasksEqual(List<MaskLayer>? a, List<MaskLayer>? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        int na = a?.Count ?? 0;
+        int nb = b?.Count ?? 0;
+        if (na != nb) return false;
+        for (int i = 0; i < na; i++)
+        {
+            if (!a![i].LooksLike(b![i]))
+                return false;
+        }
+        return true;
     }
 
     private static bool SpotsEqual(List<SpotPatch>? a, List<SpotPatch>? b)

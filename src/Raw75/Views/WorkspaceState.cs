@@ -34,6 +34,11 @@ internal sealed class WorkspaceState
     public readonly Signal<bool> CropTool = new(false);
     public readonly Signal<bool> SpotTool = new(false);
 
+    /// <summary>Index of the mask being edited (the inspector then edits only it), or -1.</summary>
+    public readonly Signal<int> ActiveMask = new(-1);
+    public readonly Signal<MaskShape?> MaskPlacing = new(null);
+    public readonly Signal<bool> MaskOverlay = new(false);
+
     public readonly Signal<bool> ExposureCurve = new(false);
     public readonly Signal<ToneMode> Tone = new(ToneMode.Sigmoid);
     public readonly Signal<HighlightMode> Reconstruction = new(HighlightMode.Off);
