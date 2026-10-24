@@ -1,10 +1,8 @@
 name: Release
 
+# Releases are built only when a version tag is pushed (git tag v0.2.2 && git push origin v0.2.2).
 on:
   push:
-    branches:
-      - main
-      - master
     tags:
       - 'v*'
 
@@ -12,8 +10,31 @@ permissions:
   contents: write
 
 jobs:
+  check:
+    name: Check tag matches version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Raw75
+        uses: actions/checkout@v4
+
+      # The tag must be vX.Y.Z and equal the project's <Version>, so the release holds the version it is named after.
+      - name: Compare tag and <Version>
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION=$(grep -oPm1 "(?<=<Version>)[^<]+" src/Raw75/Raw75.csproj || true)
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag $TAG is not of the form vX.Y.Z."
+            exit 1
+          fi
+          if [[ "$TAG" != "v$VERSION" ]]; then
+            echo "::error::Tag $TAG does not match <Version>$VERSION</Version> in src/Raw75/Raw75.csproj."
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.rid }}
+    needs: check
     strategy:
       matrix:
         include:
@@ -86,31 +107,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Raw75
-        uses: actions/checkout@v4
-
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Determine Version & Tag
-        id: ver
-        shell: bash
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION=$(grep -oPm1 "(?<=<Version>)[^<]+" src/Raw75/Raw75.csproj || echo "0.2.1")
-            TAG="v$VERSION"
-          fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name: ${{ steps.ver.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           files: artifacts/*
           generate_release_notes: true
