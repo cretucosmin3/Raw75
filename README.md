@@ -36,6 +36,7 @@ UI is built with [Blossom](https://github.com/cretucosmin3/Blossom) (NuGet packa
 - **Before / After**: Instant side-by-side and split-view preview modes.
 - **Crop & Geometry**: Interactive on-canvas crop handles, straighten angle adjustment, 90° rotation, and flips.
 - **Spot Removal**: Heal a region from another with two linked circles, size, and edge diffusion.
+- **Masks**: Local adjustments in radial, linear, rectangle, or hand-drawn spline shapes with feather, amount, invert, and custom names. A selected mask gets its own Light and Color controls (exposure, contrast, highlights, shadows, whites, blacks, dehaze, white balance, saturation, vibrance).
 - **Presets**: Built-in recipes apply exactly. Saved looks also store scene metrics so exposure, the exposure curve, and tone sliders retarget to the photo you apply them to.
 - **Export**: Full-resolution rendering to JPEG (with original EXIF metadata preserved), PNG, WebP, and TIFF.
 

@@ -136,6 +136,7 @@ public static class PresetStore
         settings.FlipH = false;
         settings.FlipV = false;
         settings.Spots = new List<SpotPatch>();
+        settings.Masks = new List<MaskLayer>();
     }
 
     private static void Collect(string dir, ISet<string> names)

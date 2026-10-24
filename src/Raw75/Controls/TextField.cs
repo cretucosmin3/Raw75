@@ -13,7 +13,6 @@ namespace Raw75.Controls;
 public sealed class TextField : TextInputBase
 {
     public const float DefaultHeight = 30f;
-    private const float PadX = 10f;
 
     private float _focus;
     private float _hover;
@@ -35,13 +34,21 @@ public sealed class TextField : TextInputBase
 
     public float FontSize { get; set; } = 12.5f;
 
+    public int FontWeight { get; set; } = 400;
+
+    /// <summary>Horizontal text inset inside the well.</summary>
+    public float PadX { get; set; } = 10f;
+
+    /// <summary>Reads as plain text until hovered or focused; the well only shows up for editing.</summary>
+    public bool Flat { get; set; }
+
     private string Display => IsPassword ? new string('•', Text.Length) : Text;
     private float InnerWidth => Math.Max(1f, W - PadX * 2f);
 
     private TextPaint NewPaint() => new()
     {
         TextSize = FontSize,
-        Typeface = Theme.GetTypeface(400)
+        Typeface = Theme.GetTypeface(FontWeight)
     };
 
     protected override void OnStateChanged()
@@ -131,46 +138,50 @@ public sealed class TextField : TextInputBase
         float r = Theme.RadiusSm;
         var box = new SKRect(0.5f, 0.5f, w - 0.5f, h - 0.5f);
 
-        // Accent halo when focused.
-        if (focus > 0.01f)
+        float chrome = Flat ? Math.Max(_hover, focus) : 1f;
+        if (chrome > 0.01f)
         {
-            using var halo = new SKPaint
+            // Accent halo when focused.
+            if (focus > 0.01f)
             {
-                Color = Theme.Accent.WithAlpha((byte)(60 * focus)),
+                using var halo = new SKPaint
+                {
+                    Color = Theme.Accent.WithAlpha((byte)(60 * focus)),
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = 3f,
+                    IsAntialias = true
+                };
+                var outer = box;
+                outer.Inflate(1f, 1f);
+                c.DrawRoundRect(outer, r + 1f, r + 1f, halo);
+            }
+
+            using (var well = new SKPaint { Color = Anim.Lerp(Theme.Well, Theme.WellHover, Math.Max(_hover * 0.6f, focus * 0.4f)), IsAntialias = true })
+                c.DrawRoundRect(box, r, r, well);
+
+            // Recess shade under the top edge.
+            c.Save();
+            c.ClipRoundRect(new SKRoundRect(box, r), antialias: true);
+            using (var shade = new SKPaint
+            {
+                Shader = SKShader.CreateLinearGradient(new SKPoint(0, 0), new SKPoint(0, 6f),
+                    new[] { new SKColor(0, 0, 0, 70), new SKColor(0, 0, 0, 0) }, SKShaderTileMode.Clamp)
+            })
+            {
+                c.DrawRect(box, shade);
+            }
+            c.Restore();
+
+            using (var edge = new SKPaint
+            {
+                Color = Anim.Lerp(Anim.Lerp(Theme.Hairline, Theme.HairlineStrong, _hover), Theme.Accent, focus),
                 Style = SKPaintStyle.Stroke,
-                StrokeWidth = 3f,
+                StrokeWidth = 1f,
                 IsAntialias = true
-            };
-            var outer = box;
-            outer.Inflate(1f, 1f);
-            c.DrawRoundRect(outer, r + 1f, r + 1f, halo);
-        }
-
-        using (var well = new SKPaint { Color = Anim.Lerp(Theme.Well, Theme.WellHover, Math.Max(_hover * 0.6f, focus * 0.4f)), IsAntialias = true })
-            c.DrawRoundRect(box, r, r, well);
-
-        // Recess shade under the top edge.
-        c.Save();
-        c.ClipRoundRect(new SKRoundRect(box, r), antialias: true);
-        using (var shade = new SKPaint
-        {
-            Shader = SKShader.CreateLinearGradient(new SKPoint(0, 0), new SKPoint(0, 6f),
-                new[] { new SKColor(0, 0, 0, 70), new SKColor(0, 0, 0, 0) }, SKShaderTileMode.Clamp)
-        })
-        {
-            c.DrawRect(box, shade);
-        }
-        c.Restore();
-
-        using (var edge = new SKPaint
-        {
-            Color = Anim.Lerp(Anim.Lerp(Theme.Hairline, Theme.HairlineStrong, _hover), Theme.Accent, focus),
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1f,
-            IsAntialias = true
-        })
-        {
-            c.DrawRoundRect(box, r, r, edge);
+            })
+            {
+                c.DrawRoundRect(box, r, r, edge);
+            }
         }
 
         using var text = NewPaint();

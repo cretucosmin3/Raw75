@@ -207,16 +207,17 @@ internal static class DevelopGeom
         dy = dest.Top + (v - cy) / ch * dest.Height;
     }
 
+    /// <param name="slack">How far outside the image (fraction of its size) a point still maps.</param>
     public static bool DestToSourceUv(
         float dx, float dy, SKRect dest, DevelopSettings? s, int fw, int fh,
-        out float sx, out float sy)
+        out float sx, out float sy, float slack = 0.05f)
     {
         sx = sy = 0.5f;
         if (dest.Width < 1f || dest.Height < 1f)
             return false;
         float nx = (dx - dest.Left) / dest.Width;
         float ny = (dy - dest.Top) / dest.Height;
-        if (nx < -0.05f || ny < -0.05f || nx > 1.05f || ny > 1.05f)
+        if (nx < -slack || ny < -slack || nx > 1f + slack || ny > 1f + slack)
             return false;
         float cx = 0f, cy = 0f, cw = 1f, ch = 1f;
         if (s != null && s.HasCrop)

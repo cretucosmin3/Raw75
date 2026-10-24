@@ -26,6 +26,8 @@ internal static class AdaptiveLook
         bool enableGeom = dest.EnableGeometry;
         bool enableSpots = dest.EnableSpotRemoval;
         var spots = dest.Spots;
+        bool enableMasks = dest.EnableMasks;
+        var masks = dest.Masks;
         float baseEv = dest.BaseExposure;
         float temp = dest.Temperature, tint = dest.Tint;
         float ev = dest.Exposure;
@@ -47,6 +49,8 @@ internal static class AdaptiveLook
         dest.EnableGeometry = enableGeom;
         dest.EnableSpotRemoval = enableSpots;
         dest.Spots = spots;
+        dest.EnableMasks = enableMasks;
+        dest.Masks = masks;
         dest.BaseExposure = baseEv;
         if (keepWb)
         {

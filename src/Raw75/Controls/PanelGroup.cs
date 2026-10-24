@@ -104,6 +104,9 @@ public class PanelGroup : Stack
         };
         _chevronEl.Transform.Width = 11f;
         _chevronEl.Transform.Height = 11f;
+        // A fixed glyph: never let the header stack measure it from a collapsed first frame.
+        _chevronEl.MinWidth = _chevronEl.MaxWidth = 11f;
+        _chevronEl.MinHeight = _chevronEl.MaxHeight = 11f;
         _header.AddChild(_chevronEl);
 
         _titleEl = new RichBox
